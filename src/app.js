@@ -7,6 +7,8 @@ const crypto = require('node:crypto');
 const { getSetting, setSetting, tx, slugify, uniqueSlug } = require('./db');
 const auth = require('./auth');
 const { loadMailConfig, sendMail } = require('./mail');
+const { backupNow, scheduleBackups } = require('./backup');
+const { loadOffsiteConfig, uploadBackup } = require('./offsite');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Door'];
@@ -492,6 +494,92 @@ function createApp(db, options = {}) {
     }
   }
 
+  // ----- backups: nightly local snapshot, plus an encrypted copy off the droplet when backup.json exists -----
+
+  const backupOpts = options.backup || null; // { dir, keepDays, configFile, schedule }
+  const offsiteConfig = () => (backupOpts && backupOpts.configFile ? loadOffsiteConfig(backupOpts.configFile) : null);
+  let backupRunning = null;
+
+  function runBackup() {
+    if (!backupOpts) return Promise.reject(new HttpError(400, 'Backups are switched off on this server.'));
+    if (backupRunning) return backupRunning; // a second tap waits for the same run
+    backupRunning = (async () => {
+      const at = new Date();
+      setSetting(db, 'backup_last_attempt_at', at.toISOString());
+      const out = { at: at.toISOString(), local: null, offsite: null };
+      try {
+        const file = backupNow(db, backupOpts.dir, backupOpts.keepDays || 30, at);
+        setSetting(db, 'backup_last_ok_at', at.toISOString());
+        setSetting(db, 'backup_last_error', '');
+        out.local = { ok: true, file: path.basename(file) };
+        const cfg = offsiteConfig();
+        if (cfg) {
+          try {
+            const r = await uploadBackup(cfg, file, at);
+            setSetting(db, 'offsite_last_ok_at', at.toISOString());
+            setSetting(db, 'offsite_last_error', '');
+            out.offsite = { ok: true, keys: r.keys, bytes: r.bytes };
+          } catch (err) {
+            setSetting(db, 'offsite_last_error', `${at.toISOString()} ${err.message}`);
+            out.offsite = { ok: false, error: err.message };
+            mailLog.error(`Off-site backup failed: ${err.message}`);
+          }
+        }
+      } catch (err) {
+        setSetting(db, 'backup_last_error', `${at.toISOString()} ${err.message}`);
+        out.local = { ok: false, error: err.message };
+        mailLog.error(`Backup failed: ${err.message}`);
+      }
+      const failed = (out.local && !out.local.ok) || (out.offsite && !out.offsite.ok);
+      // Tell the owner, at most once a day, so a broken backup doesn't go unnoticed.
+      const lastAlert = Date.parse(getSetting(db, 'backup_alert_at') || '') || 0;
+      if (failed && Date.now() - lastAlert > 20 * 3600 * 1000) {
+        setSetting(db, 'backup_alert_at', at.toISOString());
+        mail({
+          to: 'owner',
+          subject: 'Riderly Guest List — backup failed',
+          text: `Last night's backup didn't fully work.\n\n${out.local && out.local.ok ? '' : `Local copy: ${out.local.error}\n`}${out.offsite && !out.offsite.ok ? `Off-site copy: ${out.offsite.error}\n` : ''}\nIt retries every hour. Check the Backups card: ${PUBLIC_URL}/admin`,
+        });
+      }
+      return out;
+    })().finally(() => {
+      backupRunning = null;
+    });
+    return backupRunning;
+  }
+
+  // Due when the last try was 23h+ ago, or an hour after a failed try.
+  function backupDue() {
+    const last = Date.parse(getSetting(db, 'backup_last_attempt_at') || '') || 0;
+    const since = Date.now() - last;
+    const localOk = !getSetting(db, 'backup_last_error');
+    const offsiteOk = !offsiteConfig() || !getSetting(db, 'offsite_last_error');
+    return since > 23 * 3600 * 1000 || ((!localOk || !offsiteOk) && since > 3600 * 1000);
+  }
+
+  function backupStatus() {
+    const cfg = offsiteConfig();
+    const err = (k) => {
+      const v = getSetting(db, k) || '';
+      if (!v) return null;
+      const i = v.indexOf(' ');
+      return { at: v.slice(0, i), message: v.slice(i + 1) };
+    };
+    return {
+      enabled: !!backupOpts,
+      keepDays: backupOpts ? backupOpts.keepDays || 30 : null,
+      lastOkAt: getSetting(db, 'backup_last_ok_at') || null,
+      lastError: err('backup_last_error'),
+      offsite: {
+        configured: !!cfg,
+        bucket: cfg ? cfg.bucket : null,
+        region: cfg ? cfg.region : null,
+        lastOkAt: getSetting(db, 'offsite_last_ok_at') || null,
+        lastError: err('offsite_last_error'),
+      },
+    };
+  }
+
   function managerPin(v, field = 'Manager override PIN') {
     const p = str(v, field, { required: true, max: 100 });
     if (p.length < 4) throw new HttpError(400, `${field} must be at least 4 characters`);
@@ -841,6 +929,7 @@ function createApp(db, options = {}) {
       contactEmail: getSetting(db, 'contact_email') || '',
       autoApprove: getSetting(db, 'auto_approve') === '1',
       mail: mailConfig() ? { configured: true, notify: mailConfig().notify } : { configured: false },
+      backup: backupStatus(),
       requests,
       venues: rows.map((v) => ({
         ...venueOut(v),
@@ -997,6 +1086,11 @@ function createApp(db, options = {}) {
       throw new HttpError(502, err.message);
     }
     return { ok: true, to: cfg.notify };
+  }, { auth: 'owner' });
+
+  route('POST', /^\/api\/owner\/backup-now$/, async () => {
+    const out = await runBackup();
+    return { ...out, backup: backupStatus() };
   }, { auth: 'owner' });
 
   route('PUT', /^\/api\/owner\/settings$/, ({ body, res }) => {
@@ -2007,6 +2101,10 @@ function createApp(db, options = {}) {
   });
   server.on('close', () => hub.closeAll());
   server.purgeExpired = purgeExpired;
+  server.runBackup = runBackup;
+  if (backupOpts && backupOpts.schedule !== false) {
+    server.on('close', scheduleBackups(runBackup, backupDue, { log: mailLog }));
+  }
   if (options.purgeTimer !== false) {
     const first = setTimeout(() => purgeExpired(), 30 * 1000);
     const daily = setInterval(() => purgeExpired(), 24 * 3600 * 1000);

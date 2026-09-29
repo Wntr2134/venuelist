@@ -21,22 +21,24 @@ function backupNow(db, dir, keepDays = 30, date = new Date()) {
   return file;
 }
 
-// Backs up shortly after start, then once a day while the app runs.
-function scheduleBackups(db, dir, { keepDays = 30, log = console } = {}) {
-  const run = () => {
+// Runs run() shortly after start, then checks every hour whether it's due (see due()).
+// Hourly checks mean a failed night (e.g. Spaces unreachable) is retried within the hour,
+// and a restart from a deploy doesn't skip a day.
+function scheduleBackups(run, due, { log = console } = {}) {
+  const tick = async () => {
     try {
-      log.log(`Backup written: ${backupNow(db, dir, keepDays)}`);
+      if (due()) await run();
     } catch (err) {
       log.error(`Backup failed: ${err.message}`);
     }
   };
-  const first = setTimeout(run, 60 * 1000);
-  const daily = setInterval(run, DAY);
+  const first = setTimeout(tick, 60 * 1000);
+  const hourly = setInterval(tick, 60 * 60 * 1000);
   first.unref();
-  daily.unref();
+  hourly.unref();
   return () => {
     clearTimeout(first);
-    clearInterval(daily);
+    clearInterval(hourly);
   };
 }
 

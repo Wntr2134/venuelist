@@ -4,7 +4,6 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { openDb, getSetting } = require('./src/db');
 const { createApp } = require('./src/app');
-const { scheduleBackups } = require('./src/backup');
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -28,9 +27,14 @@ const server = createApp(db, {
   setupCode,
   // Email is optional: put mail.json next to server.js (chmod 600, never in git) to switch it on.
   mailConfigFile: process.env.MAIL_CONFIG || path.join(__dirname, 'mail.json'),
+  // Nightly snapshot in BACKUP_DIR. Add backup.json next to server.js (chmod 600, never in git)
+  // to also send an encrypted copy to DigitalOcean Spaces.
+  backup: process.env.BACKUPS === '0' ? null : {
+    dir: BACKUP_DIR,
+    keepDays: BACKUP_KEEP_DAYS,
+    configFile: process.env.BACKUP_CONFIG || path.join(__dirname, 'backup.json'),
+  },
 });
-
-if (process.env.BACKUPS !== '0') scheduleBackups(db, BACKUP_DIR, { keepDays: BACKUP_KEEP_DAYS });
 
 server.listen(PORT, HOST, () => {
   console.log(`VenueList running on http://${HOST}:${PORT} (db: ${DB_FILE}, backups: ${BACKUP_DIR})`);

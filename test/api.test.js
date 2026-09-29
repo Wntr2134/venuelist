@@ -1010,3 +1010,136 @@ test('backups snapshot the database and prune old copies', () => {
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('SigV4 signing matches the AWS published S3 examples', () => {
+  const { sign } = require('../src/offsite');
+  const creds = { region: 'us-east-1', key: 'AKIAIOSFODNN7EXAMPLE', secret: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', amzDate: '20130524T000000Z' };
+  // GET Object example
+  let r = sign({
+    ...creds, method: 'GET', host: 'examplebucket.s3.amazonaws.com', path: '/test.txt',
+    headers: { range: 'bytes=0-9' },
+    payloadHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+  });
+  assert.equal(r.authorization, 'AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41');
+  // PUT Object example (checks path encoding of "$")
+  r = sign({
+    ...creds, method: 'PUT', host: 'examplebucket.s3.amazonaws.com', path: '/test$file.text',
+    headers: { date: 'Fri, 24 May 2013 00:00:00 GMT', 'x-amz-storage-class': 'REDUCED_REDUNDANCY' },
+    payloadHash: require('node:crypto').createHash('sha256').update('Welcome to Amazon S3.').digest('hex'),
+  });
+  assert.match(r.authorization, /Signature=98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd$/);
+});
+
+test('backup files are encrypted and only open with the passphrase', () => {
+  const { encrypt, decrypt } = require('../src/offsite');
+  const data = Buffer.from('SQLite format 3\0 pretend database');
+  const enc = encrypt(data, 'correct horse battery staple');
+  assert.equal(enc.subarray(0, 4).toString(), 'VLB1');
+  assert.equal(enc.includes(Buffer.from('pretend')), false);
+  assert.deepEqual(decrypt(enc, 'correct horse battery staple'), data);
+  assert.throws(() => decrypt(enc, 'wrong passphrase'));
+  const tampered = Buffer.from(enc);
+  tampered[tampered.length - 1] ^= 1;
+  assert.throws(() => decrypt(tampered, 'correct horse battery staple'));
+});
+
+test('Back up now saves locally, uploads an encrypted copy, and reports failures', async () => {
+  const { sign, decrypt } = require('../src/offsite');
+  const cfg = { region: 'syd1', bucket: 'riderly-backups', key: 'DO00TESTKEY', secret: 'test-secret', passphrase: 'long random words here', prefix: 'guestlist/' };
+  const puts = [];
+  let failNext = false;
+  const s3 = require('node:http').createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks);
+      if (failNext) {
+        res.writeHead(403);
+        return res.end('<Error><Code>InvalidAccessKeyId</Code></Error>');
+      }
+      // Re-sign what arrived: proves the signed headers match what was actually sent.
+      const names = req.headers.authorization.match(/SignedHeaders=([^,]+)/)[1].split(';');
+      const headers = Object.fromEntries(names.filter((n) => !['host', 'x-amz-date', 'x-amz-content-sha256'].includes(n)).map((n) => [n, req.headers[n]]));
+      const expected = sign({ method: 'PUT', host: req.headers.host, path: req.url, headers, payloadHash: req.headers['x-amz-content-sha256'], region: cfg.region, key: cfg.key, secret: cfg.secret, amzDate: req.headers['x-amz-date'] });
+      assert.equal(req.headers.authorization, expected.authorization);
+      assert.equal(req.headers['x-amz-content-sha256'], require('node:crypto').createHash('sha256').update(body).digest('hex'));
+      puts.push({ url: req.url, body });
+      res.writeHead(200);
+      res.end();
+    });
+  });
+  await new Promise((r) => s3.listen(0, '127.0.0.1', r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-offsite-'));
+  const cfgFile = path.join(dir, 'backup.json');
+  const errors = [];
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO settings (key, value) VALUES ('marker', 'offsite-test')").run();
+  const app = createApp(db, { purgeTimer: false, mailLog: { error: (m) => errors.push(m) }, backup: { dir: path.join(dir, 'backups'), keepDays: 30, configFile: cfgFile, schedule: false } });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  try {
+    const o = client(() => url);
+    assert.equal((await client(() => url).call('POST', '/api/owner/backup-now')).status, 401);
+    await o.call('POST', '/api/owner/setup', { password: 'ownerpass1' });
+
+    // Without backup.json: droplet copy only.
+    let r = await o.call('POST', '/api/owner/backup-now');
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.local.ok, true);
+    assert.equal(r.data.offsite, null);
+    assert.equal(r.data.backup.offsite.configured, false);
+
+    // With backup.json: uploads daily (+ monthly on the 1st) copies that decrypt to the database.
+    fs.writeFileSync(cfgFile, JSON.stringify({ ...cfg, endpoint: `http://127.0.0.1:${s3.address().port}` }));
+    r = await o.call('POST', '/api/owner/backup-now');
+    assert.equal(r.data.offsite.ok, true, JSON.stringify(r.data));
+    assert.equal(puts.length, 1);
+    assert.match(puts[0].url, /^\/riderly-backups\/guestlist\/daily-(sun|mon|tue|wed|thu|fri|sat)\.vlb$/);
+    const restoredFile = path.join(dir, 'restored.db');
+    fs.writeFileSync(restoredFile, decrypt(puts[0].body, cfg.passphrase));
+    const restored = openDb(restoredFile);
+    assert.equal(restored.prepare("SELECT value FROM settings WHERE key = 'marker'").get().value, 'offsite-test');
+    restored.close();
+    const status = (await o.call('GET', '/api/owner/venues')).data.backup;
+    assert.equal(status.offsite.configured, true);
+    assert.equal(status.offsite.bucket, 'riderly-backups');
+    assert.ok(status.offsite.lastOkAt);
+    assert.equal(JSON.stringify(status).includes('test-secret'), false, 'secrets never leave the server');
+
+    // A failed upload is reported, logged, and the local copy still exists.
+    failNext = true;
+    r = await o.call('POST', '/api/owner/backup-now');
+    assert.equal(r.data.local.ok, true);
+    assert.equal(r.data.offsite.ok, false);
+    assert.match(r.data.offsite.error, /InvalidAccessKeyId/);
+    assert.match(r.data.backup.offsite.lastError.message, /InvalidAccessKeyId/);
+    assert.ok(errors.some((e) => /Off-site backup failed/.test(e)));
+  } finally {
+    app.closeAllConnections();
+    app.close();
+    s3.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the monthly copy is added on the 1st', async () => {
+  const { uploadBackup } = require('../src/offsite');
+  const urls = [];
+  const s3 = require('node:http').createServer((req, res) => {
+    urls.push(req.url);
+    req.resume().on('end', () => res.end());
+  });
+  await new Promise((r) => s3.listen(0, '127.0.0.1', r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-monthly-'));
+  const file = path.join(dir, 'x.db');
+  fs.writeFileSync(file, 'data');
+  try {
+    const cfg = { endpoint: `http://127.0.0.1:${s3.address().port}`, region: 'syd1', bucket: 'b', key: 'k', secret: 's', passphrase: 'p', prefix: 'guestlist/' };
+    const r = await uploadBackup(cfg, file, new Date('2026-10-01T03:00:00Z'));
+    assert.deepEqual(r.keys, ['guestlist/daily-thu.vlb', 'guestlist/monthly-2026-10.vlb']);
+    assert.deepEqual(urls, ['/b/guestlist/daily-thu.vlb', '/b/guestlist/monthly-2026-10.vlb']);
+  } finally {
+    s3.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

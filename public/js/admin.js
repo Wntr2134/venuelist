@@ -134,6 +134,7 @@ async function renderDashboard() {
     list,
     signupCard(data),
     mailCard(data),
+    backupCard(data.backup),
     settingsCard()
   );
   if (!document.querySelector('.modal-backdrop')) nameInput.focus();
@@ -434,6 +435,61 @@ function mailCard(data) {
       },
     }, 'Send a test email')) : null
   );
+}
+
+function whenText(iso) {
+  if (!iso) return 'never';
+  return new Date(iso).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
+function backupCard(b) {
+  if (!b || !b.enabled) {
+    return h('div', { class: 'card stack' }, h('h2', null, '💾 Backups ', h('span', { class: 'badge s-disabled' }, 'Off')),
+      h('p', { class: 'muted' }, 'Backups are switched off on this server (BACKUPS=0).'));
+  }
+  const badge = h('span', { class: 'badge' });
+  const setBadge = (st) => {
+    const o = st.offsite;
+    const offBad = o.configured && (!o.lastOkAt || (o.lastError && o.lastError.at > o.lastOkAt));
+    const localBad = st.lastError && (!st.lastOkAt || st.lastError.at > st.lastOkAt);
+    const [cls, text] = localBad || offBad ? ['s-disabled', 'Problem'] : o.configured ? ['s-active', 'Off-site on'] : ['s-pending', 'Droplet only'];
+    badge.className = `badge ${cls}`;
+    badge.textContent = text;
+  };
+  const body = h('div', { class: 'stack' });
+  const render = (st) => {
+    const o = st.offsite;
+    setBadge(st);
+    put(body,
+      h('p', null, h('strong', null, 'On the droplet: '), `last copy ${whenText(st.lastOkAt)}, keeps ${st.keepDays} days.`),
+      st.lastError && (!st.lastOkAt || st.lastError.at > st.lastOkAt) ? h('p', { class: 'error-text' }, `Last try failed: ${st.lastError.message}`) : null,
+      o.configured
+        ? h('p', null, h('strong', null, 'Off-site (DigitalOcean Spaces): '), `${o.bucket} (${o.region}), last copy ${whenText(o.lastOkAt)}.`)
+        : h('p', { class: 'muted' }, 'Off-site copies are not set up yet. If the droplet were lost, the guest lists would go with it. Add backup.json on the server to send an encrypted copy to DigitalOcean Spaces every night.'),
+      o.configured && o.lastError && (!o.lastOkAt || o.lastError.at > o.lastOkAt) ? h('p', { class: 'error-text' }, `Last upload failed: ${o.lastError.message}`) : null
+    );
+  };
+  render(b);
+  const btn = h('button', {
+    class: 'btn',
+    onclick: async () => {
+      btn.disabled = true;
+      btn.textContent = 'Backing up…';
+      try {
+        const r = await api('POST', '/api/owner/backup-now');
+        render(r.backup);
+        if (r.local && !r.local.ok) toast(`Backup failed: ${r.local.error}`, 'error', 8000);
+        else if (r.offsite && !r.offsite.ok) toast(`Saved on the droplet, but the upload failed: ${r.offsite.error}`, 'error', 8000);
+        else toast(r.offsite ? 'Backed up and uploaded to Spaces' : 'Backed up on the droplet', 'ok', 5000);
+      } catch (err) {
+        toast(err.message, 'error', 6000);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Back up now';
+      }
+    },
+  }, 'Back up now');
+  return h('div', { class: 'card stack' }, h('h2', null, '💾 Backups ', badge), body, h('div', { class: 'row' }, btn));
 }
 
 function signupCard(data) {

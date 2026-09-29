@@ -12,7 +12,7 @@ This follows the droplet's existing conventions. The app runs as `venue` in `/sr
 | Unit | `guestlist` (`deploy/guestlist.service`, `MemoryMax=300M`) |
 | Health | `GET /health` → `{"ok": true}` |
 | Data | `/srv/guestlist/data/venuelist.db` (git-ignored, `600`) |
-| Backups | `/srv/guestlist/data/backups/`. The app writes one nightly and keeps 30 days. |
+| Backups | `/srv/guestlist/data/backups/`. The app writes one nightly and keeps 30 days. With `backup.json`, an encrypted copy also goes to DigitalOcean Spaces (syd1). |
 
 Measured memory: about 93 MB peak with 1,000 guests, 50 live door screens and 200 full reloads.
 
@@ -135,6 +135,34 @@ Email turns on sign-up alerts, "you're live" emails to venues, and "Forgot passw
 
 `mail.json` is git-ignored, so deploys never touch it.
 
+## Off-site backups (DigitalOcean Spaces)
+
+Every night the app encrypts a copy of the database (AES-256, with a passphrase only you know) and uploads it to a private Space in Sydney. It keeps one copy per weekday (`daily-mon.vlb` and so on, overwritten each week) plus one per month (`monthly-2026-10.vlb`). If an upload fails, it retries every hour and emails you (when email is set up). The Backups card in /admin shows the last good copy.
+
+1. DigitalOcean → **Spaces Object Storage** → **Create a Space**. Region **Sydney (SYD1)**, name `riderly-backups`, **File listing: Restricted**. (Spaces is about US$5 a month.)
+2. DigitalOcean → **Spaces Object Storage** → **Access Keys** → **Create Access Key**. Choose **Limited access**, pick `riderly-backups`, **Read/Write/Delete**. Copy the Access Key and the Secret (the secret is shown only once).
+3. Make a passphrase: four or five random words. **Save it in your password manager now.** Without it the backups can't be opened, and it is not stored anywhere off the droplet.
+4. On the droplet:
+   ```bash
+   sudo -u venue nano /srv/guestlist/backup.json
+   ```
+   ```json
+   { "endpoint": "syd1.digitaloceanspaces.com", "region": "syd1", "bucket": "riderly-backups",
+     "key": "DO00…", "secret": "…", "passphrase": "your four random words", "prefix": "guestlist/" }
+   ```
+   Then `sudo chmod 600 /srv/guestlist/backup.json`.
+5. In /admin, press **Back up now** on the Backups card. It should say "Backed up and uploaded to Spaces". No restart needed.
+
+`backup.json` is git-ignored, so deploys never touch it.
+
+**Restore from Spaces:** download the `.vlb` file from the Space in the DigitalOcean website, copy it to the droplet (or any computer with Node 22 and this code), then:
+
+```bash
+node scripts/decrypt-backup.js daily-mon.vlb restored.db
+```
+
+It reads the passphrase from `backup.json` if it's there, otherwise it asks. Then restore `restored.db` as shown under **Personal data** below.
+
 ## Forgot the owner (/admin) password?
 
 On the droplet:
@@ -147,10 +175,10 @@ This prints a new random owner password and logs out every other /admin session.
 
 ## Personal data
 
-- Guest names and notes stay in the SQLite file on the droplet and nowhere else. Every page and API route needs the venue login, except `/health` (reveals nothing) and each contributor's private link, which shows only that contributor's own guests.
+- Guest names and notes live in the SQLite file on the droplet. If off-site backups are on, an encrypted copy also sits in your private Space in Sydney; it can't be read without the passphrase. Every page and API route needs the venue login, except `/health` (reveals nothing) and each contributor's private link, which shows only that contributor's own guests.
 - Pages send `noindex`, so search engines won't index them.
-- The app has no secrets in git or in files. The venue password is stored hashed in the database, and the session key is generated there too.
-- **Backups are on the same droplet**, which doesn't protect you if the droplet itself is lost. Turn on DigitalOcean droplet backups, or periodically copy `/srv/guestlist/data/backups/` somewhere else.
+- No secrets are in git. Venue passwords are stored hashed in the database, and the session key is generated there too. `mail.json` and `backup.json` hold the only secrets, `chmod 600`, owned by `venue`.
+- **Without `backup.json`, backups are only on the same droplet**, which doesn't protect you if the droplet itself is lost. Set up off-site backups (above).
 - **Restore:**
   ```bash
   sudo systemctl stop guestlist
