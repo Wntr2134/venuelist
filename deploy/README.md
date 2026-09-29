@@ -115,6 +115,26 @@ venue ALL=(root) NOPASSWD: /bin/systemctl restart ballroom, ..., /bin/systemctl 
 
 If the other repos use different secret names, rename them in `deploy.yml` to match.
 
+## Email (optional)
+
+Email turns on sign-up alerts, "you're live" emails to venues, and "Forgot password?" links. It uses a Gmail **app password** (not your normal Gmail password).
+
+1. On the Google account: turn on 2-Step Verification, then go to https://myaccount.google.com/apppasswords, create one called "Riderly Guest List", and copy the 16 letters.
+2. On the droplet:
+   ```bash
+   sudo -u venue nano /srv/guestlist/mail.json
+   ```
+   Paste this in, with your details and the app password:
+   ```json
+   { "host": "smtp.gmail.com", "port": 465, "user": "wpmixing@gmail.com", "pass": "abcd efgh ijkl mnop",
+     "from": "Riderly Guest List <wpmixing@gmail.com>", "notify": "wpmixing@gmail.com" }
+   ```
+   Save with Ctrl+O, Enter, then Ctrl+X.
+3. Lock the file down: `sudo chmod 600 /srv/guestlist/mail.json`
+4. In /admin, press **Send a test email**. You don't need to restart anything.
+
+`mail.json` is git-ignored, so deploys never touch it.
+
 ## Forgot the owner (/admin) password?
 
 On the droplet:

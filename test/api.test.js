@@ -771,6 +771,105 @@ test('offline taps: a retried sync with the same op id is applied only once', as
   assert.equal(o.data.count, 1);
 });
 
+// A tiny fake SMTP server that records what it's sent.
+function fakeSmtp() {
+  const net = require('node:net');
+  const sent = [];
+  const srv = net.createServer((sock) => {
+    let state = 'cmd';
+    let data = '';
+    let msg = {};
+    sock.write('220 fake ESMTP\r\n');
+    sock.on('data', (chunk) => {
+      const text = chunk.toString('utf8');
+      if (state === 'data') {
+        data += text;
+        if (data.endsWith('\r\n.\r\n')) {
+          const [head, body] = data.split('\r\n\r\n');
+          msg.subject = (head.match(/^Subject: (.*)$/m) || [])[1];
+          msg.text = Buffer.from(body.replace(/\r\n\.\r\n$/, '').replace(/\r\n/g, ''), 'base64').toString('utf8');
+          sent.push(msg);
+          msg = {};
+          data = '';
+          state = 'cmd';
+          sock.write('250 queued\r\n');
+        }
+        return;
+      }
+      for (const line of text.split('\r\n').filter(Boolean)) {
+        if (/^EHLO/.test(line)) sock.write('250-fake\r\n250 AUTH LOGIN\r\n');
+        else if (line === 'AUTH LOGIN') { state = 'user'; sock.write('334 VXNlcm5hbWU6\r\n'); }
+        else if (state === 'user') { msg.user = Buffer.from(line, 'base64').toString(); state = 'pass'; sock.write('334 UGFzc3dvcmQ6\r\n'); }
+        else if (state === 'pass') { msg.pass = Buffer.from(line, 'base64').toString(); state = 'cmd'; sock.write(msg.pass === 'goodpass' ? '235 ok\r\n' : '535 bad credentials\r\n'); }
+        else if (/^MAIL FROM/.test(line)) sock.write('250 ok\r\n');
+        else if (/^RCPT TO:<(.*)>/.test(line)) { msg.to = line.match(/<(.*)>/)[1]; sock.write('250 ok\r\n'); }
+        else if (line === 'DATA') { state = 'data'; sock.write('354 go\r\n'); }
+        else if (line === 'QUIT') { sock.write('221 bye\r\n'); sock.end(); }
+      }
+    });
+  });
+  return { srv, sent };
+}
+
+test('email: sign-up alert, approval email, forgot password links, test email', async () => {
+  const smtp = fakeSmtp();
+  await new Promise((r) => smtp.srv.listen(0, '127.0.0.1', r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-mail-'));
+  const cfgFile = path.join(dir, 'mail.json');
+  fs.writeFileSync(cfgFile, JSON.stringify({ host: '127.0.0.1', port: smtp.srv.address().port, secure: false, user: 'me@gmail.com', pass: 'good pass', from: 'Riderly <me@gmail.com>', notify: 'will@example.com' }));
+  const errors = [];
+  const app = createApp(openDb(':memory:'), { mailConfigFile: cfgFile, mailLog: { error: (m) => errors.push(m) }, purgeTimer: false });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const waitFor = async (n) => { for (let i = 0; i < 50 && smtp.sent.length < n; i++) await new Promise((r) => setTimeout(r, 40)); };
+  try {
+    const o = client(() => url);
+    await o.call('POST', '/api/owner/setup', { password: 'ownerpass1' });
+    assert.equal((await o.call('GET', '/api/owner/venues')).data.mail.configured, true);
+    assert.equal((await o.call('POST', '/api/owner/test-email')).data.to, 'will@example.com');
+    assert.equal(smtp.sent[0].user, 'me@gmail.com');
+    assert.equal(smtp.sent[0].pass, 'goodpass', 'spaces in Gmail app passwords are removed');
+
+    await client(() => url).call('POST', '/api/signup', { venueName: 'Mail Bar', username: 'mail-bar', name: 'Alex Rivers', email: 'alex@mailbar.com', password: 'staffpass1', adminPassword: 'adminpass1' });
+    await waitFor(2);
+    assert.equal(smtp.sent[1].to, 'will@example.com');
+    assert.match(smtp.sent[1].subject, /New sign-up: Mail Bar/);
+    assert.match(smtp.sent[1].text, /alex@mailbar\.com/);
+
+    const req = (await o.call('GET', '/api/owner/venues')).data.requests[0];
+    const ap = await o.call('POST', `/api/owner/requests/${req.id}/approve`);
+    assert.equal(ap.data.emailed, true);
+    assert.equal(smtp.sent[2].to, 'alex@mailbar.com');
+    assert.match(smtp.sent[2].text, /\/v\/mail-bar\/admin/);
+
+    // Forgot password: same answer for real and made-up venues; link goes to the venue's email.
+    const pub = client(() => url);
+    const fake = await pub.call('POST', '/api/forgot', { username: 'no-such-venue', kind: 'staff' });
+    const real = await pub.call('POST', '/api/forgot', { username: 'mail-bar', kind: 'staff' });
+    assert.deepEqual(fake.data, real.data);
+    assert.equal(smtp.sent[3].to, 'alex@mailbar.com');
+    const staffLink = smtp.sent[3].text.match(/\/setup\/([A-Za-z0-9_-]+)/)[1];
+    assert.equal((await pub.call('GET', `/api/setup/${staffLink}`)).data.reset, true);
+
+    await pub.call('POST', '/api/forgot', { username: 'mail-bar', kind: 'admin' });
+    const adminLink = smtp.sent[4].text.match(/\/venue-admin\/reset\/([A-Za-z0-9_-]+)/)[1];
+    assert.equal((await pub.call('POST', `/api/venue-admin/reset/${adminLink}`, { password: 'brand-new-admin' })).status, 200);
+
+    // A broken mail setup never breaks the app: it just logs.
+    fs.writeFileSync(cfgFile, JSON.stringify({ host: '127.0.0.1', port: smtp.srv.address().port, secure: false, user: 'me@gmail.com', pass: 'wrong' }));
+    const r = await client(() => url).call('POST', '/api/signup', { venueName: 'Broken Mail', username: 'broken-mail', name: 'B', email: 'b@b.com', password: 'staffpass1', adminPassword: 'adminpass1' });
+    assert.equal(r.status, 200);
+    for (let i = 0; i < 50 && !errors.length; i++) await new Promise((res) => setTimeout(res, 40));
+    assert.match(errors[0], /bad credentials/);
+    assert.equal((await o.call('POST', '/api/owner/test-email')).status, 502);
+  } finally {
+    app.closeAllConnections();
+    app.close();
+    smtp.srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('/health answers ok without login and leaks nothing', async () => {
   const res = await fetch(`${base}/health`);
   assert.equal(res.status, 200);

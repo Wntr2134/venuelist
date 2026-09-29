@@ -59,7 +59,19 @@ function login(venue) {
     h('p', { class: 'muted' }, 'Venue admin — for the GM or owner. Staff use the normal guest list login.'),
     field('Venue admin password', pw),
     h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Log in'),
-    h('p', { class: 'small muted center-text' }, 'Forgotten it? Ask Riderly for a venue admin reset link.')
+    h('p', { class: 'small muted center-text' }, 'Forgotten it? ',
+      h('button', {
+        type: 'button',
+        class: 'linklike',
+        onclick: async () => {
+          try {
+            const r = await api('POST', '/api/forgot', { username: slug, kind: 'admin' });
+            toast(`${r.message} If nothing arrives, ask Riderly.`, 'ok', 7000);
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      }, 'Email me a reset link'))
   );
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

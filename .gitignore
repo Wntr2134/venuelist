@@ -4,3 +4,5 @@ data/
 *.db-wal
 *.db-shm
 .env
+mail.json
+backup.json

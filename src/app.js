@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getSetting, setSetting, tx, slugify, uniqueSlug } = require('./db');
 const auth = require('./auth');
+const { loadMailConfig, sendMail } = require('./mail');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Door'];
@@ -473,6 +474,24 @@ function createApp(db, options = {}) {
     return p;
   }
 
+  // ----- email (optional: switched on by a mail.json file on the server) -----
+
+  const mailConfig = () => (options.mailConfigFile ? loadMailConfig(options.mailConfigFile) : null);
+  const mailLog = options.mailLog || console;
+
+  // Sends an email if email is set up; never throws. Resolves true when sent.
+  async function mail(msg) {
+    const cfg = mailConfig();
+    if (!cfg || !msg.to) return false;
+    try {
+      await sendMail(cfg, { ...msg, to: msg.to === 'owner' ? cfg.notify : msg.to });
+      return true;
+    } catch (err) {
+      mailLog.error(`Email to ${msg.to} failed: ${err.message}`);
+      return false;
+    }
+  }
+
   function managerPin(v, field = 'Manager override PIN') {
     const p = str(v, field, { required: true, max: 100 });
     if (p.length < 4) throw new HttpError(400, `${field} must be at least 4 characters`);
@@ -607,10 +626,57 @@ function createApp(db, options = {}) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(venueName, contact, email, phone, message, username, autoApprove ? null : hash, autoApprove ? null : adminHash,
       autoApprove ? 'done' : 'new', now());
+    mail({
+      to: 'owner',
+      replyTo: email,
+      subject: `${autoApprove ? 'New venue (auto-approved)' : 'New sign-up'}: ${venueName}`,
+      text: [
+        `${venueName} ${autoApprove ? 'signed up and is live' : 'wants to join Riderly Guest List'}.`,
+        '',
+        `Contact:  ${contact}`,
+        `Email:    ${email}`,
+        phone ? `Phone:    ${phone}` : null,
+        `Username: ${username}`,
+        message ? `\nMessage:\n${message}` : null,
+        '',
+        autoApprove ? `Manage it: ${PUBLIC_URL}/admin` : `Approve it: ${PUBLIC_URL}/admin`,
+      ].filter((x) => x !== null).join('\n'),
+    });
     if (!autoApprove) return { status: 'pending', username };
     const v = createVenue({ name: venueName, slug: username, passwordHash: hash, adminHash, email });
     res.setHeader('Set-Cookie', auth.venueCookie(db, v, secureCookies));
     return { status: 'active', venue: venueOut(v) };
+  }, { auth: 'public' });
+
+  // "Forgot password?" — emails a reset link to the venue's contact email (the GM/owner).
+  // Always answers the same way so it can't be used to find out which venues exist.
+  route('POST', /^\/api\/forgot$/, async ({ req, body }) => {
+    if (tooMany(req, 'forgot')) throw new HttpError(429, 'Too many requests. Try again in a few minutes.');
+    recordFail(req, 'forgot');
+    const kind = body.kind === 'admin' ? 'admin' : 'staff';
+    const raw = str(body.username, 'Username', { required: true, max: 200 }).replace(/^.*\/v\//, '').replace(/[/?#].*$/, '');
+    const v = db.prepare('SELECT * FROM venues WHERE slug = ?').get(slugify(raw));
+    const reply = { ok: true, message: 'If that venue has an email on file, we’ve sent it a reset link.' };
+    if (!v || !v.active || !v.email || !v.password_hash || !mailConfig()) return reply;
+    if (kind === 'admin') {
+      const token = crypto.randomBytes(24).toString('base64url');
+      db.prepare('UPDATE venues SET admin_token_hash = ?, admin_token_expires = ? WHERE id = ?').run(
+        sha256(token), new Date(Date.now() + 24 * 3600 * 1000).toISOString(), v.id
+      );
+      await mail({
+        to: v.email,
+        subject: `Reset your venue admin password — ${v.name}`,
+        text: `Someone asked to reset the venue admin password for ${v.name} on Riderly Guest List.\n\nChoose a new one here (works once, for 24 hours):\n${PUBLIC_URL}/venue-admin/reset/${token}\n\nIf that wasn't you, ignore this email — your current password still works.`,
+      });
+    } else {
+      const { setupPath } = newSetupLink(v.id);
+      await mail({
+        to: v.email,
+        subject: `Reset the staff password — ${v.name}`,
+        text: `Someone asked to reset the staff password for ${v.name} on Riderly Guest List.\n\nChoose a new staff password here (works once, for 7 days):\n${PUBLIC_URL}${setupPath}\n\nWhen it's used, every staff phone is logged out and needs the new password. If that wasn't your team, ignore this email — nothing changes.`,
+      });
+    }
+    return reply;
   }, { auth: 'public' });
 
   // ----- venue login -----
@@ -774,6 +840,7 @@ function createApp(db, options = {}) {
     return {
       contactEmail: getSetting(db, 'contact_email') || '',
       autoApprove: getSetting(db, 'auto_approve') === '1',
+      mail: mailConfig() ? { configured: true, notify: mailConfig().notify } : { configured: false },
       requests,
       venues: rows.map((v) => ({
         ...venueOut(v),
@@ -872,7 +939,7 @@ function createApp(db, options = {}) {
 
   // One tap: the venue goes live with the username and password it signed up with.
   // Older requests without a password get a setup link instead.
-  route('POST', /^\/api\/owner\/requests\/(\d+)\/approve$/, ({ params }) => {
+  route('POST', /^\/api\/owner\/requests\/(\d+)\/approve$/, async ({ params }) => {
     const r = db.prepare('SELECT * FROM access_requests WHERE id = ?').get(params[0]);
     if (!r) throw new HttpError(404, 'Request not found');
     if (r.status !== 'new') throw new HttpError(409, 'This request has already been dealt with.');
@@ -888,12 +955,48 @@ function createApp(db, options = {}) {
       return created;
     });
     const out = { venue: venueOut(v), request: { name: r.contact_name, email: r.email }, live: !!r.password_hash };
-    return r.password_hash ? out : { ...out, ...newSetupLink(v.id) };
+    if (!r.password_hash) return { ...out, ...newSetupLink(v.id) };
+    out.emailed = await mail({
+      to: r.email,
+      subject: `${v.name} is live on Riderly Guest List`,
+      text: [
+        `Hi ${r.contact_name.split(' ')[0]},`,
+        '',
+        `${v.name} is now live on Riderly Guest List.`,
+        '',
+        `Staff log in here:   ${PUBLIC_URL}/v/${v.slug}`,
+        `Username:            ${v.slug}`,
+        'Password:            the staff password you chose when you signed up',
+        '',
+        `Venue admin (GM/owner only): ${PUBLIC_URL}/v/${v.slug}/admin`,
+        'Log in with your venue admin password and add a manager code for each duty manager.',
+        '',
+        `How it all works: ${PUBLIC_URL}/guide`,
+        '',
+        '— Riderly',
+      ].join('\n'),
+    });
+    return out;
   }, { auth: 'owner' });
 
   route('DELETE', /^\/api\/owner\/requests\/(\d+)$/, ({ params }) => {
     db.prepare('DELETE FROM access_requests WHERE id = ?').run(params[0]);
     return { ok: true };
+  }, { auth: 'owner' });
+
+  route('POST', /^\/api\/owner\/test-email$/, async () => {
+    const cfg = mailConfig();
+    if (!cfg) throw new HttpError(400, 'Email isn’t set up on the server yet.');
+    try {
+      await sendMail(cfg, {
+        to: cfg.notify,
+        subject: 'Riderly Guest List — test email',
+        text: `Email is working. Sign-up alerts will come to this address.\n\n${PUBLIC_URL}/admin`,
+      });
+    } catch (err) {
+      throw new HttpError(502, err.message);
+    }
+    return { ok: true, to: cfg.notify };
   }, { auth: 'owner' });
 
   route('PUT', /^\/api\/owner\/settings$/, ({ body, res }) => {

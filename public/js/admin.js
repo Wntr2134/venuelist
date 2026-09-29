@@ -133,6 +133,7 @@ async function renderDashboard() {
     h('div', { class: 'page-head' }, h('h2', null, `Venues (${data.venues.length})`)),
     list,
     signupCard(data),
+    mailCard(data),
     settingsCard()
   );
   if (!document.querySelector('.modal-backdrop')) nameInput.focus();
@@ -249,7 +250,8 @@ function showLive(r, req) {
   const msg = `Hi ${req.name.split(' ')[0]}! ${r.venue.name} is now live on Riderly Guest List.\n\nLog in: ${login}\nUsername: ${r.venue.slug}\nPassword: the one you chose when you signed up.\n\nSend that link to your staff too — it fills in the username. The guide is here: ${location.origin}/guide`;
   const mailto = `mailto:${req.email}?subject=${encodeURIComponent(`${r.venue.name} is live on Riderly Guest List`)}&body=${encodeURIComponent(msg)}`;
   modal(`${r.venue.name} is live ✓`, h('div', { class: 'stack' },
-    h('p', null, 'They can log in now with the username and password they chose. Let them know:'),
+    r.emailed ? h('div', { class: 'pin-box' }, `✉️ We’ve emailed ${req.email} to say they’re live. Nothing else to do — the message below is just in case.`) : null,
+    h('p', null, r.emailed ? 'They can log in now with the username and password they chose.' : 'They can log in now with the username and password they chose. Let them know:'),
     h('textarea', { rows: '7', readonly: true, class: 'message' }, msg),
     h('div', { class: 'row wrap' },
       h('a', { class: 'btn btn-primary', href: mailto }, `Email ${req.email}`),
@@ -411,6 +413,27 @@ function remove(v) {
   ), {
     actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-danger', onclick: submit }, 'Delete forever')],
   });
+}
+
+function mailCard(data) {
+  const on = data.mail && data.mail.configured;
+  return h('div', { class: 'card stack' },
+    h('h2', null, '✉️ Email ', h('span', { class: `badge ${on ? 's-active' : 's-pending'}` }, on ? 'Connected' : 'Not set up')),
+    h('p', { class: 'muted' }, on
+      ? `Sign-up alerts go to ${data.mail.notify}. Venues get a “you’re live” email when you approve them, and “Forgot password?” links work.`
+      : 'Add mail.json on the server to get sign-up alerts, send “you’re live” emails and switch on “Forgot password?” links.'),
+    on ? h('div', { class: 'row' }, h('button', {
+      class: 'btn',
+      onclick: async () => {
+        try {
+          const r = await api('POST', '/api/owner/test-email');
+          toast(`Test email sent to ${r.to}`, 'ok', 5000);
+        } catch (err) {
+          toast(err.message, 'error', 6000);
+        }
+      },
+    }, 'Send a test email')) : null
+  );
 }
 
 function signupCard(data) {

@@ -26,6 +26,8 @@ const server = createApp(db, {
   secureCookies: process.env.SECURE_COOKIES === '1',
   trustProxy: process.env.TRUST_PROXY === '1',
   setupCode,
+  // Email is optional: put mail.json next to server.js (chmod 600, never in git) to switch it on.
+  mailConfigFile: process.env.MAIL_CONFIG || path.join(__dirname, 'mail.json'),
 });
 
 if (process.env.BACKUPS !== '0') scheduleBackups(db, BACKUP_DIR, { keepDays: BACKUP_KEEP_DAYS });
