@@ -276,3 +276,50 @@ test('behind a proxy, login lockout is per client not global', async () => {
     app.close();
   }
 });
+
+test('/health answers ok without login and leaks nothing', async () => {
+  const res = await fetch(`${base}/health`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+});
+
+test('setup code gates first-time setup on a public server', async () => {
+  const db = openDb(':memory:');
+  const app = createApp(db, { setupCode: 'ABC123DEF0' });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const post = (body) => fetch(`${url}/api/setup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    const s = await (await fetch(`${url}/api/session`)).json();
+    assert.equal(s.setupCodeRequired, true);
+    assert.equal((await post({ password: 'venuepass1' })).status, 403);
+    assert.equal((await post({ password: 'venuepass1', setupCode: 'WRONG00000' })).status, 403);
+    assert.equal((await post({ password: 'venuepass1', setupCode: 'abc123def0' })).status, 200, 'case-insensitive');
+    assert.equal((await post({ password: 'venuepass1', setupCode: 'ABC123DEF0' })).status, 409, 'only once');
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});
+
+test('backups snapshot the database and prune old copies', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { backupNow } = require('../src/backup');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-backup-'));
+  const db = openDb(path.join(dir, 'live.db'));
+  db.prepare("INSERT INTO settings (key, value) VALUES ('venue_name', 'Backup Test')").run();
+  const out = path.join(dir, 'backups');
+  fs.mkdirSync(out);
+  fs.writeFileSync(path.join(out, 'venuelist-2020-01-01.db'), 'old');
+  const file = backupNow(db, out, 30, new Date('2026-09-29T12:00:00Z'));
+  backupNow(db, out, 30, new Date('2026-09-29T13:00:00Z')); // same day overwrites
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(out), ['venuelist-2026-09-29.db']);
+  const copy = openDb(file);
+  assert.equal(copy.prepare("SELECT value FROM settings WHERE key = 'venue_name'").get().value, 'Backup Test');
+  copy.close();
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

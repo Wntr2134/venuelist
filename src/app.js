@@ -293,6 +293,7 @@ const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
+  'X-Robots-Tag': 'noindex, nofollow',
   'Content-Security-Policy':
     "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
 };
@@ -381,14 +382,30 @@ function createApp(db, options = {}) {
 
   // ----- session -----
 
+  // Used by deploys and uptime checks. Deliberately reveals nothing else.
+  route('GET', /^\/health$/, () => {
+    db.prepare('SELECT 1').get();
+    return { ok: true };
+  }, { public: true });
+
   route('GET', /^\/api\/session$/, ({ req }) => ({
     needsSetup: !hasPassword(),
+    setupCodeRequired: !hasPassword() && !!options.setupCode,
     authed: auth.isAuthed(db, req),
     venueName: venueName(),
   }), { public: true });
 
-  route('POST', /^\/api\/setup$/, ({ body, res }) => {
+  route('POST', /^\/api\/setup$/, ({ req, body, res }) => {
     if (hasPassword()) throw new HttpError(409, 'Already set up');
+    // On a public server, only someone who can read the server log can claim the venue.
+    if (options.setupCode) {
+      if (!loginLimiter(clientIp(req))) throw new HttpError(429, 'Too many attempts. Try again in a few minutes.');
+      const given = Buffer.from(str(body.setupCode, 'Setup code', { max: 100 }).toUpperCase());
+      const expected = Buffer.from(options.setupCode);
+      if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+        throw new HttpError(403, 'Wrong setup code. It is printed in the server log.');
+      }
+    }
     const password = str(body.password, 'Password', { required: true, max: 200 });
     if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters');
     setSetting(db, 'password_hash', auth.hashPassword(password));
@@ -909,7 +926,7 @@ function createApp(db, options = {}) {
     const url = new URL(req.url, 'http://local');
     const pathname = url.pathname;
 
-    if (!pathname.startsWith('/api/')) {
+    if (!pathname.startsWith('/api/') && pathname !== '/health') {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
       return serveStatic(req, res, pathname);
     }

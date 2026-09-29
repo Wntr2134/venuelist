@@ -18,21 +18,23 @@ npm start            # http://localhost:3000
 npm test             # API tests
 ```
 
-On first visit you'll be asked to set the venue name and password.
+On first visit you'll be asked to set the venue name and password, plus a one-time setup code that the server prints to its log on start. `GET /health` returns `{"ok": true}`.
 
 ### Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `3000` | HTTP port |
-| `HOST` | `0.0.0.0` | Bind address |
-| `DB_FILE` | `./data/venuelist.db` | SQLite database file. Back this up. |
+| `HOST` | `127.0.0.1` | Bind address (use `0.0.0.0` only inside Docker) |
+| `DB_FILE` | `./data/venuelist.db` | SQLite database file |
+| `BACKUP_DIR` | `<db folder>/backups` | Nightly snapshots written by the app |
+| `BACKUP_KEEP_DAYS` | `30` | How long snapshots are kept |
 | `SECURE_COOKIES` | unset | Set to `1` when served over HTTPS (recommended in production) |
 | `TRUST_PROXY` | unset | Set to `1` behind nginx/Caddy so login rate-limiting uses the real client IP |
 
 ### DigitalOcean droplet (production)
 
-See **[deploy/README.md](deploy/README.md)**. It's one script that sets up the service, HTTPS on `guestlist.riderly.com.au` and nightly backups.
+See **[deploy/README.md](deploy/README.md)**: `guestlist.riderly.com.au` on the Riderly droplet, behind Caddy, deployed by GitHub Actions on push to `main`.
 
 ### Docker
 
@@ -45,8 +47,8 @@ docker run -d -p 3000:3000 -v venuelist-data:/data -e SECURE_COOKIES=1 -e TRUST_
 
 - Put it behind HTTPS (e.g. Caddy, nginx, Cloudflare, or your host's proxy). Contributor links and the venue password travel over the network.
 - Live sync uses Server-Sent Events on `/api/events/:id/stream`. If you use nginx, disable buffering for that path (the app already sends `X-Accel-Buffering: no`). Door screens also re-sync every 30 seconds as a fallback.
-- Setup is first-come: deploy it and set the password straight away, before sharing the URL.
-- All data lives in one SQLite file (`DB_FILE`). Back it up.
+- First-time setup needs the one-time code from the server log, so a stranger can't claim the venue first.
+- All data lives in one SQLite file (`DB_FILE`). The app snapshots it nightly to `BACKUP_DIR`; copy those off the server too.
 
 ## How it works
 

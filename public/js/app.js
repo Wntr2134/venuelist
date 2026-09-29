@@ -18,7 +18,7 @@ async function boot() {
   }
   state.venueName = session.venueName;
   document.title = `${session.venueName} · Guest List`;
-  if (session.needsSetup) return renderSetup();
+  if (session.needsSetup) return renderSetup(session.setupCodeRequired);
   if (!session.authed) return renderLogin();
   await promptDeviceName();
   window.addEventListener('hashchange', route);
@@ -126,10 +126,13 @@ function renderFatal(msg) {
 
 // ---------- setup / login ----------
 
-function renderSetup() {
+function renderSetup(needsCode) {
   const form = h('form', { class: 'card narrow stack' },
     h('h1', null, 'Set up your venue'),
     h('p', { class: 'muted' }, 'One shared account for the whole venue. Staff and door crew all log in with this password, then put their own name on their device.'),
+    needsCode
+      ? field('Setup code', h('input', { name: 'setupCode', required: true, maxlength: '20', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false' }), 'Printed in the server log when the app first starts (journalctl -u guestlist).')
+      : null,
     field('Venue name', h('input', { name: 'venueName', required: true, maxlength: '80', placeholder: 'e.g. Brunswick Ballroom' })),
     field('Venue password', h('input', { name: 'password', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' }), 'At least 8 characters.'),
     field('Confirm password', h('input', { name: 'confirm', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' })),
@@ -140,7 +143,7 @@ function renderSetup() {
     const d = formData(form);
     if (d.password !== d.confirm) return toast('Passwords don’t match', 'error');
     try {
-      await api('POST', '/api/setup', { venueName: d.venueName, password: d.password });
+      await api('POST', '/api/setup', { venueName: d.venueName, password: d.password, setupCode: d.setupCode });
       location.hash = '';
       boot();
     } catch (err) {

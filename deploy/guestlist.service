@@ -1,0 +1,30 @@
+# /etc/systemd/system/guestlist.service
+[Unit]
+Description=Guest list (guestlist.riderly.com.au)
+After=network.target
+
+[Service]
+Type=simple
+User=venue
+WorkingDirectory=/srv/guestlist
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=5070
+Environment=DB_FILE=/srv/guestlist/data/venuelist.db
+Environment=BACKUP_DIR=/srv/guestlist/data/backups
+Environment=BACKUP_KEEP_DAYS=30
+Environment=SECURE_COOKIES=1
+Environment=TRUST_PROXY=1
+# Keep the JS heap well inside the 300M cap below.
+ExecStart=/usr/bin/node --max-old-space-size=160 --disable-warning=ExperimentalWarning server.js
+Restart=on-failure
+RestartSec=3
+MemoryMax=300M
+# Database + backups are created owner-only (600/700).
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

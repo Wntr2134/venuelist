@@ -1,0 +1,10 @@
+# Append at the VERY END of /etc/caddy/Caddyfile. Edit nothing above it.
+# Only add this once `dig @ns1.nameserver.net.au +short guestlist.riderly.com.au A`
+# prints 134.199.157.198.
+guestlist.riderly.com.au {
+	reverse_proxy 127.0.0.1:5070 {
+		transport http {
+			read_timeout 60s
+		}
+	}
+}
