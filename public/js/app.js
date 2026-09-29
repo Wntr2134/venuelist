@@ -20,6 +20,7 @@ async function boot() {
   state.venueName = session.venue.name;
   state.venueSlug = session.venue.slug;
   state.hasManagerPin = session.venue.hasManagerPin;
+  state.defaults = session.venue.defaults || {};
   document.title = `${session.venue.name} · Guest List`;
   await promptDeviceName();
   window.addEventListener('hashchange', route);
@@ -153,9 +154,9 @@ async function renderEvents(archived) {
       right: h('a', { class: 'icon-btn', href: '#/settings', title: 'Venue settings', 'aria-label': 'Settings' }, '⚙'),
     }),
     h('main', { class: 'page' },
-      state.hasManagerPin ? null : h('a', { class: 'pin-banner', href: '#/settings' },
-        h('strong', null, '🔒 Set a manager override PIN'),
-        h('span', null, ' — without one, staff can go over capacity and guest list limits with just a tap. Takes 10 seconds →')),
+      state.hasManagerPin ? null : h('a', { class: 'pin-banner', href: `/v/${state.venueSlug}/admin` },
+        h('strong', null, '🔒 No manager codes yet'),
+        h('span', null, ' — until your venue admin adds them, staff can go over capacity and guest list limits with just a tap. Open venue admin →')),
       h('div', { class: 'page-head' },
         h('h1', null, archived ? 'Archived events' : 'Events'),
         h('div', { class: 'row' },
@@ -190,7 +191,8 @@ function eventCard(e, today) {
 }
 
 function eventForm(existing) {
-  const e = existing || {};
+  const d0 = state.defaults || {};
+  const e = existing || { venueCapacity: d0.capacity ?? null, countGuestlist: !!d0.countGuestlist };
   const form = h('form', { class: 'stack' },
     field('Event name', h('input', { name: 'name', required: true, maxlength: '120', value: e.name || '', placeholder: 'Artist / show name' })),
     h('div', { class: 'grid-2' },
@@ -626,7 +628,7 @@ function importForm(data, onDone) {
 }
 
 async function removeGuest(g, onDone) {
-  const warn = g.admitted ? ` ${g.admitted} of this party already checked in, so a manager will need to approve it. Their door history stays in the activity log.` : '';
+  const warn = g.admitted ? ` ${g.admitted} of this party already checked in, so a manager code will be needed. Their door history stays in the activity log.` : '';
   const ok = await confirmDialog('Remove guest?', `Remove ${g.name}${g.plusOnes ? ` +${g.plusOnes}` : ''} from the list?${warn}`, { confirmText: 'Remove', danger: true });
   if (!ok) return;
   try {
@@ -1028,7 +1030,7 @@ async function renderDoor(id) {
         h('div', null, h('b', null, hc.totalOut), h('span', null, 'out'))
       ),
       h('div', { class: 'card stack' },
-        field('Venue capacity', capInput, 'The + button asks for a manager override past this.'),
+        field('Venue capacity', capInput, 'The + button asks for a manager code past this.'),
         h('button', { class: 'btn btn-primary', onclick: async () => { if (await save({ venueCapacity: capInput.value || null }, 'Capacity saved')) m.close(); } }, 'Save capacity')
       ),
       h('label', { class: 'check' }, gl, h('span', null, 'Guest list check-ins also add to the door count')),
@@ -1045,7 +1047,7 @@ async function renderDoor(id) {
           }, 'Reset to 0')
         )
       ),
-      h('p', { class: 'small muted' }, 'Changes here may need the manager override PIN.')
+      h('p', { class: 'small muted' }, 'Changes here may need a manager code.')
     ));
     gl.addEventListener('change', async () => {
       if (!(await save({ countGuestlist: gl.checked }, gl.checked ? 'Guest list check-ins now count' : 'Guest list check-ins no longer count'))) gl.checked = !gl.checked;
@@ -1097,69 +1099,6 @@ async function renderDoor(id) {
 // ---------- venue settings ----------
 
 function renderSettings() {
-  const nameForm = h('form', { class: 'card stack' },
-    h('h3', null, 'Venue'),
-    field('Venue name', h('input', { name: 'venueName', required: true, maxlength: '80', value: state.venueName })),
-    h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, 'Save'))
-  );
-  nameForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      const r = await withOverride((extra) => api('PUT', '/api/settings', { ...formData(nameForm), ...extra }));
-      if (!r) return;
-      state.venueName = r.venue.name;
-      toast('Saved', 'ok');
-      route();
-    } catch (err) {
-      handleError(err);
-    }
-  });
-
-  const pwForm = h('form', { class: 'card stack' },
-    h('h3', null, 'Change staff password'),
-    h('p', { class: 'muted' }, 'Needs the manager override PIN. Every other device will be logged out and need the new password.'),
-    field('Current password', h('input', { name: 'currentPassword', type: 'password', required: true, autocomplete: 'current-password' })),
-    field('New password', h('input', { name: 'newPassword', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' })),
-    h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, 'Change password'))
-  );
-  pwForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      const r = await withOverride((extra) => api('PUT', '/api/settings', { ...formData(pwForm), ...extra }));
-      if (!r) return;
-      pwForm.reset();
-      toast('Password changed', 'ok');
-    } catch (err) {
-      handleError(err);
-    }
-  });
-
-  const pinA = h('input', { type: 'password', required: true, minlength: '4', autocomplete: 'off', inputmode: 'numeric' });
-  const pinB = h('input', { type: 'password', required: true, minlength: '4', autocomplete: 'off', inputmode: 'numeric' });
-  const pinCur = h('input', { type: 'password', required: true, autocomplete: 'off', inputmode: 'numeric' });
-  const pinForm = h('form', { class: 'card stack pin-card' },
-    h('h3', null, '🔒 Manager override PIN'),
-    h('p', { class: 'muted' }, state.hasManagerPin
-      ? 'Needed to go over capacity or a guest list limit, and to change those limits. Managers only — don’t share it with staff.'
-      : 'Not set yet. Once set, staff need it to go over capacity or a guest list limit, and to change those limits.'),
-    state.hasManagerPin ? field('Current PIN', pinCur, 'Forgotten it? Riderly can send the manager a reset link.') : null,
-    field(state.hasManagerPin ? 'New PIN' : 'Choose a PIN', pinA, 'At least 4 characters. 6 digits is a good choice.'),
-    field('Type it again', pinB),
-    h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, state.hasManagerPin ? 'Change PIN' : 'Set PIN'))
-  );
-  pinForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (pinA.value !== pinB.value) return toast('PINs don’t match', 'error');
-    try {
-      const r = await api('PUT', '/api/settings', { newPin: pinA.value, currentPin: state.hasManagerPin ? pinCur.value : undefined });
-      state.hasManagerPin = r.venue.hasManagerPin;
-      toast('Manager PIN saved', 'ok');
-      renderSettings();
-    } catch (err) {
-      handleError(err);
-    }
-  });
-
   const staffLink = `${location.origin}/v/${state.venueSlug}`;
   const access = h('div', { class: 'card stack' },
     h('h3', null, 'Staff login'),
@@ -1186,9 +1125,16 @@ function renderSettings() {
     )
   );
 
-  put(app, 
+  const adminLink = `${location.origin}/v/${state.venueSlug}/admin`;
+  const vadmin = h('div', { class: 'card stack' },
+    h('h3', null, '👤 Venue admin'),
+    h('p', { class: 'muted' }, 'Manager codes, the staff password, venue name, defaults and privacy are managed by your GM or owner in the venue admin page (it has its own password).'),
+    h('div', { class: 'row wrap' }, h('a', { class: 'btn', href: adminLink }, 'Open venue admin →'))
+  );
+
+  put(app,
     topbar({ back: '#/', title: 'Settings' }),
-    h('main', { class: 'page narrow-block stack' }, access, pinForm, device, nameForm, pwForm)
+    h('main', { class: 'page narrow-block stack' }, access, device, vadmin)
   );
 }
 

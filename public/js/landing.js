@@ -259,10 +259,10 @@
     if (!form.reportValidity()) return;
     const data = Object.fromEntries(new FormData(form).entries());
     if (data.password !== data.confirm) return say('Passwords don’t match.', true);
-    if (data.managerPin !== data.pinConfirm) return say('Manager PINs don’t match.', true);
-    if (data.managerPin === data.password) return say('Use a manager PIN that’s different from the staff password.', true);
+    if (data.adminPassword !== data.adminConfirm) return say('Venue admin passwords don’t match.', true);
+    if (data.adminPassword === data.password) return say('Use a venue admin password that’s different from the staff password.', true);
     delete data.confirm;
-    delete data.pinConfirm;
+    delete data.adminConfirm;
     const btn = form.querySelector('button[type="submit"]');
     btn.disabled = true;
     say('Sending…');

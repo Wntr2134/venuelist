@@ -25,20 +25,20 @@ async function start() {
   } catch (err) {
     return card(h('h1', null, 'Link not valid'), h('p', null, err.message));
   }
-  const { venue, reset, needsPin } = info;
+  const { venue, reset, needsAdmin } = info;
 
   const pw = h('input', { name: 'password', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' });
   const form = h('form', { class: 'stack' },
     field('Your name', h('input', { name: 'name', required: true, maxlength: '60', value: currentName(), placeholder: 'e.g. Sam', autocomplete: 'name' }),
       'Shown next to everything you do on this device.'),
-    field(reset ? 'New venue password' : 'Choose a venue password', pw,
-      'Everyone at your venue shares this password. At least 8 characters.'),
+    field(reset ? 'New staff password' : 'Choose a staff password', pw,
+      'Everyone on your staff shares this password. At least 8 characters.'),
     field('Type it again', h('input', { name: 'confirm', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' })),
-    needsPin ? h('div', { class: 'pin-box stack' },
-      h('div', null, h('strong', null, '🔒 Manager override PIN'),
-        h('p', { class: 'small muted' }, 'Only for managers — don’t share it with staff. It’s needed to go over capacity or a guest list limit, and to change those limits.')),
-      field('Manager PIN', h('input', { name: 'managerPin', type: 'password', required: true, minlength: '4', autocomplete: 'off', inputmode: 'numeric' }), 'At least 4 characters. 6 digits is a good choice.'),
-      field('Type the PIN again', h('input', { name: 'pinConfirm', type: 'password', required: true, minlength: '4', autocomplete: 'off', inputmode: 'numeric' }))
+    needsAdmin ? h('div', { class: 'pin-box stack' },
+      h('div', null, h('strong', null, '👤 Venue admin password'),
+        h('p', { class: 'small muted' }, 'For the GM or owner only — don’t share it with staff. It opens your venue admin page (manager codes, staff password, settings) and also works as a manager override.')),
+      field('Venue admin password', h('input', { name: 'adminPassword', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' }), 'At least 8 characters. Different from the staff password.'),
+      field('Type it again', h('input', { name: 'adminConfirm', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' }))
     ) : null,
     h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, reset ? 'Set new password' : 'Set up my venue')
   );
@@ -46,10 +46,10 @@ async function start() {
     e.preventDefault();
     const d = formData(form);
     if (d.password !== d.confirm) return toast('Passwords don’t match', 'error');
-    if (needsPin && d.managerPin !== d.pinConfirm) return toast('PINs don’t match', 'error');
-    if (needsPin && d.managerPin === d.password) return toast('Use a PIN that’s different from the staff password', 'error');
+    if (needsAdmin && d.adminPassword !== d.adminConfirm) return toast('Venue admin passwords don’t match', 'error');
+    if (needsAdmin && d.adminPassword === d.password) return toast('Use a venue admin password that’s different from the staff password', 'error');
     try {
-      const r = await api('POST', `/api/setup/${token}`, { password: d.password, managerPin: needsPin ? d.managerPin : undefined });
+      const r = await api('POST', `/api/setup/${token}`, { password: d.password, adminPassword: needsAdmin ? d.adminPassword : undefined });
       setDeviceName(d.name.trim());
       try {
         localStorage.setItem('vl.lastVenue', r.venue.slug);
@@ -82,6 +82,10 @@ function done(venue, reset) {
       h('button', { class: 'btn btn-small btn-primary', onclick: () => copy(link) }, 'Copy')
     ),
     h('p', { class: 'small muted' }, 'You can find this link again any time in Settings.'),
+    reset ? null : h('div', { class: 'pin-box' },
+      h('strong', null, 'Next: add your manager codes'),
+      h('p', { class: 'small muted' }, 'Give each duty manager their own override code in your venue admin page:'),
+      h('a', { class: 'btn btn-small', href: `/v/${venue.slug}/admin` }, `Open venue admin →`)),
     h('a', { class: 'btn btn-primary btn-block', href: '/app' }, 'Go to my guest list →')
   );
 }

@@ -102,6 +102,18 @@ CREATE TABLE IF NOT EXISTS headcount_log (
 );
 CREATE INDEX IF NOT EXISTS idx_headcount_event ON headcount_log(event_id, id);
 
+-- Named manager override codes (e.g. "JT", "Nick"), managed in the venue admin portal.
+CREATE TABLE IF NOT EXISTS manager_codes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,
+  active      INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_codes_venue ON manager_codes(venue_id);
+
 CREATE TABLE IF NOT EXISTS access_requests (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   venue_name    TEXT NOT NULL,
@@ -136,6 +148,19 @@ function migrate(db) {
   if (!venueCols.includes('manager_pin_hash')) db.exec('ALTER TABLE venues ADD COLUMN manager_pin_hash TEXT');
   if (!venueCols.includes('pin_token_hash')) db.exec('ALTER TABLE venues ADD COLUMN pin_token_hash TEXT');
   if (!venueCols.includes('pin_token_expires')) db.exec('ALTER TABLE venues ADD COLUMN pin_token_expires TEXT');
+  // Venue admin portal (/v/<venue>/admin): its own password, contact email and venue defaults.
+  for (const [col, def] of [
+    ['admin_password_hash', 'TEXT'],
+    ['admin_version', 'INTEGER NOT NULL DEFAULT 1'],
+    ['admin_token_hash', 'TEXT'],
+    ['admin_token_expires', 'TEXT'],
+    ['email', 'TEXT'],
+    ['default_capacity', 'INTEGER'],
+    ['default_count_guestlist', 'INTEGER NOT NULL DEFAULT 0'],
+    ['retention_days', 'INTEGER'],
+  ]) {
+    if (!venueCols.includes(col)) db.exec(`ALTER TABLE venues ADD COLUMN ${col} ${def}`);
+  }
 
   // Door capacity counter (shared clicker) per event.
   const evCols = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
@@ -146,6 +171,7 @@ function migrate(db) {
     ['head_in', 'INTEGER NOT NULL DEFAULT 0'],
     ['head_out', 'INTEGER NOT NULL DEFAULT 0'],
     ['count_guestlist', 'INTEGER NOT NULL DEFAULT 0'],
+    ['purged_at', 'TEXT'],
   ]) {
     if (!evCols.includes(col)) db.exec(`ALTER TABLE events ADD COLUMN ${col} ${def}`);
   }
@@ -155,6 +181,16 @@ function migrate(db) {
   if (!reqCols.includes('slug')) db.exec('ALTER TABLE access_requests ADD COLUMN slug TEXT');
   if (!reqCols.includes('password_hash')) db.exec('ALTER TABLE access_requests ADD COLUMN password_hash TEXT');
   if (!reqCols.includes('pin_hash')) db.exec('ALTER TABLE access_requests ADD COLUMN pin_hash TEXT');
+  if (!reqCols.includes('admin_hash')) db.exec('ALTER TABLE access_requests ADD COLUMN admin_hash TEXT');
+
+  // The single manager PIN becomes a named manager code called "Manager".
+  const withPin = db.prepare('SELECT id, manager_pin_hash FROM venues WHERE manager_pin_hash IS NOT NULL').all();
+  for (const v of withPin) {
+    db.prepare("INSERT INTO manager_codes (venue_id, name, code_hash, created_at) VALUES (?, 'Manager', ?, ?)").run(
+      v.id, v.manager_pin_hash, new Date().toISOString()
+    );
+    db.prepare('UPDATE venues SET manager_pin_hash = NULL WHERE id = ?').run(v.id);
+  }
 
   const legacyHash = getSetting(db, 'password_hash');
   const venueCount = db.prepare('SELECT COUNT(*) AS n FROM venues').get().n;
@@ -216,4 +252,4 @@ function tx(db, fn) {
   }
 }
 
-module.exports = { openDb, getSetting, setSetting, tx, slugify, uniqueSlug };
+module.exports = { openDb, migrate, getSetting, setSetting, tx, slugify, uniqueSlug };

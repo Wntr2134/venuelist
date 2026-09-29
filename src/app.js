@@ -362,10 +362,11 @@ function serveStatic(req, res, pathname) {
   if (pathname === '/' || pathname === '/index.html') file = 'index.html'; // public landing page
   else if (pathname === '/app' || pathname === '/app/') file = 'app.html'; // venue app
   else if (pathname === '/login' || /^\/v\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'login.html';
+  else if (/^\/v\/[A-Za-z0-9_-]+\/admin\/?$/.test(pathname)) file = 'venue-admin.html';
+  else if (/^\/venue-admin\/reset\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'venue-admin-reset.html';
   else if (/^\/setup\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'setup.html';
   else if (pathname === '/admin' || pathname === '/admin/') file = 'admin.html';
   else if (pathname === '/guide' || pathname === '/guide/') file = 'guide.html';
-  else if (/^\/pin\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'pin.html';
   else if (/^\/c\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'contributor.html';
   else file = pathname.replace(/^\/+/, '');
 
@@ -450,8 +451,20 @@ function createApp(db, options = {}) {
     hub.publish(eventId, { type, at: now(), ...extra });
   }
 
+  // Overrides are protected once a venue has an admin password or any active manager code.
+  function canOverride(v) {
+    return !!v.admin_password_hash || !!db.prepare('SELECT 1 FROM manager_codes WHERE venue_id = ? AND active = 1').get(v.id);
+  }
+
   function venueOut(v) {
-    return { id: v.id, slug: v.slug, name: v.name, hasManagerPin: !!v.manager_pin_hash };
+    return {
+      id: v.id,
+      slug: v.slug,
+      name: v.name,
+      hasManagerPin: canOverride(v),
+      hasAdmin: !!v.admin_password_hash,
+      defaults: { capacity: v.default_capacity ?? null, countGuestlist: !!v.default_count_guestlist },
+    };
   }
 
   function password(v, field = 'Password') {
@@ -556,11 +569,11 @@ function createApp(db, options = {}) {
     );
   }
 
-  function createVenue({ name, slug, passwordHash, pinHash }) {
+  function createVenue({ name, slug, passwordHash, adminHash, email }) {
     const t = now();
     const info = db
-      .prepare('INSERT INTO venues (slug, name, password_hash, manager_pin_hash, created_at, setup_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(slug, name, passwordHash || null, pinHash || null, t, passwordHash ? t : null);
+      .prepare('INSERT INTO venues (slug, name, password_hash, admin_password_hash, email, created_at, setup_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(slug, name, passwordHash || null, adminHash || null, email || null, t, passwordHash ? t : null);
     return db.prepare('SELECT * FROM venues WHERE id = ?').get(Number(info.lastInsertRowid));
   }
 
@@ -575,8 +588,11 @@ function createApp(db, options = {}) {
     const username = usernameFrom(body.username);
     const email = str(body.email, 'Email', { required: true, max: 120 });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
-    const hash = auth.hashPassword(password(body.password));
-    const pinHash = auth.hashPassword(managerPin(body.managerPin));
+    const staffPw = password(body.password);
+    const adminPw = password(body.adminPassword, 'Venue admin password');
+    if (adminPw === staffPw) throw new HttpError(400, 'The venue admin password must be different from the staff password.');
+    const hash = auth.hashPassword(staffPw);
+    const adminHash = auth.hashPassword(adminPw);
     if (usernameTaken(username)) throw new HttpError(409, `Username "${username}" is taken — try another.`);
     const pending = db.prepare("SELECT COUNT(*) AS n FROM access_requests WHERE status = 'new'").get().n;
     if (pending >= 200) throw new HttpError(503, 'We’re catching up on sign-ups — please try again later.');
@@ -587,12 +603,12 @@ function createApp(db, options = {}) {
     const message = str(body.message, 'Message', { max: 1000 }) || null;
     const autoApprove = getSetting(db, 'auto_approve') === '1';
     db.prepare(
-      `INSERT INTO access_requests (venue_name, contact_name, email, phone, message, slug, password_hash, pin_hash, status, created_at)
+      `INSERT INTO access_requests (venue_name, contact_name, email, phone, message, slug, password_hash, admin_hash, status, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(venueName, contact, email, phone, message, username, autoApprove ? null : hash, autoApprove ? null : pinHash,
+    ).run(venueName, contact, email, phone, message, username, autoApprove ? null : hash, autoApprove ? null : adminHash,
       autoApprove ? 'done' : 'new', now());
     if (!autoApprove) return { status: 'pending', username };
-    const v = createVenue({ name: venueName, slug: username, passwordHash: hash, pinHash });
+    const v = createVenue({ name: venueName, slug: username, passwordHash: hash, adminHash, email });
     res.setHeader('Set-Cookie', auth.venueCookie(db, v, secureCookies));
     return { status: 'active', venue: venueOut(v) };
   }, { auth: 'public' });
@@ -635,82 +651,55 @@ function createApp(db, options = {}) {
 
   route('GET', /^\/api\/setup\/([A-Za-z0-9_-]+)$/, ({ params }) => {
     const v = venueBySetupToken(params[0]);
-    return { venue: venueOut(v), reset: !!v.password_hash, needsPin: !v.manager_pin_hash };
+    return { venue: venueOut(v), reset: !!v.password_hash, needsAdmin: !v.admin_password_hash };
   }, { auth: 'public' });
 
   route('POST', /^\/api\/setup\/([A-Za-z0-9_-]+)$/, ({ req, params, body, res }) => {
     limit(req);
     const v = venueBySetupToken(params[0]);
-    const hash = auth.hashPassword(password(body.password));
-    // Whoever sets the venue up also sets the manager PIN, so staff can never claim it first.
-    const pinHash = v.manager_pin_hash || auth.hashPassword(managerPin(body.managerPin));
+    const staffPw = password(body.password);
+    // Whoever sets the venue up also sets the venue admin password, so staff can never claim it first.
+    let adminHash = v.admin_password_hash;
+    if (!adminHash) {
+      const adminPw = password(body.adminPassword, 'Venue admin password');
+      if (adminPw === staffPw) throw new HttpError(400, 'The venue admin password must be different from the staff password.');
+      adminHash = auth.hashPassword(adminPw);
+    }
     const version = v.password_hash ? v.password_version + 1 : v.password_version; // a reset logs out old devices
     const t = now();
     db.prepare(
-      `UPDATE venues SET password_hash = ?, password_version = ?, manager_pin_hash = ?, setup_token_hash = NULL,
+      `UPDATE venues SET password_hash = ?, password_version = ?, admin_password_hash = ?, setup_token_hash = NULL,
          setup_expires_at = NULL, setup_at = COALESCE(setup_at, ?), last_login_at = ? WHERE id = ?`
-    ).run(hash, version, pinHash, t, t, v.id);
+    ).run(auth.hashPassword(staffPw), version, adminHash, t, t, v.id);
     const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(v.id);
     res.setHeader('Set-Cookie', auth.venueCookie(db, fresh, secureCookies));
     return { ok: true, venue: venueOut(fresh) };
   }, { auth: 'public' });
 
-  // ----- manager PIN reset link (sent by the owner) -----
+  // ----- venue admin password reset link (sent by the owner) -----
 
-  function venueByPinToken(token) {
-    const v = db.prepare('SELECT * FROM venues WHERE pin_token_hash = ?').get(sha256(token));
-    if (!v || !v.pin_token_expires || Date.parse(v.pin_token_expires) < Date.now()) {
-      throw new HttpError(404, 'This PIN reset link has expired or already been used. Ask Riderly for a new one.');
+  function venueByAdminToken(token) {
+    const v = db.prepare('SELECT * FROM venues WHERE admin_token_hash = ?').get(sha256(token));
+    if (!v || !v.admin_token_expires || Date.parse(v.admin_token_expires) < Date.now()) {
+      throw new HttpError(404, 'This reset link has expired or already been used. Ask Riderly for a new one.');
     }
     if (!v.active) throw new HttpError(403, 'This venue has been disabled.');
     return v;
   }
 
-  route('GET', /^\/api\/pin\/([A-Za-z0-9_-]+)$/, ({ params }) => ({ venue: venueOut(venueByPinToken(params[0])) }), { auth: 'public' });
+  route('GET', /^\/api\/venue-admin\/reset\/([A-Za-z0-9_-]+)$/, ({ params }) => ({ venue: venueOut(venueByAdminToken(params[0])) }), { auth: 'public' });
 
-  route('POST', /^\/api\/pin\/([A-Za-z0-9_-]+)$/, ({ req, params, body }) => {
+  route('POST', /^\/api\/venue-admin\/reset\/([A-Za-z0-9_-]+)$/, ({ req, params, body, res }) => {
     limit(req);
-    const v = venueByPinToken(params[0]);
-    db.prepare('UPDATE venues SET manager_pin_hash = ?, pin_token_hash = NULL, pin_token_expires = NULL WHERE id = ?').run(
-      auth.hashPassword(managerPin(body.pin)), v.id
-    );
-    return { ok: true, venue: venueOut(v) };
-  }, { auth: 'public' });
-
-  // ----- venue settings -----
-
-  route('PUT', /^\/api\/settings$/, ({ venue, req, body, res }) => {
-    // Everyone knows the staff password, so it can't be the thing that protects itself.
-    if (body.venueName !== undefined || body.newPassword) {
-      override(venue, req, body, 'Changing the venue name or staff password needs a manager.', { soft: true });
-    }
-    if (body.venueName !== undefined) {
-      db.prepare('UPDATE venues SET name = ? WHERE id = ?').run(str(body.venueName, 'Venue name', { max: 80, required: true }), venue.id);
-    }
-    if (body.newPassword) {
-      if (!auth.verifyPassword(str(body.currentPassword, 'Current password', { max: 200 }), venue.password_hash)) {
-        throw new HttpError(401, 'Current password is wrong');
-      }
-      db.prepare('UPDATE venues SET password_hash = ?, password_version = password_version + 1 WHERE id = ?').run(
-        auth.hashPassword(password(body.newPassword, 'New password')), venue.id
-      );
-    }
-    if (body.newPin !== undefined) {
-      if (venue.manager_pin_hash) {
-        if (tooMany(req, `pin:${venue.id}`)) throw new HttpError(429, 'Too many wrong PINs on this phone. Try again in a few minutes.');
-        if (!auth.verifyPassword(str(body.currentPin, 'Current PIN', { max: 100 }), venue.manager_pin_hash)) {
-          recordFail(req, `pin:${venue.id}`);
-          throw new HttpError(401, 'Current manager PIN is wrong. Riderly can reset it if it’s forgotten.');
-        }
-      }
-      const pin = managerPin(body.newPin, 'Manager PIN');
-      db.prepare('UPDATE venues SET manager_pin_hash = ? WHERE id = ?').run(auth.hashPassword(pin), venue.id);
-    }
-    const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(venue.id);
-    // Keep this device signed in; every other device must log in again after a password change.
-    res.setHeader('Set-Cookie', auth.venueCookie(db, fresh, secureCookies));
+    const v = venueByAdminToken(params[0]);
+    const pw = password(body.password, 'Venue admin password');
+    db.prepare(
+      'UPDATE venues SET admin_password_hash = ?, admin_version = admin_version + 1, admin_token_hash = NULL, admin_token_expires = NULL WHERE id = ?'
+    ).run(auth.hashPassword(pw), v.id);
+    const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(v.id);
+    res.setHeader('Set-Cookie', auth.vadminCookie(db, fresh, secureCookies));
     return { ok: true, venue: venueOut(fresh) };
-  });
+  }, { auth: 'public' });
 
   // ----- owner (Riderly) -----
 
@@ -789,7 +778,9 @@ function createApp(db, options = {}) {
       venues: rows.map((v) => ({
         ...venueOut(v),
         status: !v.active ? 'disabled' : v.password_hash ? 'active' : 'pending',
-        hasManagerPin: !!v.manager_pin_hash,
+        hasManagerPin: canOverride(v),
+        hasAdmin: !!v.admin_password_hash,
+        email: v.email,
         setupLinkActive: !!v.setup_expires_at && Date.parse(v.setup_expires_at) > Date.now(),
         setupExpiresAt: v.setup_expires_at,
         createdAt: v.created_at,
@@ -808,7 +799,9 @@ function createApp(db, options = {}) {
     let slug = usernameFrom(body.username ?? body.slug, { required: false });
     if (slug && usernameTaken(slug)) throw new HttpError(409, `Username "${slug}" is taken.`);
     if (!slug) slug = uniqueSlug(db, name);
-    const v = createVenue({ name, slug });
+    const email = str(body.email, 'Email', { max: 120 });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
+    const v = createVenue({ name, slug, email });
     return { venue: venueOut(v), ...newSetupLink(v.id) };
   }, { auth: 'owner' });
 
@@ -834,23 +827,22 @@ function createApp(db, options = {}) {
     return { ok: true, venue: venueOut(ownerVenue(v.id)) };
   }, { auth: 'owner' });
 
-  // Owner sets a new manager override PIN directly. Nobody is logged out.
-  route('PUT', /^\/api\/owner\/venues\/(\d+)\/pin$/, ({ params, body }) => {
+  // Owner sets a new venue admin password directly. Logs out the venue admin portal only.
+  route('PUT', /^\/api\/owner\/venues\/(\d+)\/admin-password$/, ({ params, body }) => {
     const v = ownerVenue(params[0]);
-    db.prepare('UPDATE venues SET manager_pin_hash = ?, pin_token_hash = NULL, pin_token_expires = NULL WHERE id = ?').run(
-      auth.hashPassword(managerPin(body.pin, 'New PIN')), v.id
-    );
+    db.prepare(
+      'UPDATE venues SET admin_password_hash = ?, admin_version = admin_version + 1, admin_token_hash = NULL, admin_token_expires = NULL WHERE id = ?'
+    ).run(auth.hashPassword(password(body.password, 'New venue admin password')), v.id);
     return { ok: true, venue: venueOut(ownerVenue(v.id)) };
   }, { auth: 'owner' });
 
-  // Forgotten manager PIN: a one-time link (24 h) for the manager. The old PIN keeps
-  // working until the link is used, so the door is never without one.
-  route('POST', /^\/api\/owner\/venues\/(\d+)\/pin-link$/, ({ params }) => {
+  // Forgotten venue admin password: a one-time link (24 h). The old one keeps working until it's used.
+  route('POST', /^\/api\/owner\/venues\/(\d+)\/admin-link$/, ({ params }) => {
     const v = ownerVenue(params[0]);
     const token = crypto.randomBytes(24).toString('base64url');
     const expires = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
-    db.prepare('UPDATE venues SET pin_token_hash = ?, pin_token_expires = ? WHERE id = ?').run(sha256(token), expires, v.id);
-    return { venue: venueOut(v), pinPath: `/pin/${token}`, expiresAt: expires };
+    db.prepare('UPDATE venues SET admin_token_hash = ?, admin_token_expires = ? WHERE id = ?').run(sha256(token), expires, v.id);
+    return { venue: venueOut(v), adminPath: `/venue-admin/reset/${token}`, expiresAt: expires };
   }, { auth: 'owner' });
 
   route('PUT', /^\/api\/owner\/venues\/(\d+)$/, ({ params, body }) => {
@@ -873,7 +865,7 @@ function createApp(db, options = {}) {
   route('PUT', /^\/api\/owner\/requests\/(\d+)$/, ({ params, body }) => {
     const status = body.status === 'done' ? 'done' : 'new';
     const r = db.prepare('UPDATE access_requests SET status = ? WHERE id = ?').run(status, params[0]);
-    if (status === 'done') db.prepare('UPDATE access_requests SET password_hash = NULL, pin_hash = NULL WHERE id = ?').run(params[0]);
+    if (status === 'done') db.prepare('UPDATE access_requests SET password_hash = NULL, pin_hash = NULL, admin_hash = NULL WHERE id = ?').run(params[0]);
     if (!r.changes) throw new HttpError(404, 'Request not found');
     return { ok: true };
   }, { auth: 'owner' });
@@ -887,8 +879,12 @@ function createApp(db, options = {}) {
     let slug = r.slug;
     if (!slug || db.prepare('SELECT 1 FROM venues WHERE slug = ?').get(slug)) slug = uniqueSlug(db, slug || r.venue_name);
     const v = tx(db, () => {
-      const created = createVenue({ name: r.venue_name, slug, passwordHash: r.password_hash, pinHash: r.pin_hash });
-      db.prepare("UPDATE access_requests SET status = 'done', password_hash = NULL, pin_hash = NULL WHERE id = ?").run(r.id);
+      const created = createVenue({ name: r.venue_name, slug, passwordHash: r.password_hash, adminHash: r.admin_hash, email: r.email });
+      if (r.pin_hash) {
+        // Sign-ups from before the admin portal carried a single manager PIN.
+        db.prepare("INSERT INTO manager_codes (venue_id, name, code_hash, created_at) VALUES (?, 'Manager', ?, ?)").run(created.id, r.pin_hash, now());
+      }
+      db.prepare("UPDATE access_requests SET status = 'done', password_hash = NULL, pin_hash = NULL, admin_hash = NULL WHERE id = ?").run(r.id);
       return created;
     });
     const out = { venue: venueOut(v), request: { name: r.contact_name, email: r.email }, live: !!r.password_hash };
@@ -941,21 +937,38 @@ function createApp(db, options = {}) {
   // Breaking a rule (over capacity, over an allocation) or changing one needs the venue's
   // manager PIN. Before a venue has set a PIN: breaking a rule needs an explicit "are you
   // sure" (force), and changing rules is allowed (soft).
+  // Which manager (or the venue admin) this code belongs to, or null.
+  function matchOverride(venue, given) {
+    if (!given) return null;
+    const code = given.slice(0, 100);
+    if (venue.admin_password_hash && auth.verifyPassword(code, venue.admin_password_hash)) return 'Venue admin';
+    for (const c of db.prepare('SELECT id, name, code_hash FROM manager_codes WHERE venue_id = ? AND active = 1').all(venue.id)) {
+      if (auth.verifyPassword(code, c.code_hash)) {
+        db.prepare('UPDATE manager_codes SET last_used_at = ? WHERE id = ?').run(now(), c.id);
+        return c.name;
+      }
+    }
+    return null;
+  }
+
+  // Returns the approver's name (or null when no approval was needed).
   function override(venue, req, body, reason, { eventId, actor, soft = false } = {}) {
-    if (!venue.manager_pin_hash) {
-      if (soft) return;
+    if (!canOverride(venue)) {
+      if (soft) return null;
       if (!body.force) throw new HttpError(409, reason, 'confirm');
-      if (eventId) log(db, { eventId, action: 'override', detail: `${reason} (confirmed — no manager PIN set)`, actor, via: 'venue' });
-      return;
+      if (eventId) log(db, { eventId, action: 'override', detail: `${reason} (confirmed — no manager codes set)`, actor, via: 'venue' });
+      return null;
     }
     const given = body.overridePin === undefined || body.overridePin === null ? '' : String(body.overridePin);
     if (!given) throw new HttpError(403, reason, 'override');
-    if (tooMany(req, `pin:${venue.id}`)) throw new HttpError(429, 'Too many wrong PINs on this phone. Try again in a few minutes.');
-    if (!auth.verifyPassword(given.slice(0, 100), venue.manager_pin_hash)) {
+    if (tooMany(req, `pin:${venue.id}`)) throw new HttpError(429, 'Too many wrong codes on this phone. Try again in a few minutes.');
+    const approver = matchOverride(venue, given);
+    if (!approver) {
       recordFail(req, `pin:${venue.id}`);
-      throw new HttpError(403, `Wrong manager PIN. ${reason}`, 'override');
+      throw new HttpError(403, `Wrong manager code. ${reason}`, 'override');
     }
-    if (eventId) log(db, { eventId, action: 'override', detail: reason, actor, via: 'manager PIN' });
+    if (eventId) log(db, { eventId, action: 'override', detail: `${reason} — approved by ${approver}`, actor, via: 'manager code' });
+    return approver;
   }
 
   // Runs a rule check; if it fails, the manager override decides.
@@ -1013,18 +1026,20 @@ function createApp(db, options = {}) {
       str(body.notes, 'Notes', { max: 2000 }) || null,
       now(),
       actor,
-      int(body.venueCapacity, 'Venue capacity', { min: 1, max: 100000, nullable: true }),
-      body.countGuestlist ? 1 : 0,
+      body.venueCapacity === undefined
+        ? venue.default_capacity ?? null
+        : int(body.venueCapacity, 'Venue capacity', { min: 1, max: 100000, nullable: true }),
+      (body.countGuestlist === undefined ? venue.default_count_guestlist : body.countGuestlist) ? 1 : 0,
     ];
-    // New shows need a manager's say-so once the venue has a PIN.
-    override(venue, req, body, 'Creating an event needs a manager.', { soft: true });
+    // New shows need a manager's say-so once the venue has manager codes.
+    const approver = override(venue, req, body, 'Creating an event needs a manager.', { soft: true });
     const info = db
       .prepare(
         'INSERT INTO events (venue_id, name, date, doors_time, capacity, cutoff_at, notes, created_at, created_by, venue_capacity, count_guestlist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(...values);
     const id = Number(info.lastInsertRowid);
-    log(db, { eventId: id, action: 'event.create', detail: venue.manager_pin_hash ? 'authorised with manager PIN' : null, actor, via: 'venue' });
+    log(db, { eventId: id, action: 'event.create', detail: approver ? `approved by ${approver}` : null, actor, via: 'venue' });
     return eventOut(getEvent(db, id));
   });
 
@@ -1528,6 +1543,205 @@ function createApp(db, options = {}) {
     return portalView(c);
   }, { auth: 'public' });
 
+  // ----- venue admin portal (/v/<venue>/admin) -----
+
+  function sessionVadmin(req) {
+    const s = auth.vadminSession(db, req);
+    if (!s) return null;
+    const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(s.venueId);
+    if (!v || !v.active || !v.admin_password_hash || (v.admin_version || 1) !== s.version) return null;
+    return v;
+  }
+
+  function venueBySlug(slug) {
+    const v = db.prepare('SELECT * FROM venues WHERE slug = ?').get(slugify(slug));
+    if (!v || !v.active) throw new HttpError(404, 'Venue not found');
+    return v;
+  }
+
+  route('GET', /^\/api\/vadmin\/session\/([A-Za-z0-9_-]+)$/, ({ req, params }) => {
+    const v = venueBySlug(params[0]);
+    const me = sessionVadmin(req);
+    return { venue: { name: v.name, slug: v.slug }, authed: !!me && me.id === v.id, needsSetup: !v.admin_password_hash };
+  }, { auth: 'public' });
+
+  route('POST', /^\/api\/vadmin\/login\/([A-Za-z0-9_-]+)$/, ({ req, params, body, res }) => {
+    limit(req);
+    const v = venueBySlug(params[0]);
+    let ok;
+    if (!v.admin_password_hash) {
+      // First time for an older venue: prove you're a manager with an existing code, then choose the admin password.
+      const approver = matchOverride(v, String(body.managerCode || ''));
+      if (!approver) {
+        failed(req);
+        throw new HttpError(401, 'That manager code is wrong. Ask Riderly for a venue admin setup link if you’re stuck.');
+      }
+      db.prepare('UPDATE venues SET admin_password_hash = ?, admin_version = admin_version + 1 WHERE id = ?').run(
+        auth.hashPassword(password(body.newPassword, 'Venue admin password')), v.id
+      );
+      ok = true;
+    } else {
+      ok = auth.verifyPassword(str(body.password, 'Password', { max: 200 }), v.admin_password_hash);
+    }
+    if (!ok) {
+      failed(req);
+      throw new HttpError(401, 'Wrong venue admin password.');
+    }
+    const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(v.id);
+    res.setHeader('Set-Cookie', auth.vadminCookie(db, fresh, secureCookies));
+    return { ok: true };
+  }, { auth: 'public' });
+
+  route('POST', /^\/api\/vadmin\/logout$/, ({ res }) => {
+    res.setHeader('Set-Cookie', auth.clearVadminCookie(secureCookies));
+    return { ok: true };
+  }, { auth: 'public' });
+
+  function codeOut(c) {
+    return { id: c.id, name: c.name, active: !!c.active, createdAt: c.created_at, lastUsedAt: c.last_used_at };
+  }
+
+  route('GET', /^\/api\/vadmin\/overview$/, ({ venue }) => {
+    const codes = db.prepare('SELECT * FROM manager_codes WHERE venue_id = ? ORDER BY active DESC, name COLLATE NOCASE').all(venue.id).map(codeOut);
+    const overrides = db
+      .prepare(
+        `SELECT a.at, a.actor, a.detail, a.via, e.name AS event_name, e.date AS event_date
+         FROM activity a JOIN events e ON e.id = a.event_id
+         WHERE e.venue_id = ? AND a.action = 'override' ORDER BY a.id DESC LIMIT 200`
+      )
+      .all(venue.id)
+      .map((r) => ({ at: r.at, actor: r.actor, detail: r.detail, via: r.via, eventName: r.event_name, eventDate: r.event_date }));
+    const counts = db
+      .prepare(
+        `SELECT (SELECT COUNT(*) FROM events WHERE venue_id = ?) AS events,
+                (SELECT COUNT(*) FROM guests g JOIN events e ON e.id = g.event_id WHERE e.venue_id = ?) AS guests`
+      )
+      .get(venue.id, venue.id);
+    return {
+      venue: {
+        name: venue.name,
+        slug: venue.slug,
+        email: venue.email,
+        defaultCapacity: venue.default_capacity,
+        defaultCountGuestlist: !!venue.default_count_guestlist,
+        retentionDays: venue.retention_days,
+        staffLastLogin: venue.last_login_at,
+      },
+      codes,
+      overrides,
+      counts,
+    };
+  }, { auth: 'vadmin' });
+
+  route('POST', /^\/api\/vadmin\/codes$/, ({ venue, body }) => {
+    const name = str(body.name, 'Manager name', { required: true, max: 40 });
+    const code = managerPin(body.code, 'Manager code');
+    if (venue.admin_password_hash && auth.verifyPassword(code, venue.admin_password_hash)) {
+      throw new HttpError(400, 'Use a code that’s different from the venue admin password.');
+    }
+    const n = db.prepare('SELECT COUNT(*) AS n FROM manager_codes WHERE venue_id = ? AND active = 1').get(venue.id).n;
+    if (n >= 25) throw new HttpError(409, 'That’s the maximum of 25 active manager codes. Revoke one first.');
+    if (matchOverride(venue, code)) throw new HttpError(409, 'Another manager already uses that code — pick a different one.');
+    const info = db.prepare('INSERT INTO manager_codes (venue_id, name, code_hash, created_at) VALUES (?, ?, ?, ?)').run(
+      venue.id, name, auth.hashPassword(code), now()
+    );
+    return codeOut(db.prepare('SELECT * FROM manager_codes WHERE id = ?').get(Number(info.lastInsertRowid)));
+  }, { auth: 'vadmin' });
+
+  function venueCode(venue, id) {
+    const c = db.prepare('SELECT * FROM manager_codes WHERE id = ? AND venue_id = ?').get(id, venue.id);
+    if (!c) throw new HttpError(404, 'Manager code not found');
+    return c;
+  }
+
+  route('PUT', /^\/api\/vadmin\/codes\/(\d+)$/, ({ venue, params, body }) => {
+    const c = venueCode(venue, params[0]);
+    const name = body.name !== undefined ? str(body.name, 'Manager name', { required: true, max: 40 }) : c.name;
+    let hash = c.code_hash;
+    if (body.code !== undefined) {
+      const code = managerPin(body.code, 'New manager code');
+      const clash = matchOverride({ ...venue, admin_password_hash: venue.admin_password_hash }, code);
+      if (clash && clash !== c.name) throw new HttpError(409, 'Another manager already uses that code — pick a different one.');
+      hash = auth.hashPassword(code);
+    }
+    const active = body.active !== undefined ? (body.active ? 1 : 0) : c.active;
+    db.prepare('UPDATE manager_codes SET name = ?, code_hash = ?, active = ? WHERE id = ?').run(name, hash, active, c.id);
+    return codeOut(db.prepare('SELECT * FROM manager_codes WHERE id = ?').get(c.id));
+  }, { auth: 'vadmin' });
+
+  route('DELETE', /^\/api\/vadmin\/codes\/(\d+)$/, ({ venue, params }) => {
+    const c = venueCode(venue, params[0]);
+    db.prepare('DELETE FROM manager_codes WHERE id = ?').run(c.id);
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
+  route('PUT', /^\/api\/vadmin\/staff-password$/, ({ venue, body }) => {
+    const pw = password(body.password, 'New staff password');
+    if (auth.verifyPassword(pw, venue.admin_password_hash)) throw new HttpError(400, 'Use a staff password that’s different from the venue admin password.');
+    db.prepare('UPDATE venues SET password_hash = ?, password_version = password_version + 1 WHERE id = ?').run(auth.hashPassword(pw), venue.id);
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
+  // Logs every staff phone out without changing the password (e.g. a lost phone).
+  route('POST', /^\/api\/vadmin\/logout-devices$/, ({ venue }) => {
+    db.prepare('UPDATE venues SET password_version = password_version + 1 WHERE id = ?').run(venue.id);
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
+  route('PUT', /^\/api\/vadmin\/venue$/, ({ venue, body }) => {
+    const next = {
+      name: body.name !== undefined ? str(body.name, 'Venue name', { required: true, max: 80 }) : venue.name,
+      email: body.email !== undefined ? str(body.email, 'Email', { max: 120 }) || null : venue.email,
+      default_capacity: body.defaultCapacity !== undefined
+        ? int(body.defaultCapacity, 'Default capacity', { min: 1, max: 100000, nullable: true })
+        : venue.default_capacity,
+      default_count_guestlist: body.defaultCountGuestlist !== undefined ? (body.defaultCountGuestlist ? 1 : 0) : venue.default_count_guestlist,
+      retention_days: body.retentionDays !== undefined
+        ? int(body.retentionDays, 'Keep guest details for', { min: 7, max: 3650, nullable: true })
+        : venue.retention_days,
+    };
+    if (next.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.email)) throw new HttpError(400, 'That email address looks wrong');
+    db.prepare(
+      'UPDATE venues SET name = ?, email = ?, default_capacity = ?, default_count_guestlist = ?, retention_days = ? WHERE id = ?'
+    ).run(next.name, next.email, next.default_capacity, next.default_count_guestlist, next.retention_days, venue.id);
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
+  route('PUT', /^\/api\/vadmin\/admin-password$/, ({ venue, req, body, res }) => {
+    if (!auth.verifyPassword(str(body.currentPassword, 'Current password', { max: 200 }), venue.admin_password_hash)) {
+      failed(req);
+      throw new HttpError(401, 'Current venue admin password is wrong.');
+    }
+    db.prepare('UPDATE venues SET admin_password_hash = ?, admin_version = admin_version + 1 WHERE id = ?').run(
+      auth.hashPassword(password(body.newPassword, 'New venue admin password')), venue.id
+    );
+    const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(venue.id);
+    res.setHeader('Set-Cookie', auth.vadminCookie(db, fresh, secureCookies));
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
+  // ----- privacy: remove guest details N days after a show (per venue setting) -----
+
+  function purgeExpired(at = new Date()) {
+    let purged = 0;
+    const venues = db.prepare('SELECT id, retention_days FROM venues WHERE retention_days IS NOT NULL').all();
+    for (const v of venues) {
+      const cutoff = new Date(at.getTime() - v.retention_days * 86400000).toISOString().slice(0, 10);
+      const events = db.prepare('SELECT id FROM events WHERE venue_id = ? AND date < ? AND purged_at IS NULL').all(v.id, cutoff);
+      for (const e of events) {
+        tx(db, () => {
+          // Counts stay for reporting; names and notes go.
+          db.prepare("UPDATE guests SET name = 'Guest (removed)', notes = NULL WHERE event_id = ?").run(e.id);
+          db.prepare('UPDATE activity SET guest_name = NULL WHERE event_id = ?').run(e.id);
+          db.prepare('UPDATE events SET purged_at = ? WHERE id = ?').run(at.toISOString(), e.id);
+          log(db, { eventId: e.id, action: 'event.purge', detail: `guest details removed after ${v.retention_days} days`, actor: 'Riderly', via: 'venue' });
+        });
+        purged += 1;
+      }
+    }
+    return purged;
+  }
+
   // ----- dispatcher -----
 
   async function handle(req, res) {
@@ -1549,6 +1763,9 @@ function createApp(db, options = {}) {
         if (!venue) throw new HttpError(401, 'Please log in');
       } else if (mode === 'owner') {
         if (!auth.isOwner(db, req)) throw new HttpError(401, 'Please log in');
+      } else if (mode === 'vadmin') {
+        venue = sessionVadmin(req);
+        if (!venue) throw new HttpError(401, 'Please log in');
       }
       // Mutations must be JSON: blocks cross-site form posts (CSRF) alongside SameSite cookies.
       if (req.method !== 'GET' && !(req.headers['content-type'] || '').includes('application/json')) {
@@ -1570,6 +1787,17 @@ function createApp(db, options = {}) {
     handle(req, res);
   });
   server.on('close', () => hub.closeAll());
+  server.purgeExpired = purgeExpired;
+  if (options.purgeTimer !== false) {
+    const first = setTimeout(() => purgeExpired(), 30 * 1000);
+    const daily = setInterval(() => purgeExpired(), 24 * 3600 * 1000);
+    first.unref();
+    daily.unref();
+    server.on('close', () => {
+      clearTimeout(first);
+      clearInterval(daily);
+    });
+  }
   return server;
 }
 

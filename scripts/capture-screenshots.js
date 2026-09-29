@@ -33,7 +33,7 @@ async function main() {
   };
 
   // ----- demo venue (all names fictional) -----
-  await call('POST', '/api/signup', { venueName: 'The Velvet Room', username: 'velvet-room', name: 'Demo', email: 'demo@example.com', password: 'demo-password', managerPin: '975310' });
+  await call('POST', '/api/signup', { venueName: 'The Velvet Room', username: 'velvet-room', name: 'Demo', email: 'demo@example.com', password: 'demo-password', adminPassword: 'demo-admin-pass' });
   await call('POST', '/api/owner/setup', { password: 'owner-password' }).catch(() => {});
   // Approve via the owner session in a separate jar.
   let ownerCookie = '';
@@ -42,6 +42,9 @@ async function main() {
   const list = await (await fetch(base + '/api/owner/venues', { headers: { Cookie: ownerCookie } })).json();
   await fetch(base + `/api/owner/requests/${list.requests[0].id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: ownerCookie }, body: '{}' });
   await call('POST', '/api/login', { username: 'velvet-room', password: 'demo-password' });
+  // Demo manager code (the venue admin password also works as a code).
+  const vadm = await fetch(base + '/api/vadmin/login/velvet-room', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'demo-admin-pass' }) });
+  await fetch(base + '/api/vadmin/codes', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: vadm.headers.getSetCookie()[0].split(';')[0] }, body: JSON.stringify({ name: 'Will', code: '975310' }) });
 
   const ev = await call('POST', '/api/events', {
     overridePin: '975310',

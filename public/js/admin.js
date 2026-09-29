@@ -96,6 +96,7 @@ async function renderDashboard() {
 
   const nameInput = h('input', { name: 'name', required: true, maxlength: '80', placeholder: 'e.g. The Corner Hotel', autocomplete: 'off' });
   const userInput = h('input', { name: 'username', maxlength: '40', placeholder: 'auto from name', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
+  const emailInput = h('input', { name: 'email', type: 'email', maxlength: '120', placeholder: 'gm@venue.com', autocomplete: 'off' });
   let userTouched = false;
   nameInput.addEventListener('input', () => {
     if (!userTouched) userInput.value = slugPreview(nameInput.value);
@@ -105,15 +106,16 @@ async function renderDashboard() {
   });
   const addForm = h('form', { class: 'card stack' },
     h('h2', null, 'Add a venue yourself'),
-    h('p', { class: 'muted' }, 'You’ll get a setup link to text or email them. They open it, choose a password, done.'),
+    h('p', { class: 'muted' }, 'You’ll get a setup link to text or email them. They open it, choose a staff password and a venue admin password, done.'),
     h('div', { class: 'grid-2' }, field('Venue name', nameInput), field('Username', userInput, 'What their staff log in with.')),
+    field('GM / owner email (optional)', emailInput, 'Used for reset links and, later, reports.'),
     h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, 'Add venue'))
   );
   addForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!nameInput.value.trim()) return nameInput.focus();
     try {
-      const r = await api('POST', '/api/owner/venues', { name: nameInput.value, username: slugPreview(userInput.value) });
+      const r = await api('POST', '/api/owner/venues', { name: nameInput.value, username: slugPreview(userInput.value), email: emailInput.value });
       showSetupLink(r, false);
       renderDashboard();
     } catch (err) {
@@ -143,7 +145,7 @@ function venueCard(v) {
     h('div', { class: 'contributor-head' },
       h('div', null,
         h('h3', null, v.name),
-        h('div', { class: 'small muted' }, 'Username: ', h('strong', null, v.slug))
+        h('div', { class: 'small muted' }, 'Username: ', h('strong', null, v.slug), v.email ? ` · ${v.email}` : '')
       ),
       h('span', { class: `badge badge-status s-${v.status}` }, statusLabel)
     ),
@@ -171,11 +173,12 @@ function venueCard(v) {
           )
         ),
         h('div', { class: 'reset-box' },
-          h('div', { class: 'reset-title' }, '🔒 Manager override PIN ',
-            h('span', { class: `badge ${v.hasManagerPin ? 's-active' : 's-pending'}` }, v.hasManagerPin ? 'Set' : 'Not set')),
+          h('div', { class: 'reset-title' }, '👤 Venue admin password ',
+            h('span', { class: `badge ${v.hasAdmin ? 's-active' : 's-pending'}` }, v.hasAdmin ? 'Set' : 'Not set')),
           h('div', { class: 'row wrap' },
-            h('button', { class: 'btn btn-small', onclick: () => pinLink(v) }, 'Send reset link'),
-            h('button', { class: 'btn btn-small', onclick: () => setSecret(v, 'pin') }, 'Set new PIN')
+            h('button', { class: 'btn btn-small', onclick: () => adminLink(v) }, 'Send reset link'),
+            h('button', { class: 'btn btn-small', onclick: () => setSecret(v, 'admin') }, 'Set new password'),
+            h('a', { class: 'btn btn-small', href: `/v/${v.slug}/admin`, target: '_blank', rel: 'noopener' }, 'Open ↗')
           )
         )
       ),
@@ -286,16 +289,16 @@ function showSetupLink(r, reset, request) {
   ));
 }
 
-// Owner sets a new staff password or manager PIN directly (e.g. while on the phone to them).
+// Owner sets a new staff password or venue admin password directly (e.g. while on the phone to them).
 function setSecret(v, kind) {
-  const isPin = kind === 'pin';
-  const a = h('input', { type: 'password', required: true, minlength: isPin ? '4' : '8', autocomplete: 'new-password' });
-  const b = h('input', { type: 'password', required: true, minlength: isPin ? '4' : '8', autocomplete: 'new-password' });
+  const isAdmin = kind === 'admin';
+  const a = h('input', { type: 'password', required: true, minlength: '8', autocomplete: 'new-password' });
+  const b = h('input', { type: 'password', required: true, minlength: '8', autocomplete: 'new-password' });
   const form = h('form', { class: 'stack' },
-    h('p', { class: 'muted' }, isPin
-      ? `Sets a new manager override PIN for ${v.name}. Nobody is logged out. Tell the manager the new PIN directly — not staff.`
-      : `Sets a new staff password for ${v.name}. Every device logged into ${v.name} is logged out. The manager PIN doesn’t change.`),
-    field(isPin ? 'New PIN (at least 4 characters)' : 'New password (at least 8 characters)', a),
+    h('p', { class: 'muted' }, isAdmin
+      ? `Sets a new venue admin password for ${v.name}. Their venue admin page logs out; staff and manager codes aren’t affected. Tell the GM/owner directly — not staff.`
+      : `Sets a new staff password for ${v.name}. Every staff phone is logged out. The venue admin password and manager codes don’t change.`),
+    field('New password (at least 8 characters)', a),
     field('Type it again', b)
   );
   const submit = async (e) => {
@@ -303,35 +306,37 @@ function setSecret(v, kind) {
     if (!form.reportValidity()) return;
     if (a.value !== b.value) return toast('They don’t match', 'error');
     try {
-      await api('PUT', `/api/owner/venues/${v.id}/${isPin ? 'pin' : 'password'}`, isPin ? { pin: a.value } : { password: a.value });
+      await api('PUT', `/api/owner/venues/${v.id}/${isAdmin ? 'admin-password' : 'password'}`, { password: a.value });
       m.close();
-      toast(isPin ? `New PIN set for ${v.name}` : `New password set — ${v.name} devices logged out`, 'ok', 4000);
+      toast(isAdmin ? `New venue admin password set for ${v.name}` : `New staff password set — ${v.name} phones logged out`, 'ok', 4000);
       renderDashboard();
     } catch (err) {
       toast(err.message, 'error', 5000);
     }
   };
   form.addEventListener('submit', submit);
-  const m = modal(isPin ? 'Set new manager PIN' : 'Set new staff password', form, {
-    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, isPin ? 'Set PIN' : 'Set password')],
+  const m = modal(isAdmin ? 'Set new venue admin password' : 'Set new staff password', form, {
+    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, 'Set password')],
   });
 }
 
-// One-time link (24 h) the manager uses to choose a new PIN themselves.
-async function pinLink(v) {
+// One-time link (24 h) the GM/owner uses to choose a new venue admin password themselves.
+async function adminLink(v) {
   try {
-    const r = await api('POST', `/api/owner/venues/${v.id}/pin-link`);
-    const url = `${location.origin}${r.pinPath}`;
-    const msg = `Here’s a link to set a new manager override PIN for ${v.name} on Riderly Guest List: ${url}\n\nIt works once and expires in 24 hours. Your current PIN keeps working until you use it. Please don’t share it with staff.`;
-    modal('Manager PIN reset link', h('div', { class: 'stack' },
-      h('p', null, 'Send this to the venue manager only — whoever opens it can set the PIN. Works once, expires in 24 hours.'),
+    const r = await api('POST', `/api/owner/venues/${v.id}/admin-link`);
+    const url = `${location.origin}${r.adminPath}`;
+    const msg = `Here’s a link to set a new venue admin password for ${v.name} on Riderly Guest List: ${url}\n\nIt works once and expires in 24 hours. Your current password keeps working until you use it. Please don’t share it with staff.`;
+    const mailto = v.email ? `mailto:${v.email}?subject=${encodeURIComponent(`Venue admin password reset — ${v.name}`)}&body=${encodeURIComponent(msg)}` : null;
+    modal('Venue admin reset link', h('div', { class: 'stack' },
+      h('p', null, 'Send this to the GM/owner only — whoever opens it can set the password. Works once, expires in 24 hours.'),
       h('div', { class: 'linkbox' },
         h('input', { readonly: true, value: url, onclick: (e) => e.target.select() }),
         h('button', { class: 'btn btn-small', onclick: () => copy(url) }, 'Copy link')
       ),
       h('textarea', { rows: '5', readonly: true, class: 'message' }, msg),
       h('div', { class: 'row wrap' },
-        h('button', { class: 'btn btn-primary', onclick: () => copy(msg) }, 'Copy message'),
+        mailto ? h('a', { class: 'btn btn-primary', href: mailto }, `Email ${v.email}`) : null,
+        h('button', { class: `btn${mailto ? '' : ' btn-primary'}`, onclick: () => copy(msg) }, 'Copy message'),
         typeof navigator.share === 'function' ? h('button', { class: 'btn', onclick: () => navigator.share({ text: msg }).catch(() => {}) }, 'Share…') : null
       )
     ));

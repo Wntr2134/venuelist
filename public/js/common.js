@@ -297,10 +297,10 @@ function askManagerPin(reason) {
       m.close();
       resolve(v);
     };
-    const input = h('input', { type: 'password', autocomplete: 'off', maxlength: '100', placeholder: 'Manager PIN' });
+    const input = h('input', { type: 'password', autocomplete: 'off', maxlength: '100', placeholder: 'Manager code' });
     const form = h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); if (input.value) finish(input.value); } },
       h('div', { class: 'override-reason' }, '🔒 ', reason),
-      h('p', { class: 'muted small' }, 'A manager needs to enter the override PIN. It’s logged against your name.'),
+      h('p', { class: 'muted small' }, 'A manager needs to enter their code. It’s logged with your name and theirs.'),
       input
     );
     const m = modal('Manager override', form, {
@@ -332,8 +332,8 @@ async function withOverride(call) {
         return await call({ overridePin: pin });
       } catch (e2) {
         if (e2.code !== 'override') throw e2;
-        toast('Wrong manager PIN', 'error');
-        reason = e2.message.replace(/^Wrong manager PIN\. /, '');
+        toast('Wrong manager code', 'error');
+        reason = e2.message.replace(/^Wrong manager code\. /, '');
       }
     }
   }

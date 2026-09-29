@@ -693,3 +693,10 @@ pre.code { padding: 12px; white-space: pre-wrap; margin: 8px 0; }
 .pin-banner strong { color: var(--gold); }
 .check-top { align-items: flex-start; padding-top: 22px; }
 .block { display: block; }
+.grid-3 { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 10px; }
+@media (max-width: 560px) { .grid-3 { grid-template-columns: 1fr; } }
+.code-list { display: flex; flex-direction: column; }
+.code-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.code-row.revoked { opacity: 0.55; }
+.code-row strong { display: flex; gap: 8px; align-items: center; }
+.add-code { border-top: 1px solid var(--line); padding-top: 12px; }

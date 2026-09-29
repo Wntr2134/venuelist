@@ -34,7 +34,7 @@
       <a href="#list">5. Managing the guest list</a>
       <a href="#door">6. Door mode</a>
       <a href="#counter">6b. Door counter (capacity)</a>
-      <a href="#override">6c. Manager override PIN</a>
+      <a href="#override">6c. Manager codes &amp; venue admin</a>
       <a href="#activity">7. Activity &amp; export</a>
       <a href="#contributor-view">8. What contributors see</a>
       <a href="#settings">9. Settings &amp; passwords</a>
@@ -55,7 +55,7 @@
       <section id="start">
         <h2>1. Getting started</h2>
         <ol class="steps-list">
-          <li><b>Sign up</b> on the <a href="/#signup">home page</a>: your venue name, a <b>username</b> and a <b>password</b>. Everyone at your venue shares these, so pick a password you’re happy to tell staff.</li>
+          <li><b>Sign up</b> on the <a href="/#signup">home page</a>: your venue name, a <b>username</b>, a <b>staff password</b> (everyone on staff shares it) and a <b>venue admin password</b> (just for you — see <a href="#override">6c</a>).</li>
           <li>Once Riderly approves it (usually the same day) you’ll get an email. <i>If Riderly set your venue up for you, you’ll get a setup link instead — open it and choose the password.</i></li>
           <li><b>Log in</b> at <a href="/login">guestlist.riderly.com.au/login</a> with your username and password, and enter your name when asked (see below).</li>
           <li>Your <b>staff link</b> is <code>guestlist.riderly.com.au/v/your-username</code> — it’s in <b>⚙ Settings → Staff login</b>. Send it to staff.</li>
@@ -80,7 +80,7 @@
       <section id="events">
         <h2>3. Creating a show</h2>
         <ol class="steps-list">
-          <li>On the <b>Events</b> page, tap <b>+ New event</b>. (A manager will be asked for the override PIN when you save.)</li>
+          <li>On the <b>Events</b> page, tap <b>+ New event</b>. (A manager will be asked for their code when you save.)</li>
           <li>Fill in the <b>name</b> and <b>date</b>. Optional extras:
             <ul>
               <li><b>Doors</b> — shown to contributors and at the door.</li>
@@ -160,7 +160,7 @@ Sam Lee, bring ID</pre>
         <ul>
           <li><b>+</b> for each person in, <b>−</b> for each person out. The number updates on every door phone straight away.</li>
           <li><b>Set the venue capacity</b> by tapping the number (or in Edit event). The bar turns <span class="c-vip">amber</span> from 80% and <span class="c-out">red</span> from 95%.</li>
-          <li><b>At capacity</b>, the + button asks for the <a href="#override">manager override PIN</a> before letting anyone else in.</li>
+          <li><b>At capacity</b>, the + button asks for a <a href="#override">manager code</a> before letting anyone else in.</li>
           <li><b>⤢ Full screen</b> gives the person on the door a giant + and − (the phone buzzes on each tap on Android, and the screen stays awake).</li>
           <li><b>Peak, in and out</b> totals are kept for the night. Tap the number to correct the count (e.g. after a head count) or reset it.</li>
           <li><b>Guest list check-ins also count</b> is <i>off</i> by default so a guest isn’t counted twice when someone is clicking everyone through. Turn it on if your door staff only use this app.</li>
@@ -168,21 +168,32 @@ Sam Lee, bring ID</pre>
       </section>
 
       <section id="override">
-        <h2>6c. Manager override PIN</h2>
-        <p>Staff share one login, so rules are protected by a separate <b>manager override PIN</b> that only managers know. It’s set when the venue is first set up.</p>
-        <p>Staff are asked for the PIN when they try to:</p>
+        <h2>6c. Manager codes &amp; venue admin</h2>
+        <p>Staff share one login, so the rules are protected by <b>manager codes</b> — each duty manager has their own. The GM or owner manages them in the <b>venue admin</b> page.</p>
+        <p>Staff are asked for a manager code when they try to:</p>
         <ul>
+          <li><b>create a new event</b>, or <b>delete</b> one</li>
           <li>let someone in past <b>venue capacity</b> (with + or a guest list check-in that counts)</li>
           <li>add a guest past a <b>contributor’s allocation</b> or the night’s <b>guest list cap</b></li>
-          <li><b>create a new event</b></li>
-          <li>change those limits, <b>correct or reset the door count</b>, or <b>delete an event</b></li>
+          <li>change those limits, <b>correct or reset the door count</b>, or <b>remove a guest who has already arrived</b></li>
         </ul>
-        <p>Every override is saved in the <b>Activity</b> log with the name on the phone and what was overridden.</p>
+        <p>Every override is saved in the <b>Activity</b> log with the name on the phone <i>and</i> whose code approved it (e.g. “approved by JT”).</p>
+        <h3>The venue admin page</h3>
+        <p>Open <code>guestlist.riderly.com.au/v/your-username/admin</code> (or ⚙ Settings → Venue admin) and log in with the <b>venue admin password</b> — set when the venue was created, and different from the staff password. There you can:</p>
+        <ul>
+          <li><b>Add, reset, revoke or delete manager codes</b> — one per duty manager. Someone leaves? Revoke only theirs.</li>
+          <li><b>Change the staff password</b>, or <b>log out every staff phone</b> without changing it (lost phone).</li>
+          <li>Set the <b>venue name</b>, a <b>contact email</b>, the <b>usual capacity</b> and whether guest list check-ins count at the door — new shows start with these.</li>
+          <li>Choose <b>when guest names are removed</b> (e.g. 90 days after a show). Head counts and reports are kept.</li>
+          <li>See <b>every override</b> across all shows.</li>
+        </ul>
+        <p>The venue admin password also works as a manager code at the door.</p>
         <table class="guide-table">
           <tr><th>Need to…</th><th>Do this</th></tr>
-          <tr><td>Change the PIN</td><td>⚙ Settings → Manager override PIN (needs the current PIN).</td></tr>
-          <tr><td>Forgot the PIN</td><td>Ask Riderly for a <b>PIN reset link</b> — it works once, lasts 24 hours, and your old PIN keeps working until it’s used.</td></tr>
-          <tr><td>Forgot the staff password</td><td>Ask Riderly for a <b>password reset link</b>. Using it logs out every device. The PIN doesn’t change.</td></tr>
+          <tr><td>Give a new manager a code</td><td>Venue admin → Manager codes → add their name and code.</td></tr>
+          <tr><td>A manager forgot their code</td><td>Venue admin → <b>New code</b> next to their name.</td></tr>
+          <tr><td>Change the staff password</td><td>Venue admin → Staff access. Every staff phone is logged out.</td></tr>
+          <tr><td>Forgot the venue admin password</td><td>Ask Riderly for a <b>venue admin reset link</b> (works once, 24 hours).</td></tr>
         </table>
       </section>
 
@@ -207,10 +218,10 @@ Sam Lee, bring ID</pre>
       <section id="settings">
         <h2>9. Settings &amp; passwords</h2>
         <ul>
-          <li><b>⚙ Settings</b> (top right of the Events page) has your staff login link, venue name and password.</li>
-          <li><b>Changing the password</b> logs out every other device. Send staff the new password.</li>
-          <li><b>Forgot the password?</b> Ask Riderly for a reset link. Your username, events and guests are untouched.</li>
-          <li><b>Log out this device</b> is at the bottom of Settings — do it on shared or borrowed phones after the show.</li>
+          <li><b>⚙ Settings</b> (top right of the Events page) has your staff login link, the name on this phone, and a link to the <b>venue admin</b> page.</li>
+          <li><b>Staff password, venue name, manager codes and privacy</b> are changed by the GM/owner in the venue admin page.</li>
+          <li><b>Forgot the staff password?</b> The venue admin can set a new one, or ask Riderly.</li>
+          <li><b>Log out this device</b> is in Settings — do it on shared or borrowed phones after the show.</li>
         </ul>
       </section>
 

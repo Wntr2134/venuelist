@@ -17,8 +17,9 @@ let appDb;
 // Each client has its own cookie jar, like a separate browser.
 function client(url = () => base) {
   const jar = {};
+  const device = `test${Math.random().toString(36).slice(2, 12)}`;
   async function call(method, p, body, { actor = 'Tester', headers = {} } = {}) {
-    const h = { 'Content-Type': 'application/json', ...headers };
+    const h = { 'Content-Type': 'application/json', 'X-Device': device, ...headers };
     if (actor) h['X-Actor'] = encodeURIComponent(actor);
     const cookie = Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
     if (cookie) h.Cookie = cookie;
@@ -42,15 +43,21 @@ function client(url = () => base) {
 
 const owner = client();
 
-// Creates a venue as the owner and completes its setup link; returns a logged-in client.
+// Creates a venue as the owner, completes its setup link (staff + venue admin password), then the
+// venue admin adds a manager code named "Manager". Returns logged-in staff and venue-admin clients.
 async function onboard(name, pw = 'venuepass1', pin = '2468') {
   const r = await owner.call('POST', '/api/owner/venues', { name });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   const token = r.data.setupPath.split('/').pop();
   const v = client();
-  const s = await v.call('POST', `/api/setup/${token}`, { password: pw, managerPin: pin });
+  const adminPw = `admin-${pin}-pass`;
+  const s = await v.call('POST', `/api/setup/${token}`, { password: pw, adminPassword: adminPw });
   assert.equal(s.status, 200, JSON.stringify(s.data));
-  return { c: v, venue: r.data.venue, token };
+  const admin = client();
+  const slug = r.data.venue.slug;
+  assert.equal((await admin.call('POST', `/api/vadmin/login/${slug}`, { password: adminPw })).status, 200);
+  assert.equal((await admin.call('POST', '/api/vadmin/codes', { name: 'Manager', code: pin })).status, 200);
+  return { c: v, venue: r.data.venue, token, admin, adminPw };
 }
 
 before(async () => {
@@ -102,11 +109,11 @@ test('onboarding: owner adds a venue, the venue sets a password via a one-time l
   assert.equal(info.data.venue.name, 'Brunswick Ballroom');
   assert.equal(info.data.reset, false);
 
-  assert.equal(info.data.needsPin, true);
-  assert.equal((await v.call('POST', `/api/setup/${token}`, { password: 'short', managerPin: '2468' })).status, 400);
-  assert.equal((await v.call('POST', `/api/setup/${token}`, { password: 'ballroom1' })).status, 400, 'manager PIN required at setup');
-  assert.equal((await v.call('POST', `/api/setup/${token}`, { password: 'ballroom1', managerPin: '12' })).status, 400);
-  assert.equal((await v.call('POST', `/api/setup/${token}`, { password: 'ballroom1', managerPin: '2468' })).status, 200);
+  assert.equal(info.data.needsAdmin, true);
+  assert.equal((await v.call('POST', `/api/setup/${token}`, { password: 'short', adminPassword: 'ballroom-admin' })).status, 400);
+  assert.equal((await v.call('POST', `/api/setup/${token}`, { password: 'ballroom1' })).status, 400, 'venue admin password required at setup');
+  assert.equal((await v.call('POST', `/api/setup/${token}`, { password: 'ballroom1', adminPassword: 'ballroom1' })).status, 400, 'must differ');
+  assert.equal((await v.call('POST', `/api/setup/${token}`, { password: 'ballroom1', adminPassword: 'ballroom-admin' })).status, 200);
   assert.equal((await v.call('GET', '/api/session')).data.venue.hasManagerPin, true);
   const s = await v.call('GET', '/api/session');
   assert.equal(s.data.authed, true);
@@ -289,26 +296,30 @@ test('cutoff, guest-list cap, paste import, CSV formula guard', async () => {
   assert.match((await c.call('GET', `/api/events/${r.data.id}/export.csv`)).data, /"'=HYPERLINK\(""x""\)"/);
 });
 
-test('venue password change logs out its other devices only', async () => {
+test('staff can’t change the staff password or venue name; the venue admin can', async () => {
   const a = await onboard('Password Hall', 'firstpass1');
   const other = client();
   await other.call('POST', '/api/login', { venue: 'password-hall', password: 'firstpass1' });
   const b = await onboard('Bystander Hall');
 
-  let r = await a.c.call('PUT', '/api/settings', { currentPassword: 'firstpass1', newPassword: 'secondpass1' });
-  assert.equal(r.data.code, 'override', 'staff password change needs a manager');
-  assert.equal((await a.c.call('PUT', '/api/settings', { venueName: 'Renamed by staff' })).data.code, 'override', 'renaming needs a manager');
-  r = await a.c.call('PUT', '/api/settings', { currentPassword: 'wrongwrong', newPassword: 'secondpass1', overridePin: '2468' });
-  assert.equal(r.status, 401);
-  r = await a.c.call('PUT', '/api/settings', { currentPassword: 'firstpass1', newPassword: 'secondpass1', venueName: 'Password Hall 2', overridePin: '2468' });
-  assert.equal(r.status, 200);
-  assert.equal(r.data.venue.name, 'Password Hall 2');
-  assert.equal((await a.c.call('GET', '/api/events')).status, 200, 'this device stays in');
-  assert.equal((await other.call('GET', '/api/events')).status, 401, 'other device logged out');
-  assert.equal((await b.c.call('GET', '/api/events')).status, 200, 'other venues unaffected');
-  assert.equal((await client().call('POST', '/api/login', { venue: 'password-hall', password: 'secondpass1' })).status, 200);
-});
+  assert.equal((await a.c.call('PUT', '/api/settings', { newPassword: 'hacked123' })).status, 404, 'no staff route for it any more');
+  assert.equal((await a.c.call('PUT', '/api/vadmin/staff-password', { password: 'hacked123' })).status, 401, 'staff login is not venue admin');
 
+  assert.equal((await a.admin.call('PUT', '/api/vadmin/staff-password', { password: a.adminPw })).status, 400, 'must differ from admin password');
+  assert.equal((await a.admin.call('PUT', '/api/vadmin/staff-password', { password: 'secondpass1' })).status, 200);
+  assert.equal((await a.admin.call('PUT', '/api/vadmin/venue', { name: 'Password Hall 2' })).status, 200);
+  assert.equal((await a.c.call('GET', '/api/events')).status, 401, 'staff devices logged out');
+  assert.equal((await other.call('GET', '/api/events')).status, 401);
+  assert.equal((await b.c.call('GET', '/api/events')).status, 200, 'other venues unaffected');
+  const again = client();
+  assert.equal((await again.call('POST', '/api/login', { venue: 'password-hall', password: 'secondpass1' })).status, 200);
+  assert.equal((await again.call('GET', '/api/session')).data.venue.name, 'Password Hall 2');
+
+  // Log out every phone without changing the password.
+  assert.equal((await a.admin.call('POST', '/api/vadmin/logout-devices')).status, 200);
+  assert.equal((await again.call('GET', '/api/events')).status, 401);
+  assert.equal((await client().call('POST', '/api/login', { venue: 'password-hall', password: 'secondpass1' })).status, 200, 'same password still works');
+});
 test('owner reset link: old password works until used, then all devices are logged out', async () => {
   const { c, venue } = await onboard('Reset Hall', 'oldpass123');
   const r = await owner.call('POST', `/api/owner/venues/${venue.id}/setup-link`);
@@ -317,7 +328,7 @@ test('owner reset link: old password works until used, then all devices are logg
   const token = r.data.setupPath.split('/').pop();
   const m = client();
   assert.equal((await m.call('GET', `/api/setup/${token}`)).data.reset, true);
-  assert.equal((await m.call('GET', `/api/setup/${token}`)).data.needsPin, false, 'reset keeps the existing PIN');
+  assert.equal((await m.call('GET', `/api/setup/${token}`)).data.needsAdmin, false, 'reset keeps the venue admin password');
   assert.equal((await m.call('POST', `/api/setup/${token}`, { password: 'newpass123' })).status, 200);
   assert.equal((await c.call('GET', '/api/events')).status, 401, 'old devices logged out');
   assert.equal((await client().call('POST', '/api/login', { venue: 'reset-hall', password: 'oldpass123' })).status, 401);
@@ -363,8 +374,9 @@ test('owner list shows counts but never guest names', async () => {
 
 test('sign-up: waits for approval, one-tap approve makes it live with the chosen login', async () => {
   const pub = client();
-  const form = { venueName: 'The Corner', username: 'Corner Hotel', name: 'Alex Rivers', email: 'alex@corner.com', password: 'cornerpass1', managerPin: '7777', message: '800 cap' };
-  assert.equal((await pub.call('POST', '/api/signup', { ...form, managerPin: '' })).status, 400, 'PIN required at sign-up');
+  const form = { venueName: 'The Corner', username: 'Corner Hotel', name: 'Alex Rivers', email: 'alex@corner.com', password: 'cornerpass1', adminPassword: 'corner-admin-1', message: '800 cap' };
+  assert.equal((await pub.call('POST', '/api/signup', { ...form, adminPassword: '' })).status, 400, 'admin password required at sign-up');
+  assert.equal((await pub.call('POST', '/api/signup', { ...form, adminPassword: 'cornerpass1' })).status, 400, 'must differ from staff password');
   assert.equal((await pub.call('POST', '/api/signup', { ...form, email: 'nope' })).status, 400);
   assert.equal((await pub.call('POST', '/api/signup', { ...form, password: 'short' })).status, 400);
   assert.equal((await pub.call('POST', '/api/signup', { ...form, username: 'admin' })).status, 409, 'reserved');
@@ -401,7 +413,9 @@ test('sign-up: waits for approval, one-tap approve makes it live with the chosen
   const v = client();
   assert.equal((await v.call('POST', '/api/login', { username: 'corner-hotel', password: 'cornerpass1' })).status, 200);
   assert.equal((await v.call('GET', '/api/session')).data.venue.name, 'The Corner');
-  assert.equal((await v.call('GET', '/api/session')).data.venue.hasManagerPin, true, 'PIN from sign-up carried over');
+  assert.equal((await v.call('GET', '/api/session')).data.venue.hasAdmin, true, 'admin password from sign-up carried over');
+  const adm = client();
+  assert.equal((await adm.call('POST', '/api/vadmin/login/corner-hotel', { password: 'corner-admin-1' })).status, 200);
   list = await owner.call('GET', '/api/owner/venues');
   assert.equal(list.data.venues.find((x) => x.slug === 'corner-hotel').status, 'active');
 });
@@ -409,11 +423,11 @@ test('sign-up: waits for approval, one-tap approve makes it live with the chosen
 test('auto-approve: sign-ups go live and log in immediately', async () => {
   await owner.call('PUT', '/api/owner/settings', { autoApprove: true });
   const pub = client();
-  const r = await pub.call('POST', '/api/signup', { venueName: 'Instant Bar', username: 'instant-bar', name: 'Kim', email: 'kim@instant.com', password: 'instantpw1', managerPin: '1357' });
+  const r = await pub.call('POST', '/api/signup', { venueName: 'Instant Bar', username: 'instant-bar', name: 'Kim', email: 'kim@instant.com', password: 'instantpw1', adminPassword: 'instant-admin-1' });
   assert.equal(r.data.status, 'active');
   assert.equal((await pub.call('GET', '/api/events')).status, 200, 'logged in straight away');
   await owner.call('PUT', '/api/owner/settings', { autoApprove: false });
-  const later = await client().call('POST', '/api/signup', { venueName: 'Later Bar', username: 'later-bar', name: 'Lee', email: 'lee@later.com', password: 'laterpass1', managerPin: '1357' });
+  const later = await client().call('POST', '/api/signup', { venueName: 'Later Bar', username: 'later-bar', name: 'Lee', email: 'lee@later.com', password: 'laterpass1', adminPassword: 'later-admin-1' });
   assert.equal(later.data.status, 'pending');
 });
 
@@ -441,73 +455,67 @@ test('door counter: shared +/−, never below zero, peak and totals', async () =
   assert.equal((await other.c.call('POST', `/api/events/${ev.id}/count`, { delta: 1 })).status, 404, 'other venues cannot touch it');
 });
 
-test('manager override: confirm before a PIN exists, PIN required after', async () => {
-  const { c, venue } = await onboard('Override Hall');
-  appDb.prepare('UPDATE venues SET manager_pin_hash = NULL WHERE id = ?').run(venue.id); // an older venue with no PIN yet
+test('manager override: confirm before any codes exist, a named code after', async () => {
+  const { c, venue, admin } = await onboard('Override Hall');
+  // An older venue with no admin password or codes yet.
+  const saved = appDb.prepare('SELECT admin_password_hash FROM venues WHERE id = ?').get(venue.id).admin_password_hash;
+  appDb.prepare('UPDATE venues SET admin_password_hash = NULL WHERE id = ?').run(venue.id);
+  appDb.prepare('DELETE FROM manager_codes WHERE venue_id = ?').run(venue.id);
   const ev = (await c.call('POST', '/api/events', { name: 'Full', date: '2026-10-31', venueCapacity: 2 })).data;
   await c.call('POST', `/api/events/${ev.id}/count`, { delta: 2 });
-
-  // No PIN yet: going over needs an explicit confirmation.
   let r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1 });
-  assert.equal(r.status, 409);
   assert.equal(r.data.code, 'confirm');
   r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1, force: true }, { actor: 'Sam' });
   assert.equal(r.data.count, 3);
 
-  // Manager sets a PIN; now staff need it.
-  assert.equal((await c.call('PUT', '/api/settings', { newPin: '12' })).status, 400);
-  assert.equal((await c.call('PUT', '/api/settings', { newPin: '4821' })).status, 200);
+  // Venue admin comes back and adds named manager codes.
+  appDb.prepare('UPDATE venues SET admin_password_hash = ? WHERE id = ?').run(saved, venue.id);
+  assert.equal((await admin.call('POST', '/api/vadmin/codes', { name: 'JT', code: '12' })).status, 400);
+  const jt = (await admin.call('POST', '/api/vadmin/codes', { name: 'JT', code: '4821' })).data;
+  const nick = (await admin.call('POST', '/api/vadmin/codes', { name: 'Nick', code: '7300' })).data;
+  assert.equal((await admin.call('POST', '/api/vadmin/codes', { name: 'Dup', code: '4821' })).status, 409, 'codes must be unique');
   assert.equal((await c.call('GET', '/api/session')).data.venue.hasManagerPin, true);
+
   r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1, force: true });
-  assert.equal(r.status, 403);
   assert.equal(r.data.code, 'override', 'force alone no longer works');
   r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1, overridePin: '0000' });
-  assert.equal(r.status, 403);
-  assert.match(r.data.error, /Wrong manager PIN/);
+  assert.match(r.data.error, /Wrong manager code/);
   r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1, overridePin: '4821' }, { actor: 'Sam' });
   assert.equal(r.data.count, 4);
-  assert.equal((await c.call('POST', `/api/events/${ev.id}/count`, { delta: -1 })).status, 200, 'going down never needs a PIN');
+  r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1, overridePin: '7300' }, { actor: 'Alex' });
+  assert.equal(r.data.count, 5);
+  r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1, overridePin: 'admin-2468-pass' }, { actor: 'Kim' });
+  assert.equal(r.data.count, 6, 'the venue admin password works as an override too');
+  assert.equal((await c.call('POST', `/api/events/${ev.id}/count`, { delta: -1 })).status, 200, 'going down never needs a code');
 
-  // Rule changes need the PIN once it exists.
+  // Rule changes need a code; other edits don't.
   assert.equal((await c.call('PUT', `/api/events/${ev.id}`, { venueCapacity: 900 })).data.code, 'override');
   assert.equal((await c.call('PUT', `/api/events/${ev.id}`, { venueCapacity: 900, overridePin: '4821' })).status, 200);
   assert.equal((await c.call('PUT', `/api/events/${ev.id}/count`, { count: 0 })).data.code, 'override');
-  assert.equal((await c.call('PUT', `/api/events/${ev.id}/count`, { count: 0, overridePin: '4821' })).data.count, 0);
-  assert.equal((await c.call('PUT', `/api/events/${ev.id}`, { name: 'Renamed' })).status, 200, 'other edits need no PIN');
-
-  // Allocation / guest list cap.
+  assert.equal((await c.call('PUT', `/api/events/${ev.id}`, { name: 'Renamed' })).status, 200);
   const ct = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'TM', allocation: 1 })).data;
   assert.equal((await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'A', plusOnes: 1, contributorId: ct.id, force: true })).data.code, 'override');
-  assert.equal((await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'A', plusOnes: 1, contributorId: ct.id, overridePin: '4821' })).status, 200);
   assert.equal((await c.call('PUT', `/api/contributors/${ct.id}`, { allocation: 50 })).data.code, 'override');
   assert.equal((await c.call('DELETE', `/api/events/${ev.id}`)).data.code, 'override');
 
-  // Overrides are logged with who did it.
+  // The log says which manager approved each override.
   const act = (await c.call('GET', `/api/events/${ev.id}/activity`)).data.filter((a) => a.action === 'override');
-  assert.ok(act.some((a) => a.actor === 'Sam' && a.via === 'manager PIN'));
-  assert.ok(act.some((a) => /confirmed — no manager PIN set/.test(a.detail)));
+  assert.ok(act.some((a) => a.actor === 'Sam' && /approved by JT$/.test(a.detail)));
+  assert.ok(act.some((a) => a.actor === 'Alex' && /approved by Nick$/.test(a.detail)));
+  assert.ok(act.some((a) => a.actor === 'Kim' && /approved by Venue admin$/.test(a.detail)));
+  assert.ok(act.some((a) => /confirmed — no manager codes set/.test(a.detail)));
+  const overview = (await admin.call('GET', '/api/vadmin/overview')).data;
+  assert.ok(overview.overrides.length >= 4, 'overrides log in the venue admin portal');
+  assert.ok(overview.codes.find((x) => x.name === 'JT').lastUsedAt);
 
-  // Changing the PIN needs the current one — staff can't just set a new one.
-  assert.equal((await c.call('PUT', '/api/settings', { newPin: '9999' })).status, 401);
-  assert.equal((await c.call('PUT', '/api/settings', { newPin: '9999', currentPin: '1111' })).status, 401);
-  assert.equal((await c.call('PUT', '/api/settings', { newPin: '9999', currentPin: '4821' })).status, 200);
-
-  // Forgotten PIN: owner issues a one-time 24h link; the old PIN works until it's used.
-  const link = await owner.call('POST', `/api/owner/venues/${venue.id}/pin-link`);
-  assert.match(link.data.pinPath, /^\/pin\/[A-Za-z0-9_-]{30,}$/);
-  assert.ok(Date.parse(link.data.expiresAt) - Date.now() < 25 * 3600 * 1000);
-  const pinToken = link.data.pinPath.split('/').pop();
-  assert.equal((await c.call('POST', `/api/owner/venues/${venue.id}/pin-link`)).status, 401, 'staff cannot make PIN links');
-  assert.equal((await c.call('PUT', `/api/events/${ev.id}/count`, { count: 5, overridePin: '9999' })).status, 200, 'old PIN still works');
-  const m = client();
-  assert.equal((await m.call('GET', `/api/pin/${pinToken}`)).data.venue.slug, 'override-hall');
-  assert.equal((await m.call('POST', `/api/pin/${pinToken}`, { pin: '12' })).status, 400);
-  assert.equal((await m.call('POST', `/api/pin/${pinToken}`, { pin: '555555' })).status, 200);
-  assert.equal((await m.call('POST', `/api/pin/${pinToken}`, { pin: '666666' })).status, 404, 'single use');
-  assert.equal((await c.call('PUT', `/api/events/${ev.id}/count`, { count: 1, overridePin: '9999' })).status, 403, 'old PIN dead');
-  assert.equal((await c.call('PUT', `/api/events/${ev.id}/count`, { count: 1, overridePin: '555555' })).status, 200);
+  // Revoke Nick: his code stops working; JT's still works. Reset JT's code.
+  assert.equal((await admin.call('PUT', `/api/vadmin/codes/${nick.id}`, { active: false })).status, 200);
+  assert.equal((await c.call('PUT', `/api/events/${ev.id}/count`, { count: 1, overridePin: '7300' })).status, 403);
+  assert.equal((await admin.call('PUT', `/api/vadmin/codes/${jt.id}`, { code: '9999' })).status, 200);
+  assert.equal((await c.call('PUT', `/api/events/${ev.id}/count`, { count: 1, overridePin: '4821' })).status, 403, 'old code dead');
+  assert.equal((await c.call('PUT', `/api/events/${ev.id}/count`, { count: 1, overridePin: '9999' })).status, 200);
+  assert.equal((await admin.call('DELETE', `/api/vadmin/codes/${nick.id}`)).status, 200);
 });
-
 test('guest list check-ins count toward capacity only when switched on', async () => {
   const { c } = await onboard('Combined Hall');
   const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-11-01', venueCapacity: 2, overridePin: '2468' })).data;
@@ -526,30 +534,42 @@ test('guest list check-ins count toward capacity only when switched on', async (
   assert.equal(r.status, 200);
 });
 
-test('owner can set a new password or PIN directly — separately', async () => {
-  const { c, venue } = await onboard('Direct Hall', 'oldpass123', '1111');
+test('owner can reset the staff password or the venue admin password — separately', async () => {
+  const { c, venue, admin } = await onboard('Direct Hall', 'oldpass123', '1111');
   const staff = client();
   await staff.call('POST', '/api/login', { username: 'direct-hall', password: 'oldpass123' });
-
   assert.equal((await c.call('PUT', `/api/owner/venues/${venue.id}/password`, { password: 'hacked123' })).status, 401, 'venues cannot use it');
-  assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/password`, { password: 'short' })).status, 400);
 
-  // PIN reset: nobody logged out, new PIN works.
-  assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/pin`, { pin: '8642' })).status, 200);
-  assert.equal((await staff.call('GET', '/api/events')).status, 200, 'PIN reset logs nobody out');
-  const ev = (await staff.call('POST', '/api/events', { name: 'X', date: '2026-11-02', overridePin: '8642' })).data;
-  assert.equal((await staff.call('PUT', `/api/events/${ev.id}/count`, { count: 3, overridePin: '1111' })).status, 403);
-  assert.equal((await staff.call('PUT', `/api/events/${ev.id}/count`, { count: 3, overridePin: '8642' })).status, 200);
+  // Admin password set directly: portal logs out, staff unaffected.
+  assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/admin-password`, { password: 'short' })).status, 400);
+  assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/admin-password`, { password: 'new-admin-pass' })).status, 200);
+  assert.equal((await admin.call('GET', '/api/vadmin/overview')).status, 401, 'old portal session ended');
+  assert.equal((await staff.call('GET', '/api/events')).status, 200, 'staff not logged out');
+  const a2 = client();
+  assert.equal((await a2.call('POST', '/api/vadmin/login/direct-hall', { password: 'admin-1111-pass' })).status, 401);
+  assert.equal((await a2.call('POST', '/api/vadmin/login/direct-hall', { password: 'new-admin-pass' })).status, 200);
 
-  // Password reset: everyone logged out, new password works, PIN unchanged.
+  // Admin reset link: 24h, single use, venue admin chooses the new one.
+  const link = await owner.call('POST', `/api/owner/venues/${venue.id}/admin-link`);
+  assert.match(link.data.adminPath, /^\/venue-admin\/reset\/[A-Za-z0-9_-]{30,}$/);
+  assert.equal((await c.call('POST', `/api/owner/venues/${venue.id}/admin-link`)).status, 401, 'staff cannot make admin links');
+  const token = link.data.adminPath.split('/').pop();
+  const m = client();
+  assert.equal((await m.call('GET', `/api/venue-admin/reset/${token}`)).data.venue.slug, 'direct-hall');
+  assert.equal((await a2.call('GET', '/api/vadmin/overview')).status, 200, 'current admin password works until the link is used');
+  assert.equal((await m.call('POST', `/api/venue-admin/reset/${token}`, { password: 'linked-admin-pw' })).status, 200);
+  assert.equal((await m.call('POST', `/api/venue-admin/reset/${token}`, { password: 'again-admin-pw' })).status, 404, 'single use');
+  assert.equal((await m.call('GET', '/api/vadmin/overview')).status, 200, 'logged in to the portal by the link');
+  assert.equal((await a2.call('GET', '/api/vadmin/overview')).status, 401);
+
+  // Staff password set directly: every staff device logged out, admin password and codes unchanged.
   assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/password`, { password: 'newpass456' })).status, 200);
   assert.equal((await staff.call('GET', '/api/events')).status, 401);
-  assert.equal((await c.call('GET', '/api/events')).status, 401);
   const again = client();
   assert.equal((await again.call('POST', '/api/login', { username: 'direct-hall', password: 'newpass456' })).status, 200);
-  assert.equal((await again.call('PUT', `/api/events/${ev.id}/count`, { count: 4, overridePin: '8642' })).status, 200, 'PIN survives a password reset');
+  const ev = (await again.call('POST', '/api/events', { name: 'X', date: '2026-11-02', overridePin: '1111' })).data;
+  assert.ok(ev.id, 'manager code survives a password reset');
 });
-
 test('creating an event needs the manager PIN once the venue has one', async () => {
   const { c, venue } = await onboard('Create Hall', 'venuepass1', '5151');
   let r = await c.call('POST', '/api/events', { name: 'Unapproved', date: '2026-11-05' });
@@ -561,11 +581,12 @@ test('creating an event needs the manager PIN once the venue has one', async () 
   r = await c.call('POST', '/api/events', { name: 'Approved', date: '2026-11-05', overridePin: '5151' }, { actor: 'Sam' });
   assert.equal(r.status, 200);
   const act = (await c.call('GET', `/api/events/${r.data.id}/activity`)).data;
-  assert.ok(act.some((a) => a.action === 'event.create' && a.actor === 'Sam' && a.detail === 'authorised with manager PIN'));
+  assert.ok(act.some((a) => a.action === 'event.create' && a.actor === 'Sam' && a.detail === 'approved by Manager'));
   assert.equal((await c.call('GET', '/api/events')).data.length, 1, 'only the approved event exists');
 
-  // A venue that hasn't set a PIN yet can still create events.
-  appDb.prepare('UPDATE venues SET manager_pin_hash = NULL WHERE id = ?').run(venue.id);
+  // A venue with no admin password or codes yet can still create events.
+  appDb.prepare('UPDATE venues SET admin_password_hash = NULL WHERE id = ?').run(venue.id);
+  appDb.prepare('DELETE FROM manager_codes WHERE venue_id = ?').run(venue.id);
   assert.equal((await c.call('POST', '/api/events', { name: 'No PIN yet', date: '2026-11-06' })).status, 200);
 });
 
@@ -610,7 +631,7 @@ test('only the public pages are indexable; robots.txt and sitemap', async () => 
   const home = await fetch(`${base}/`);
   assert.equal(home.headers.get('x-robots-tag'), null);
   assert.equal((await fetch(`${base}/guide`)).headers.get('x-robots-tag'), null);
-  for (const p of ['/app', '/admin', '/login', '/c/x', '/setup/x', '/pin/x', '/v/x']) {
+  for (const p of ['/app', '/admin', '/login', '/c/x', '/setup/x', '/v/x', '/v/x/admin', '/venue-admin/reset/x']) {
     assert.match((await fetch(base + p)).headers.get('x-robots-tag') || '', /noindex/, p);
   }
   const robots = await (await fetch(`${base}/robots.txt`)).text();
@@ -646,6 +667,85 @@ test('owner password can be recovered from the server', async () => {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('venue admin portal: login, isolation between venues, defaults', async () => {
+  const a = await onboard('Portal A');
+  const b = await onboard('Portal B', 'venuepass1', '5757');
+  // A's admin session can't be used against B, and a wrong password is refused.
+  assert.equal((await client().call('POST', '/api/vadmin/login/portal-b', { password: a.adminPw })).status, 401);
+  assert.equal((await client().call('POST', '/api/vadmin/login/portal-b', { password: 'admin-5757-pass' })).status, 200, 'B has its own');
+  const bCode = (await b.admin.call('GET', '/api/vadmin/overview')).data.codes[0];
+  assert.equal((await a.admin.call('PUT', `/api/vadmin/codes/${bCode.id}`, { active: false })).status, 404, 'cannot touch another venue’s codes');
+  assert.equal((await a.admin.call('DELETE', `/api/vadmin/codes/${bCode.id}`)).status, 404);
+  assert.equal((await a.c.call('GET', '/api/vadmin/overview')).status, 401, 'staff login is not venue admin');
+  assert.equal((await owner.call('GET', '/api/vadmin/overview')).status, 401);
+  const sess = await a.admin.call('GET', '/api/vadmin/session/portal-a');
+  assert.equal(sess.data.authed, true);
+  assert.equal((await a.admin.call('GET', '/api/vadmin/session/portal-b')).data.authed, false);
+
+  // Defaults apply to new events unless the event says otherwise.
+  assert.equal((await a.admin.call('PUT', '/api/vadmin/venue', { defaultCapacity: 450, defaultCountGuestlist: true, email: 'gm@portal-a.com' })).status, 200);
+  assert.equal((await a.admin.call('PUT', '/api/vadmin/venue', { email: 'nope' })).status, 400);
+  const d = (await a.c.call('GET', '/api/session')).data.venue.defaults;
+  assert.deepEqual(d, { capacity: 450, countGuestlist: true });
+  let ev = (await a.c.call('POST', '/api/events', { name: 'Default', date: '2026-12-01', overridePin: '2468' })).data;
+  assert.equal(ev.venueCapacity, 450);
+  assert.equal(ev.countGuestlist, true);
+  ev = (await a.c.call('POST', '/api/events', { name: 'Custom', date: '2026-12-02', venueCapacity: 120, countGuestlist: false, overridePin: '2468' })).data;
+  assert.equal(ev.venueCapacity, 120);
+  assert.equal(ev.countGuestlist, false);
+
+  // Changing the admin password needs the current one and keeps this session.
+  assert.equal((await a.admin.call('PUT', '/api/vadmin/admin-password', { currentPassword: 'wrong-pass', newPassword: 'newadminpw1' })).status, 401);
+  assert.equal((await a.admin.call('PUT', '/api/vadmin/admin-password', { currentPassword: a.adminPw, newPassword: 'newadminpw1' })).status, 200);
+  assert.equal((await a.admin.call('GET', '/api/vadmin/overview')).status, 200);
+});
+
+test('older venue with only a manager code can set up its admin password', async () => {
+  const { venue } = await onboard('Legacy Admin Hall', 'venuepass1', '3131');
+  appDb.prepare('UPDATE venues SET admin_password_hash = NULL WHERE id = ?').run(venue.id);
+  const a = client();
+  assert.equal((await a.call('GET', '/api/vadmin/session/legacy-admin-hall')).data.needsSetup, true);
+  assert.equal((await a.call('POST', '/api/vadmin/login/legacy-admin-hall', { managerCode: '0000', newPassword: 'fresh-admin-1' })).status, 401);
+  assert.equal((await a.call('POST', '/api/vadmin/login/legacy-admin-hall', { managerCode: '3131', newPassword: 'fresh-admin-1' })).status, 200);
+  assert.equal((await a.call('GET', '/api/vadmin/overview')).status, 200);
+  assert.equal((await client().call('POST', '/api/vadmin/login/legacy-admin-hall', { password: 'fresh-admin-1' })).status, 200);
+});
+
+test('guest details are removed after the venue’s retention period; counts stay', async () => {
+  const { c, admin } = await onboard('Retention Hall');
+  const old = (await c.call('POST', '/api/events', { name: 'Old show', date: '2026-01-10', overridePin: '2468' })).data;
+  const recent = (await c.call('POST', '/api/events', { name: 'Recent show', date: '2026-09-20', overridePin: '2468' })).data;
+  const g = (await c.call('POST', `/api/events/${old.id}/guests`, { name: 'Private Person', plusOnes: 1, notes: 'phone 0400' })).data;
+  await c.call('POST', `/api/guests/${g.id}/checkin`, {});
+  await c.call('POST', `/api/events/${recent.id}/guests`, { name: 'Still Here' });
+  assert.equal((await admin.call('PUT', '/api/vadmin/venue', { retentionDays: 3 })).status, 400, 'at least a week');
+  assert.equal((await admin.call('PUT', '/api/vadmin/venue', { retentionDays: 90 })).status, 200);
+  const n = server.purgeExpired(new Date('2026-09-29T12:00:00Z'));
+  assert.ok(n >= 1);
+  const o = (await c.call('GET', `/api/events/${old.id}`)).data;
+  assert.equal(o.guests[0].name, 'Guest (removed)');
+  assert.equal(o.guests[0].notes, null);
+  assert.equal(o.stats.admitted, 2, 'counts kept for reports');
+  const act = (await c.call('GET', `/api/events/${old.id}/activity`)).data;
+  assert.ok(!JSON.stringify(act).includes('Private Person'), 'name gone from the activity log too');
+  assert.equal((await c.call('GET', `/api/events/${recent.id}`)).data.guests[0].name, 'Still Here');
+  assert.equal(server.purgeExpired(new Date('2026-09-29T12:00:00Z')), 0, 'runs once per event');
+});
+
+test('an older single manager PIN becomes a manager code called "Manager"', () => {
+  const db = openDb(':memory:');
+  const { hashPassword } = require('../src/auth');
+  db.prepare("INSERT INTO venues (slug, name, created_at) VALUES ('pin-venue', 'PIN Venue', '2026-01-01')").run();
+  db.prepare("UPDATE venues SET manager_pin_hash = ? WHERE slug = 'pin-venue'").run(hashPassword('8080'));
+  db.close;
+  // Re-running migrations (as on the next start) moves it across.
+  const { migrate } = require('../src/db');
+  (migrate || (() => {}))(db);
+  const codes = db.prepare('SELECT name FROM manager_codes').all();
+  assert.deepEqual(codes.map((c) => c.name), ['Manager']);
+  assert.equal(db.prepare("SELECT manager_pin_hash FROM venues WHERE slug = 'pin-venue'").get().manager_pin_hash, null);
 });
 
 test('/health answers ok without login and leaks nothing', async () => {

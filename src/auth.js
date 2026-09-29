@@ -5,6 +5,7 @@ const { getSetting, setSetting } = require('./db');
 
 const VENUE_COOKIE = 'vl_session';
 const OWNER_COOKIE = 'vl_owner';
+const VADMIN_COOKIE = 'vl_vadmin';
 const SESSION_DAYS = 30;
 
 function hashPassword(password) {
@@ -85,6 +86,22 @@ function clearVenueCookie(secure) {
   return cookieHeader(VENUE_COOKIE, '', 0, secure);
 }
 
+// ----- venue admin portal sessions: bound to the venue's admin password version -----
+
+function vadminCookie(db, venue, secure) {
+  return issue(db, VADMIN_COOKIE, ['a', venue.id, venue.admin_version || 1], secure);
+}
+
+function vadminSession(db, req) {
+  const f = read(db, req, VADMIN_COOKIE);
+  if (!f || f.length !== 3 || f[0] !== 'a') return null;
+  return { venueId: Number(f[1]), version: Number(f[2]) };
+}
+
+function clearVadminCookie(secure) {
+  return cookieHeader(VADMIN_COOKIE, '', 0, secure);
+}
+
 // ----- owner (platform admin) sessions -----
 
 function ownerVersion(db) {
@@ -130,6 +147,9 @@ module.exports = {
   venueCookie,
   venueSession,
   clearVenueCookie,
+  vadminCookie,
+  vadminSession,
+  clearVadminCookie,
   ownerCookie,
   isOwner,
   clearOwnerCookie,
