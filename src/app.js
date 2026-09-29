@@ -445,28 +445,60 @@ function createApp(db, options = {}) {
     contactEmail: getSetting(db, 'contact_email') || null,
   }), { auth: 'public' });
 
-  // Public "request access" form on the landing page. Lands in the owner's /admin inbox.
-  const requestLimiter = auth.createLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
-  route('POST', /^\/api\/request-access$/, ({ req, body }) => {
+  // Usernames are the venue's login and its staff link (/v/<username>).
+  const RESERVED = new Set(['admin', 'login', 'app', 'setup', 'guide', 'api', 'health', 'riderly', 'owner', 'venue']);
+  function usernameFrom(v, { required = true } = {}) {
+    const raw = str(v, 'Username', { required, max: 40 });
+    if (!raw) return '';
+    const u = slugify(raw);
+    if (u.length < 3) throw new HttpError(400, 'Username must be at least 3 letters or numbers');
+    if (RESERVED.has(u)) throw new HttpError(409, `Username "${u}" isn’t available`);
+    return u;
+  }
+  function usernameTaken(u, exceptRequestId = 0) {
+    return !!(
+      db.prepare('SELECT 1 FROM venues WHERE slug = ?').get(u) ||
+      db.prepare("SELECT 1 FROM access_requests WHERE slug = ? AND status = 'new' AND id != ?").get(u, exceptRequestId)
+    );
+  }
+
+  function createVenue({ name, slug, passwordHash }) {
+    const t = now();
+    const info = db
+      .prepare('INSERT INTO venues (slug, name, password_hash, created_at, setup_at) VALUES (?, ?, ?, ?, ?)')
+      .run(slug, name, passwordHash || null, t, passwordHash ? t : null);
+    return db.prepare('SELECT * FROM venues WHERE id = ?').get(Number(info.lastInsertRowid));
+  }
+
+  // Public sign-up on the landing page. Normally lands in the owner's /admin inbox for
+  // one-tap approval; with auto-approve on, the venue is live immediately.
+  const signupLimiter = auth.createLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
+  route('POST', /^\/api\/signup$/, ({ req, body, res }) => {
     const ip = clientIp(req);
-    if (requestLimiter.blocked(ip)) throw new HttpError(429, 'Thanks — we’ve already got your request. We’ll be in touch.');
-    requestLimiter.fail(ip); // counts every submission
-    if (body.website) return { ok: true }; // honeypot field: bots fill it, people never see it
+    if (signupLimiter.blocked(ip)) throw new HttpError(429, 'Too many sign-ups from here. Try again in an hour.');
+    if (body.website) return { status: 'pending' }; // honeypot field: bots fill it, people never see it
+    const venueName = str(body.venueName, 'Venue name', { required: true, max: 120 });
+    const username = usernameFrom(body.username);
     const email = str(body.email, 'Email', { required: true, max: 120 });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
+    const hash = auth.hashPassword(password(body.password));
+    if (usernameTaken(username)) throw new HttpError(409, `Username "${username}" is taken — try another.`);
     const pending = db.prepare("SELECT COUNT(*) AS n FROM access_requests WHERE status = 'new'").get().n;
-    if (pending >= 200) throw new HttpError(503, 'We’re catching up on requests — please try again later.');
+    if (pending >= 200) throw new HttpError(503, 'We’re catching up on sign-ups — please try again later.');
+    signupLimiter.fail(ip); // counts every successful submission
+
+    const contact = str(body.name, 'Your name', { required: true, max: 80 });
+    const phone = str(body.phone, 'Phone', { max: 40 }) || null;
+    const message = str(body.message, 'Message', { max: 1000 }) || null;
+    const autoApprove = getSetting(db, 'auto_approve') === '1';
     db.prepare(
-      'INSERT INTO access_requests (venue_name, contact_name, email, phone, message, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(
-      str(body.venueName, 'Venue name', { required: true, max: 120 }),
-      str(body.name, 'Your name', { required: true, max: 80 }),
-      email,
-      str(body.phone, 'Phone', { max: 40 }) || null,
-      str(body.message, 'Message', { max: 1000 }) || null,
-      now()
-    );
-    return { ok: true };
+      `INSERT INTO access_requests (venue_name, contact_name, email, phone, message, slug, password_hash, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(venueName, contact, email, phone, message, username, autoApprove ? null : hash, autoApprove ? 'done' : 'new', now());
+    if (!autoApprove) return { status: 'pending', username };
+    const v = createVenue({ name: venueName, slug: username, passwordHash: hash });
+    res.setHeader('Set-Cookie', auth.venueCookie(db, v, secureCookies));
+    return { status: 'active', venue: venueOut(v) };
   }, { auth: 'public' });
 
   // ----- venue login -----
@@ -479,14 +511,18 @@ function createApp(db, options = {}) {
   route('POST', /^\/api\/login$/, ({ req, body, res }) => {
     limit(req);
     // Accept "brunswick-ballroom", "Brunswick Ballroom" or a pasted /v/brunswick-ballroom link.
-    const raw = str(body.venue, 'Venue ID', { required: true, max: 200 }).replace(/^.*\/v\//, '').replace(/[/?#].*$/, '');
+    const raw = str(body.venue ?? body.username, 'Username', { required: true, max: 200 }).replace(/^.*\/v\//, '').replace(/[/?#].*$/, '');
     const pw = str(body.password, 'Password', { max: 200 });
     const v = db.prepare('SELECT * FROM venues WHERE slug = ?').get(slugify(raw));
     // Same work whether or not the venue exists, so the response doesn't reveal which venues are real.
     const ok = auth.verifyPassword(pw, (v && v.password_hash) || DUMMY_HASH) && !!v && !!v.password_hash;
     if (!ok) {
+      const waiting = db.prepare("SELECT password_hash FROM access_requests WHERE slug = ? AND status = 'new'").get(slugify(raw));
+      if (!v && waiting && waiting.password_hash && auth.verifyPassword(pw, waiting.password_hash)) {
+        throw new HttpError(403, 'Your sign-up is waiting for approval. We’ll email you as soon as it’s live.');
+      }
       failed(req);
-      throw new HttpError(401, 'Venue ID or password is wrong.');
+      throw new HttpError(401, 'Username or password is wrong.');
     }
     if (!v.active) throw new HttpError(403, 'This venue has been disabled. Contact Riderly.');
     db.prepare('UPDATE venues SET last_login_at = ? WHERE id = ?').run(now(), v.id);
@@ -606,11 +642,14 @@ function createApp(db, options = {}) {
         email: r.email,
         phone: r.phone,
         message: r.message,
+        username: r.slug,
+        hasPassword: !!r.password_hash,
         status: r.status,
         createdAt: r.created_at,
       }));
     return {
       contactEmail: getSetting(db, 'contact_email') || '',
+      autoApprove: getSetting(db, 'auto_approve') === '1',
       requests,
       venues: rows.map((v) => ({
         ...venueOut(v),
@@ -630,17 +669,11 @@ function createApp(db, options = {}) {
 
   route('POST', /^\/api\/owner\/venues$/, ({ body }) => {
     const name = str(body.name, 'Venue name', { required: true, max: 80 });
-    const wanted = str(body.slug, 'Venue ID', { max: 40 });
-    let slug;
-    if (wanted) {
-      slug = slugify(wanted);
-      if (db.prepare('SELECT 1 FROM venues WHERE slug = ?').get(slug)) throw new HttpError(409, `Venue ID "${slug}" is taken.`);
-    } else {
-      slug = uniqueSlug(db, name);
-    }
-    const info = db.prepare('INSERT INTO venues (slug, name, created_at) VALUES (?, ?, ?)').run(slug, name, now());
-    const id = Number(info.lastInsertRowid);
-    return { venue: venueOut(db.prepare('SELECT * FROM venues WHERE id = ?').get(id)), ...newSetupLink(id) };
+    let slug = usernameFrom(body.username ?? body.slug, { required: false });
+    if (slug && usernameTaken(slug)) throw new HttpError(409, `Username "${slug}" is taken.`);
+    if (!slug) slug = uniqueSlug(db, name);
+    const v = createVenue({ name, slug });
+    return { venue: venueOut(v), ...newSetupLink(v.id) };
   }, { auth: 'owner' });
 
   function ownerVenue(id) {
@@ -674,8 +707,26 @@ function createApp(db, options = {}) {
   route('PUT', /^\/api\/owner\/requests\/(\d+)$/, ({ params, body }) => {
     const status = body.status === 'done' ? 'done' : 'new';
     const r = db.prepare('UPDATE access_requests SET status = ? WHERE id = ?').run(status, params[0]);
+    if (status === 'done') db.prepare('UPDATE access_requests SET password_hash = NULL WHERE id = ?').run(params[0]);
     if (!r.changes) throw new HttpError(404, 'Request not found');
     return { ok: true };
+  }, { auth: 'owner' });
+
+  // One tap: the venue goes live with the username and password it signed up with.
+  // Older requests without a password get a setup link instead.
+  route('POST', /^\/api\/owner\/requests\/(\d+)\/approve$/, ({ params }) => {
+    const r = db.prepare('SELECT * FROM access_requests WHERE id = ?').get(params[0]);
+    if (!r) throw new HttpError(404, 'Request not found');
+    if (r.status !== 'new') throw new HttpError(409, 'This request has already been dealt with.');
+    let slug = r.slug;
+    if (!slug || db.prepare('SELECT 1 FROM venues WHERE slug = ?').get(slug)) slug = uniqueSlug(db, slug || r.venue_name);
+    const v = tx(db, () => {
+      const created = createVenue({ name: r.venue_name, slug, passwordHash: r.password_hash });
+      db.prepare("UPDATE access_requests SET status = 'done', password_hash = NULL WHERE id = ?").run(r.id);
+      return created;
+    });
+    const out = { venue: venueOut(v), request: { name: r.contact_name, email: r.email }, live: !!r.password_hash };
+    return r.password_hash ? out : { ...out, ...newSetupLink(v.id) };
   }, { auth: 'owner' });
 
   route('DELETE', /^\/api\/owner\/requests\/(\d+)$/, ({ params }) => {
@@ -684,6 +735,7 @@ function createApp(db, options = {}) {
   }, { auth: 'owner' });
 
   route('PUT', /^\/api\/owner\/settings$/, ({ body, res }) => {
+    if (body.autoApprove !== undefined) setSetting(db, 'auto_approve', body.autoApprove ? '1' : '0');
     if (body.contactEmail !== undefined) {
       const email = str(body.contactEmail, 'Contact email', { max: 120 });
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');

@@ -16,7 +16,7 @@
       <a href="#how" class="hide-sm">How it works</a>
       <a href="/guide" class="hide-sm">Guide</a>
       <a class="btn btn-small" href="/login" id="nav-login">Log in</a>
-      <a class="btn btn-small btn-primary" href="#request">Request access</a>
+      <a class="btn btn-small btn-primary" href="#signup">Sign up</a>
     </nav>
   </header>
 
@@ -28,7 +28,7 @@
         <h1>The guest list, sorted <span class="grad">before doors.</span></h1>
         <p class="lede">Artists, tour managers and promoters add their own guests with a link. Door staff check people in and out on any phone. Everyone works off the same list, live.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary btn-lg" href="#request">Request access</a>
+          <a class="btn btn-primary btn-lg" href="#signup">Sign up your venue</a>
           <a class="btn btn-lg" href="#how">See how it works</a>
         </div>
         <ul class="ticks small">
@@ -186,25 +186,34 @@
       </div>
     </section>
 
-    <!-- ============ REQUEST ACCESS ============ -->
-    <section class="request-band" id="request">
+    <!-- ============ SIGN UP ============ -->
+    <section class="request-band" id="signup">
       <div class="request-copy">
         <p class="eyebrow">Get your venue on</p>
-        <h2 class="section-title left">Request access</h2>
-        <p class="muted">Tell us about your venue and we’ll send you a setup link — usually the same day. Setup takes about a minute: open the link, choose a password, done.</p>
-        <p class="muted small">Already set up? <a href="/login">Log in here</a> · New to it? <a href="/guide">Read the guide</a></p>
+        <h2 class="section-title left">Sign up your venue</h2>
+        <p class="muted">Pick a username and password for your venue. Once we’ve approved it — usually the same day — you and your staff log in with those details.</p>
+        <ul class="bullets small">
+          <li><b>One login for the venue.</b> Staff share the username and password; each phone asks for their name once.</li>
+          <li><b>Your staff link</b> is <code>guestlist.riderly.com.au/v/<span id="slug-echo">your-username</span></code> — it fills in the username for them.</li>
+        </ul>
+        <p class="muted small">Already signed up? <a href="/login">Log in here</a> · New to it? <a href="/guide">Read the guide</a></p>
       </div>
-      <form class="card stack request-form" id="request-form" novalidate>
+      <form class="card stack request-form" id="signup-form" novalidate>
         <label class="field"><span>Venue name</span><input name="venueName" required maxlength="120" autocomplete="organization" placeholder="e.g. The Corner Hotel"></label>
+        <label class="field"><span>Username</span><input name="username" required maxlength="40" autocapitalize="none" autocomplete="username" spellcheck="false" placeholder="e.g. corner-hotel"><small class="muted">Letters, numbers and dashes. This is what your staff log in with.</small></label>
+        <div class="grid-2">
+          <label class="field"><span>Password</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+          <label class="field"><span>Type it again</span><input name="confirm" type="password" required minlength="8" autocomplete="new-password"></label>
+        </div>
         <div class="grid-2">
           <label class="field"><span>Your name</span><input name="name" required maxlength="80" autocomplete="name"></label>
           <label class="field"><span>Phone <small class="muted">(optional)</small></span><input name="phone" maxlength="40" autocomplete="tel" inputmode="tel"></label>
         </div>
-        <label class="field"><span>Email</span><input name="email" type="email" required maxlength="120" autocomplete="email"></label>
-        <label class="field"><span>Anything we should know? <small class="muted">(optional)</small></span><textarea name="message" rows="3" maxlength="1000" placeholder="Capacity, how many shows a week, how you run the list now…"></textarea></label>
+        <label class="field"><span>Email</span><input name="email" type="email" required maxlength="120" autocomplete="email"><small class="muted">We’ll let you know here when your venue is live.</small></label>
+        <label class="field"><span>Anything we should know? <small class="muted">(optional)</small></span><textarea name="message" rows="2" maxlength="1000" placeholder="Capacity, shows a week, how you run the list now…"></textarea></label>
         <label class="hp" aria-hidden="true">Website <input name="website" tabindex="-1" autocomplete="off"></label>
-        <button class="btn btn-primary btn-block" type="submit">Request access</button>
-        <p class="small muted form-status" id="request-status" role="status"></p>
+        <button class="btn btn-primary btn-block" type="submit">Sign up</button>
+        <p class="small muted form-status" id="signup-status" role="status"></p>
       </form>
     </section>
 
@@ -221,7 +230,7 @@
 
   <footer class="landing-foot small muted">
     <span>Riderly · Melbourne</span>
-    <span class="foot-links"><a href="/guide">Guide</a><a href="/login">Venue log in</a><a href="#request">Request access</a></span>
+    <span class="foot-links"><a href="/guide">Guide</a><a href="/login">Log in</a><a href="#signup">Sign up</a></span>
   </footer>
 
   <script src="/js/landing.js"></script>

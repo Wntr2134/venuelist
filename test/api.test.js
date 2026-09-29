@@ -120,8 +120,8 @@ test('onboarding: owner adds a venue, the venue sets a password via a one-time l
 
 test('venue login by ID, name or pasted link; wrong details give one generic error', async () => {
   const c = client();
-  assert.equal((await c.call('POST', '/api/login', { venue: 'brunswick-ballroom', password: 'wrong' })).data.error, 'Venue ID or password is wrong.');
-  assert.equal((await c.call('POST', '/api/login', { venue: 'no-such-venue', password: 'ballroom1' })).data.error, 'Venue ID or password is wrong.');
+  assert.equal((await c.call('POST', '/api/login', { venue: 'brunswick-ballroom', password: 'wrong' })).data.error, 'Username or password is wrong.');
+  assert.equal((await c.call('POST', '/api/login', { venue: 'no-such-venue', password: 'ballroom1' })).data.error, 'Username or password is wrong.');
   assert.equal((await c.call('POST', '/api/login', { venue: 'Brunswick Ballroom', password: 'ballroom1' })).status, 200);
   assert.equal((await client().call('POST', '/api/login', { venue: 'https://guestlist.riderly.com.au/v/brunswick-ballroom', password: 'ballroom1' })).status, 200);
   assert.equal((await c.call('GET', '/api/session')).data.venue.name, 'Brunswick Ballroom');
@@ -351,25 +351,64 @@ test('owner list shows counts but never guest names', async () => {
   assert.ok(flow.guestCount >= 3 && flow.eventCount === 1);
 });
 
-test('request access: saved for the owner only, validated, honeypot drops bots', async () => {
+test('sign-up: waits for approval, one-tap approve makes it live with the chosen login', async () => {
   const pub = client();
-  assert.equal((await pub.call('POST', '/api/request-access', { venueName: 'X', name: 'Y', email: 'nope' })).status, 400);
-  assert.equal((await pub.call('POST', '/api/request-access', { venueName: 'Bot Bar', name: 'Bot', email: 'bot@x.com', website: 'http://spam' })).status, 200);
-  const r = await pub.call('POST', '/api/request-access', { venueName: 'The Corner', name: 'Alex Rivers', email: 'alex@corner.com', phone: '0400 000 000', message: '800 cap' });
-  assert.equal(r.status, 200);
+  const form = { venueName: 'The Corner', username: 'Corner Hotel', name: 'Alex Rivers', email: 'alex@corner.com', password: 'cornerpass1', message: '800 cap' };
+  assert.equal((await pub.call('POST', '/api/signup', { ...form, email: 'nope' })).status, 400);
+  assert.equal((await pub.call('POST', '/api/signup', { ...form, password: 'short' })).status, 400);
+  assert.equal((await pub.call('POST', '/api/signup', { ...form, username: 'admin' })).status, 409, 'reserved');
+  assert.equal((await pub.call('POST', '/api/signup', { ...form, username: 'brunswick-ballroom' })).status, 409, 'taken');
+  assert.equal((await pub.call('POST', '/api/signup', { ...form, venueName: 'Bot Bar', username: 'bot-bar', website: 'http://spam' })).status, 200);
 
-  const list = await owner.call('GET', '/api/owner/venues');
-  const reqs = list.data.requests;
-  assert.ok(reqs.some((x) => x.venueName === 'The Corner' && x.email === 'alex@corner.com' && x.status === 'new'));
-  assert.ok(!reqs.some((x) => x.venueName === 'Bot Bar'), 'honeypot submission not stored');
+  const r = await pub.call('POST', '/api/signup', form);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.status, 'pending');
+  assert.equal(r.data.username, 'corner-hotel');
+  assert.equal((await client().call('POST', '/api/signup', { ...form, venueName: 'Other' })).status, 409, 'pending username is reserved');
+
+  // Logging in before approval explains why.
+  const early = await client().call('POST', '/api/login', { username: 'corner-hotel', password: 'cornerpass1' });
+  assert.equal(early.status, 403);
+  assert.match(early.data.error, /waiting for approval/);
+  assert.equal((await client().call('POST', '/api/login', { username: 'corner-hotel', password: 'wrongpass1' })).status, 401);
+
+  let list = await owner.call('GET', '/api/owner/venues');
+  const req = list.data.requests.find((x) => x.username === 'corner-hotel');
+  assert.ok(req && req.hasPassword && req.status === 'new');
+  assert.ok(!list.data.requests.some((x) => x.venueName === 'Bot Bar'), 'honeypot submission not stored');
+  assert.ok(!JSON.stringify(list.data).includes('scrypt$'), 'password hash never sent to the browser');
 
   const { c } = await onboard('Nosy Venue');
-  assert.equal((await c.call('GET', '/api/owner/venues')).status, 401, 'venues cannot read requests');
+  assert.equal((await c.call('POST', `/api/owner/requests/${req.id}/approve`)).status, 401, 'venues cannot approve');
 
-  const id = reqs.find((x) => x.venueName === 'The Corner').id;
-  assert.equal((await owner.call('PUT', `/api/owner/requests/${id}`, { status: 'done' })).status, 200);
-  const after2 = await owner.call('GET', '/api/owner/venues');
-  assert.equal(after2.data.requests.find((x) => x.id === id).status, 'done');
+  const ok = await owner.call('POST', `/api/owner/requests/${req.id}/approve`);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.live, true);
+  assert.equal(ok.data.venue.slug, 'corner-hotel');
+  assert.equal((await owner.call('POST', `/api/owner/requests/${req.id}/approve`)).status, 409, 'only once');
+
+  const v = client();
+  assert.equal((await v.call('POST', '/api/login', { username: 'corner-hotel', password: 'cornerpass1' })).status, 200);
+  assert.equal((await v.call('GET', '/api/session')).data.venue.name, 'The Corner');
+  list = await owner.call('GET', '/api/owner/venues');
+  assert.equal(list.data.venues.find((x) => x.slug === 'corner-hotel').status, 'active');
+});
+
+test('auto-approve: sign-ups go live and log in immediately', async () => {
+  await owner.call('PUT', '/api/owner/settings', { autoApprove: true });
+  const pub = client();
+  const r = await pub.call('POST', '/api/signup', { venueName: 'Instant Bar', username: 'instant-bar', name: 'Kim', email: 'kim@instant.com', password: 'instantpw1' });
+  assert.equal(r.data.status, 'active');
+  assert.equal((await pub.call('GET', '/api/events')).status, 200, 'logged in straight away');
+  await owner.call('PUT', '/api/owner/settings', { autoApprove: false });
+  const later = await client().call('POST', '/api/signup', { venueName: 'Later Bar', username: 'later-bar', name: 'Lee', email: 'lee@later.com', password: 'laterpass1' });
+  assert.equal(later.data.status, 'pending');
+});
+
+test('owner can choose a username when adding a venue', async () => {
+  const r = await owner.call('POST', '/api/owner/venues', { name: 'Some Long Venue Name', username: 'SLVN' });
+  assert.equal(r.data.venue.slug, 'slvn');
+  assert.equal((await owner.call('POST', '/api/owner/venues', { name: 'Again', username: 'slvn' })).status, 409);
 });
 
 test('/health answers ok without login and leaks nothing', async () => {

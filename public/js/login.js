@@ -40,19 +40,20 @@ function draw() {
     autocomplete: 'username',
     autocapitalize: 'none',
     spellcheck: 'false',
-    placeholder: 'e.g. brunswick-ballroom',
+    placeholder: 'e.g. corner-hotel',
   });
   const pw = h('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' });
   const form = h('form', { class: 'card narrow stack' },
     h('a', { class: 'brand', href: '/' }, h('span', { class: 'logo big' }, '★'), h('h1', null, 'Guest List')),
-    h('p', { class: 'muted' }, 'Log in with your venue’s ID and password.'),
+    h('p', { class: 'muted' }, 'Log in with your venue’s username and password.'),
     fromLink
-      ? h('div', { class: 'venue-pill' }, h('span', { class: 'muted small' }, 'Venue'), h('strong', null, fromLink),
+      ? h('div', { class: 'venue-pill' }, h('span', { class: 'muted small' }, 'Username'), h('strong', null, fromLink),
         h('input', { type: 'hidden', name: 'venue', value: fromLink }))
-      : field('Venue ID', venueInput, 'Your manager can find it in Settings.'),
-    field('Venue password', pw),
+      : field('Username', venueInput),
+    field('Password', pw),
     h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Log in'),
-    fromLink ? h('a', { class: 'small center-text', href: '/login' }, 'Not your venue?') : null
+    fromLink ? h('a', { class: 'small center-text', href: '/login' }, 'Not your venue?') : null,
+    h('p', { class: 'small muted center-text' }, 'No account yet? ', h('a', { href: '/#signup' }, 'Sign up your venue'))
   );
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

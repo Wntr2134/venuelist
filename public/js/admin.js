@@ -95,20 +95,25 @@ async function renderDashboard() {
   }
 
   const nameInput = h('input', { name: 'name', required: true, maxlength: '80', placeholder: 'e.g. The Corner Hotel', autocomplete: 'off' });
-  const slugHint = h('small', { class: 'muted' }, 'Venue ID: —');
+  const userInput = h('input', { name: 'username', maxlength: '40', placeholder: 'auto from name', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
+  let userTouched = false;
   nameInput.addEventListener('input', () => {
-    slugHint.textContent = `Venue ID: ${slugPreview(nameInput.value) || '—'}`;
+    if (!userTouched) userInput.value = slugPreview(nameInput.value);
+  });
+  userInput.addEventListener('input', () => {
+    userTouched = true;
   });
   const addForm = h('form', { class: 'card stack' },
-    h('h2', null, 'Add a venue'),
-    h('p', { class: 'muted' }, 'You’ll get a setup link to text or email them. They open it, pick a password, done.'),
-    h('div', { class: 'toolbar' }, h('div', { class: 'grow' }, nameInput), h('button', { class: 'btn btn-primary', type: 'submit' }, 'Add venue')),
-    slugHint
+    h('h2', null, 'Add a venue yourself'),
+    h('p', { class: 'muted' }, 'You’ll get a setup link to text or email them. They open it, choose a password, done.'),
+    h('div', { class: 'grid-2' }, field('Venue name', nameInput), field('Username', userInput, 'What their staff log in with.')),
+    h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, 'Add venue'))
   );
   addForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (!nameInput.value.trim()) return nameInput.focus();
     try {
-      const r = await api('POST', '/api/owner/venues', { name: nameInput.value });
+      const r = await api('POST', '/api/owner/venues', { name: nameInput.value, username: slugPreview(userInput.value) });
       showSetupLink(r, false);
       renderDashboard();
     } catch (err) {
@@ -125,6 +130,7 @@ async function renderDashboard() {
     addForm,
     h('div', { class: 'page-head' }, h('h2', null, `Venues (${data.venues.length})`)),
     list,
+    signupCard(data),
     settingsCard()
   );
   if (!document.querySelector('.modal-backdrop')) nameInput.focus();
@@ -137,7 +143,7 @@ function venueCard(v) {
     h('div', { class: 'contributor-head' },
       h('div', null,
         h('h3', null, v.name),
-        h('div', { class: 'small muted' }, 'Venue ID: ', h('strong', null, v.slug))
+        h('div', { class: 'small muted' }, 'Username: ', h('strong', null, v.slug))
       ),
       h('span', { class: `badge badge-status s-${v.status}` }, statusLabel)
     ),
@@ -172,7 +178,7 @@ function requestsCard(requests) {
   const open = requests.filter((r) => r.status === 'new');
   if (!requests.length) return null;
   return h('div', { class: 'card stack requests' },
-    h('h2', null, 'Access requests ', open.length ? h('span', { class: 'badge badge-vip' }, `${open.length} new`) : null),
+    h('h2', null, 'Sign-ups ', open.length ? h('span', { class: 'badge badge-vip' }, `${open.length} new`) : null),
     requests.map((r) =>
       h('div', { class: `request${r.status === 'done' ? ' done' : ''}` },
         h('div', { class: 'request-head' },
@@ -180,9 +186,10 @@ function requestsCard(requests) {
           h('span', { class: 'small muted' }, fmtDateTime(r.createdAt))
         ),
         h('div', { class: 'small' }, r.name, ' · ', h('a', { href: `mailto:${r.email}` }, r.email), r.phone ? ` · ${r.phone}` : ''),
+        r.username ? h('div', { class: 'small muted' }, 'Username: ', h('strong', null, r.username), r.hasPassword ? ' · password chosen' : '') : null,
         r.message ? h('p', { class: 'small muted request-msg' }, r.message) : null,
         h('div', { class: 'row wrap' },
-          r.status === 'new' ? h('button', { class: 'btn btn-small btn-primary', onclick: () => approve(r) }, 'Add as venue') : null,
+          r.status === 'new' ? h('button', { class: 'btn btn-small btn-primary', onclick: () => approve(r) }, 'Approve') : null,
           h('button', { class: 'btn btn-small', onclick: () => markRequest(r, r.status === 'new' ? 'done' : 'new') }, r.status === 'new' ? 'Mark done' : 'Reopen'),
           h('button', { class: 'btn btn-small btn-ghost-danger', onclick: () => deleteRequest(r) }, 'Delete')
         )
@@ -193,9 +200,9 @@ function requestsCard(requests) {
 
 async function approve(req) {
   try {
-    const r = await api('POST', '/api/owner/venues', { name: req.venueName });
-    await api('PUT', `/api/owner/requests/${req.id}`, { status: 'done' });
-    showSetupLink(r, false, req);
+    const r = await api('POST', `/api/owner/requests/${req.id}/approve`);
+    if (r.live) showLive(r, req);
+    else showSetupLink(r, false, req);
     renderDashboard();
   } catch (err) {
     toast(err.message, 'error', 5000);
@@ -216,6 +223,21 @@ async function deleteRequest(r) {
   if (!ok) return;
   await api('DELETE', `/api/owner/requests/${r.id}`).catch((err) => toast(err.message, 'error'));
   renderDashboard();
+}
+
+// Approved sign-up: they already chose a password, so just tell them they're live.
+function showLive(r, req) {
+  const login = `${location.origin}/v/${r.venue.slug}`;
+  const msg = `Hi ${req.name.split(' ')[0]}! ${r.venue.name} is now live on Riderly Guest List.\n\nLog in: ${login}\nUsername: ${r.venue.slug}\nPassword: the one you chose when you signed up.\n\nSend that link to your staff too — it fills in the username. The guide is here: ${location.origin}/guide`;
+  const mailto = `mailto:${req.email}?subject=${encodeURIComponent(`${r.venue.name} is live on Riderly Guest List`)}&body=${encodeURIComponent(msg)}`;
+  modal(`${r.venue.name} is live ✓`, h('div', { class: 'stack' },
+    h('p', null, 'They can log in now with the username and password they chose. Let them know:'),
+    h('textarea', { rows: '7', readonly: true, class: 'message' }, msg),
+    h('div', { class: 'row wrap' },
+      h('a', { class: 'btn btn-primary', href: mailto }, `Email ${req.email}`),
+      h('button', { class: 'btn', onclick: () => copy(msg) }, 'Copy message')
+    )
+  ));
 }
 
 function setupMessage(r) {
@@ -265,7 +287,7 @@ async function newLink(v) {
 
 function rename(v) {
   const input = h('input', { name: 'name', required: true, maxlength: '80', value: v.name });
-  const form = h('form', { class: 'stack' }, field('Venue name', input, `The venue ID (${v.slug}) stays the same.`));
+  const form = h('form', { class: 'stack' }, field('Venue name', input, `The username (${v.slug}) stays the same.`));
   const submit = async (e) => {
     if (e) e.preventDefault();
     try {
@@ -315,6 +337,24 @@ function remove(v) {
   ), {
     actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-danger', onclick: submit }, 'Delete forever')],
   });
+}
+
+function signupCard(data) {
+  const box = h('input', { type: 'checkbox', checked: data.autoApprove });
+  box.addEventListener('change', async () => {
+    try {
+      await api('PUT', '/api/owner/settings', { autoApprove: box.checked });
+      toast(box.checked ? 'New sign-ups go live straight away' : 'New sign-ups wait for your approval', 'ok');
+    } catch (err) {
+      box.checked = !box.checked;
+      toast(err.message, 'error');
+    }
+  });
+  return h('div', { class: 'card stack' },
+    h('h2', null, 'Sign-ups'),
+    h('label', { class: 'check' }, box, h('span', null, 'Approve new sign-ups automatically')),
+    h('p', { class: 'small muted' }, 'Off (recommended): sign-ups from the home page wait here until you tap Approve. On: they can log in the moment they sign up.')
+  );
 }
 
 function settingsCard() {

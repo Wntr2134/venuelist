@@ -119,6 +119,11 @@ function migrate(db) {
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_events_venue ON events(venue_id)');
 
+  // Sign-ups carry the username and password the venue chose, so approving them is one tap.
+  const reqCols = db.prepare('PRAGMA table_info(access_requests)').all().map((c) => c.name);
+  if (!reqCols.includes('slug')) db.exec('ALTER TABLE access_requests ADD COLUMN slug TEXT');
+  if (!reqCols.includes('password_hash')) db.exec('ALTER TABLE access_requests ADD COLUMN password_hash TEXT');
+
   const legacyHash = getSetting(db, 'password_hash');
   const venueCount = db.prepare('SELECT COUNT(*) AS n FROM venues').get().n;
   if (legacyHash && venueCount === 0) {

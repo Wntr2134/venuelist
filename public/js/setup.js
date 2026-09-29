@@ -59,6 +59,7 @@ async function start() {
     h('p', null, reset
       ? 'Set a new password for your venue. Devices using the old password will be logged out.'
       : 'Welcome! Set a password and you’re in. It takes 30 seconds.'),
+    h('div', { class: 'venue-pill' }, h('span', { class: 'muted small' }, 'Your username'), h('strong', null, venue.slug)),
     form
   );
 }
@@ -67,12 +68,12 @@ function done(venue, reset) {
   const link = `${location.origin}/v/${venue.slug}`;
   card(
     h('h1', null, reset ? 'Password updated' : 'You’re all set ✓'),
-    h('p', null, 'Your staff log in here with the venue password:'),
+    h('p', null, 'Log in with username ', h('strong', null, venue.slug), ' and your password. Send staff this link — it fills in the username for them:'),
     h('div', { class: 'linkbox' },
       h('input', { readonly: true, value: link, onclick: (e) => e.target.select() }),
       h('button', { class: 'btn btn-small btn-primary', onclick: () => copy(link) }, 'Copy')
     ),
-    h('p', { class: 'small muted' }, 'Venue ID: ', h('strong', null, venue.slug), '. You can find this link again any time in Settings.'),
+    h('p', { class: 'small muted' }, 'You can find this link again any time in Settings.'),
     h('a', { class: 'btn btn-primary btn-block', href: '/app' }, 'Go to my guest list →')
   );
 }

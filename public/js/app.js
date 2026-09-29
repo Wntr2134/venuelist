@@ -932,12 +932,12 @@ function renderSettings() {
   const staffLink = `${location.origin}/v/${state.venueSlug}`;
   const access = h('div', { class: 'card stack' },
     h('h3', null, 'Staff login'),
-    h('p', { class: 'muted' }, 'Send staff this link and the venue password. The link fills in your venue, so they only type the password.'),
+    h('p', { class: 'muted' }, 'Staff log in with your username and password. This link fills in the username, so they only type the password.'),
     h('div', { class: 'linkbox' },
       h('input', { readonly: true, value: staffLink, onclick: (e) => e.target.select() }),
       h('button', { class: 'btn btn-small btn-primary', onclick: () => copy(staffLink) }, 'Copy')
     ),
-    h('p', { class: 'small muted' }, 'Venue ID: ', h('strong', null, state.venueSlug))
+    h('p', { class: 'small muted' }, 'Username: ', h('strong', null, state.venueSlug))
   );
 
   const device = h('div', { class: 'card stack' },
