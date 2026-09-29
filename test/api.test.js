@@ -258,3 +258,21 @@ test('static files and path traversal', async () => {
   res = await fetch(`${base}/..%2f..%2fpackage.json`);
   assert.equal(res.status, 404);
 });
+
+test('behind a proxy, login lockout is per client not global', async () => {
+  const db = openDb(':memory:');
+  const app = createApp(db, { trustProxy: true });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const post = (path, body, ip) =>
+    fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: JSON.stringify(body) });
+  try {
+    await post('/api/setup', { password: 'venuepass1' }, '1.1.1.1');
+    for (let i = 0; i < 10; i++) await post('/api/login', { password: 'bad' }, '6.6.6.6');
+    assert.equal((await post('/api/login', { password: 'venuepass1' }, '6.6.6.6')).status, 429);
+    assert.equal((await post('/api/login', { password: 'venuepass1' }, '2.2.2.2')).status, 200, 'other staff unaffected');
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});

@@ -28,12 +28,17 @@ On first visit you'll be asked to set the venue name and password.
 | `HOST` | `0.0.0.0` | Bind address |
 | `DB_FILE` | `./data/venuelist.db` | SQLite database file. Back this up. |
 | `SECURE_COOKIES` | unset | Set to `1` when served over HTTPS (recommended in production) |
+| `TRUST_PROXY` | unset | Set to `1` behind nginx/Caddy so login rate-limiting uses the real client IP |
+
+### DigitalOcean droplet (production)
+
+See **[deploy/README.md](deploy/README.md)**. It's one script that sets up the service, HTTPS on `guestlist.riderly.com.au` and nightly backups.
 
 ### Docker
 
 ```bash
 docker build -t venuelist .
-docker run -d -p 3000:3000 -v venuelist-data:/data -e SECURE_COOKIES=1 venuelist
+docker run -d -p 3000:3000 -v venuelist-data:/data -e SECURE_COOKIES=1 -e TRUST_PROXY=1 venuelist
 ```
 
 ### Hosting notes

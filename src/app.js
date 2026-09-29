@@ -353,6 +353,16 @@ function parseImport(text) {
 
 function createApp(db, options = {}) {
   const secureCookies = !!options.secureCookies;
+  const trustProxy = !!options.trustProxy;
+
+  // Behind nginx/Caddy every request comes from 127.0.0.1, so use the client IP the proxy appended.
+  function clientIp(req) {
+    if (trustProxy) {
+      const fwd = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (fwd.length) return fwd[fwd.length - 1];
+    }
+    return req.socket.remoteAddress || 'unknown';
+  }
   const hub = createHub();
   const loginLimiter = createLimiter();
   const routes = [];
@@ -388,7 +398,7 @@ function createApp(db, options = {}) {
   }, { public: true });
 
   route('POST', /^\/api\/login$/, ({ req, body, res }) => {
-    const ip = req.socket.remoteAddress || 'unknown';
+    const ip = clientIp(req);
     if (!loginLimiter(ip)) throw new HttpError(429, 'Too many attempts. Try again in a few minutes.');
     const password = str(body.password, 'Password', { max: 200 });
     if (!auth.verifyPassword(password, getSetting(db, 'password_hash'))) {
