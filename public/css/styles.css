@@ -700,3 +700,7 @@ pre.code { padding: 12px; white-space: pre-wrap; margin: 8px 0; }
 .code-row.revoked { opacity: 0.55; }
 .code-row strong { display: flex; gap: 8px; align-items: center; }
 .add-code { border-top: 1px solid var(--line); padding-top: 12px; }
+.net-bar { border-radius: 12px; padding: 10px 12px; background: #2a1418; border: 1px solid rgba(255, 107, 87, 0.5); color: #ffd2cb; font-size: 0.92rem; }
+.net-bar.waiting { background: #2a2410; border-color: rgba(245, 197, 66, 0.5); color: #efe0b0; }
+.net-probs { margin-top: 8px; font-size: 0.85rem; }
+.net-probs ul { margin: 4px 0; padding-left: 18px; }

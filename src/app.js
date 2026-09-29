@@ -376,7 +376,7 @@ function serveStatic(req, res, pathname) {
     if (err) return send(res, 404, 'Not found');
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(full)] || 'application/octet-stream',
-      'Cache-Control': file.endsWith('.html') ? 'no-cache' : 'public, max-age=300',
+      'Cache-Control': file.endsWith('.html') || file === 'sw.js' ? 'no-cache' : 'public, max-age=300',
       ...SECURITY_HEADERS,
       ...(file.endsWith('.html') && !INDEXABLE.has(file) ? { 'X-Robots-Tag': 'noindex, nofollow' } : {}),
     });
@@ -1171,7 +1171,7 @@ function createApp(db, options = {}) {
     const headcount = headcountOut(getEvent(db, e.id));
     publish(e.id, 'count', { headcount, actor });
     return headcount;
-  });
+  }, { idempotent: true });
 
   // Manual correction ("we counted 312") or reset to 0.
   route('PUT', /^\/api\/events\/(\d+)\/count$/, ({ venue, req, params, body }) => {
@@ -1420,7 +1420,7 @@ function createApp(db, options = {}) {
         eventId: g.event_id,
         guest: g,
         action: direction === 'in' ? 'guest.checkin' : 'guest.checkout',
-        detail: `${count} (${inside}/${party} inside)`,
+        detail: `${count} (${inside}/${party} inside)${req.headers['x-op-at'] ? ' — tapped while offline' : ''}`,
         actor,
         via: 'door',
       });
@@ -1438,8 +1438,8 @@ function createApp(db, options = {}) {
     return out;
   }
 
-  route('POST', /^\/api\/guests\/(\d+)\/checkin$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'in'));
-  route('POST', /^\/api\/guests\/(\d+)\/checkout$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'out'));
+  route('POST', /^\/api\/guests\/(\d+)\/checkin$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'in'), { idempotent: true });
+  route('POST', /^\/api\/guests\/(\d+)\/checkout$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'out'), { idempotent: true });
 
   // ----- contributor portal (token links, no login) -----
 
@@ -1724,6 +1724,7 @@ function createApp(db, options = {}) {
 
   function purgeExpired(at = new Date()) {
     let purged = 0;
+    db.prepare('DELETE FROM applied_ops WHERE created_at < ?').run(new Date(at.getTime() - 7 * 86400000).toISOString());
     const venues = db.prepare('SELECT id, retention_days FROM venues WHERE retention_days IS NOT NULL').all();
     for (const v of venues) {
       const cutoff = new Date(at.getTime() - v.retention_days * 86400000).toISOString().slice(0, 10);
@@ -1773,7 +1774,19 @@ function createApp(db, options = {}) {
       }
       const params = pathname.match(r.pattern).slice(1);
       const body = req.method === 'GET' ? {} : await readJson(req);
+      // Door taps synced from an offline phone may arrive twice; apply each one only once.
+      const opId = r.idempotent && venue ? String(req.headers['x-op-id'] || '') : '';
+      if (opId && !/^[A-Za-z0-9_-]{8,64}$/.test(opId)) throw new HttpError(400, 'Bad operation id');
+      if (opId) {
+        const seen = db.prepare('SELECT response FROM applied_ops WHERE id = ? AND venue_id = ?').get(opId, venue.id);
+        if (seen) return send(res, 200, JSON.parse(seen.response));
+      }
       const result = await r.handler({ venue, req, res, params, body, query: url.searchParams });
+      if (opId && result !== undefined) {
+        db.prepare('INSERT OR IGNORE INTO applied_ops (id, venue_id, response, created_at) VALUES (?, ?, ?, ?)').run(
+          opId, venue.id, JSON.stringify(result), now()
+        );
+      }
       if (result !== undefined && !res.headersSent) send(res, 200, result);
     } catch (err) {
       if (!(err instanceof HttpError)) console.error(err);

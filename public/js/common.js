@@ -94,12 +94,17 @@ function localDate(d = new Date()) {
 async function api(method, url, body) {
   const headers = { 'X-Actor': encodeURIComponent(currentName()), 'X-Device': deviceKey() };
   if (body !== undefined || method !== 'GET') headers['Content-Type'] = 'application/json';
-  const res = await fetch(url, {
-    method,
-    headers,
-    credentials: 'same-origin',
-    body: body !== undefined ? JSON.stringify(body) : method !== 'GET' ? '{}' : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers,
+      credentials: 'same-origin',
+      body: body !== undefined ? JSON.stringify(body) : method !== 'GET' ? '{}' : undefined,
+    });
+  } catch {
+    throw new ApiError(0, 'You’re offline — no connection to the server.', 'offline');
+  }
   let data = null;
   const text = await res.text();
   try {
@@ -338,3 +343,86 @@ async function withOverride(call) {
     }
   }
 }
+
+// ---------- offline queue (door taps saved on this phone until the connection is back) ----------
+
+const QUEUE_KEY = 'vl.queue';
+const offline = { flushing: false, problems: [] };
+
+function randomId() {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function queueList() {
+  try {
+    return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function queueSave(list) {
+  try {
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(list));
+  } catch {
+    /* storage full or blocked: taps still show on screen but won't survive a reload */
+  }
+  document.dispatchEvent(new CustomEvent('vl:queue'));
+}
+
+// op: { kind: 'count' | 'move', url, body, eventId, guestId?, dir?, label }
+function queueAdd(op) {
+  const list = queueList();
+  list.push({ ...op, opId: randomId(), at: new Date().toISOString(), actor: currentName() });
+  queueSave(list);
+  setTimeout(queueFlush, 1500);
+}
+
+// Sends saved taps in order. Stops at the first network failure and tries again later.
+async function queueFlush() {
+  if (offline.flushing) return;
+  let list = queueList();
+  if (!list.length) return;
+  offline.flushing = true;
+  document.dispatchEvent(new CustomEvent('vl:queue'));
+  try {
+    while (list.length) {
+      const op = list[0];
+      let res;
+      try {
+        res = await fetch(op.url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Actor': encodeURIComponent(op.actor || currentName()),
+            'X-Device': deviceKey(),
+            'X-Op-Id': op.opId,
+            'X-Op-At': op.at,
+          },
+          body: JSON.stringify(op.body || {}),
+        });
+      } catch {
+        break; // still offline
+      }
+      if (res.status === 401) break; // logged out: keep them until someone logs back in
+      if (!res.ok) {
+        // The server said no (e.g. over capacity now that other doors' taps have landed).
+        const data = await res.json().catch(() => ({}));
+        offline.problems.push({ label: op.label, error: data.error || `Failed (${res.status})`, at: op.at });
+      }
+      list = queueList().filter((x) => x.opId !== op.opId);
+      queueSave(list);
+    }
+  } finally {
+    offline.flushing = false;
+    document.dispatchEvent(new CustomEvent('vl:queue'));
+  }
+}
+
+window.addEventListener('online', () => queueFlush());
+setInterval(() => {
+  if (queueList().length) queueFlush();
+}, 10000);

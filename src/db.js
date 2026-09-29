@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS manager_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_codes_venue ON manager_codes(venue_id);
 
+-- Offline door taps carry an id so a retried sync is only applied once.
+CREATE TABLE IF NOT EXISTS applied_ops (
+  venue_id    INTEGER NOT NULL,
+  id          TEXT NOT NULL,
+  response    TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (venue_id, id)
+);
+
 CREATE TABLE IF NOT EXISTS access_requests (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   venue_name    TEXT NOT NULL,

@@ -22,6 +22,7 @@ async function boot() {
   state.hasManagerPin = session.venue.hasManagerPin;
   state.defaults = session.venue.defaults || {};
   document.title = `${session.venue.name} · Guest List`;
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   await promptDeviceName();
   window.addEventListener('hashchange', route);
   document.addEventListener('vl:name', () => route());
@@ -724,8 +725,59 @@ async function renderDoor(id) {
   const ui = { search: '', filter: 'all' };
   const counters = h('div', { class: 'door-counters' });
   const capBar = h('div');
+  const netBar = h('div');
   // Shared clicker: taps show instantly, the server's number wins once no taps are in flight.
   const cap = { server: null, shown: 0, pending: 0, full: null };
+
+  // Taps saved on this phone while offline, for this event.
+  const queued = () => queueList().filter((op) => op.eventId === id);
+  // Door-count change still waiting to sync: clicker taps, plus guest check-ins when this show counts them.
+  const queuedDelta = () => queued().reduce((n, op) => {
+    if (op.kind === 'count') return n + op.body.delta;
+    if (op.kind === 'move' && data && data.event.countGuestlist) return n + (op.dir === 'in' ? op.body.count : -op.body.count);
+    return n;
+  }, 0);
+  const settledCount = () => Math.max(0, (cap.server ? cap.server.count : 0) + queuedDelta());
+
+  // Re-applies offline check-ins to freshly loaded data, so the list matches what the door did.
+  function applyQueued(d) {
+    for (const op of queued()) {
+      if (op.kind !== 'move') continue;
+      const g = d.guests.find((x) => x.id === op.guestId);
+      if (!g) continue;
+      g.inside = Math.max(0, Math.min(g.party, g.inside + (op.dir === 'in' ? op.body.count : -op.body.count)));
+      g.admitted = Math.max(g.admitted, g.inside);
+    }
+  }
+
+  function drawNet() {
+    const n = queued().length;
+    const probs = offline.problems;
+    if (!n && !probs.length && navigator.onLine) return put(netBar);
+    put(netBar, h('div', { class: `net-bar${n ? ' waiting' : ''}` },
+      h('strong', null, !navigator.onLine ? '📴 Offline' : n ? (offline.flushing ? '🔄 Syncing…' : '⏳ Waiting to sync') : '⚠️ Sync issues'),
+      n ? h('span', null, ` — ${n} tap${n === 1 ? '' : 's'} saved on this phone. They’ll send automatically when the connection’s back.`) : null,
+      !n && !navigator.onLine ? h('span', null, ' — you can keep checking people in and counting. Everything saves on this phone.') : null,
+      probs.length ? h('div', { class: 'net-probs' },
+        h('div', null, `${probs.length} offline tap${probs.length === 1 ? '' : 's'} couldn’t be applied:`),
+        h('ul', null, probs.slice(-5).map((p) => h('li', null, `${p.label} — ${p.error}`))),
+        h('button', { class: 'linklike', onclick: () => { offline.problems = []; drawNet(); } }, 'Dismiss')
+      ) : null
+    ));
+  }
+  const onQueue = () => {
+    drawNet();
+    if (!queued().length && !offline.flushing) load();
+  };
+  const onNet = () => drawNet();
+  document.addEventListener('vl:queue', onQueue);
+  window.addEventListener('online', onNet);
+  window.addEventListener('offline', onNet);
+  state.cleanup.push(() => {
+    document.removeEventListener('vl:queue', onQueue);
+    window.removeEventListener('online', onNet);
+    window.removeEventListener('offline', onNet);
+  });
   const list = h('div', { class: 'door-list' });
   const header = h('div');
   const notesBar = h('div');
@@ -766,8 +818,10 @@ async function renderDoor(id) {
     try {
       data = await api('GET', `/api/events/${id}`);
     } catch (err) {
+      if (err.code === 'offline') return drawNet();
       return handleError(err);
     }
+    applyQueued(data);
     draw();
   }
 
@@ -782,9 +836,10 @@ async function renderDoor(id) {
     put(notesBar, e.notes ? h('div', { class: 'door-notes' }, '📌 ', e.notes) : '');
     if (!cap.pending) {
       cap.server = e.headcount;
-      cap.shown = e.headcount.count;
+      cap.shown = settledCount();
     }
     drawCap();
+    drawNet();
     const s = data.stats;
     put(counters, 
       h('div', { class: 'counter counter-main' }, h('b', null, s.inside), h('span', null, 'inside')),
@@ -850,7 +905,27 @@ async function renderDoor(id) {
       if (!count) return;
     }
     try {
-      const updated = await withOverride((extra) => api('POST', `/api/guests/${g.id}/${dir === 'in' ? 'checkin' : 'checkout'}`, { count, ...extra }));
+      let updated;
+      try {
+        updated = await withOverride((extra) => api('POST', `/api/guests/${g.id}/${dir === 'in' ? 'checkin' : 'checkout'}`, { count, ...extra }));
+      } catch (err) {
+        if (err.code !== 'offline') throw err;
+        const ev = data.event;
+        if (dir === 'in' && ev.countGuestlist && cap.server && cap.server.capacity && settledCount() + count > cap.server.capacity) {
+          toast('Offline: going over capacity needs a manager code, which needs a connection. Wait for signal.', 'error', 6000);
+          return;
+        }
+        queueAdd({
+          kind: 'move', url: `/api/guests/${g.id}/${dir === 'in' ? 'checkin' : 'checkout'}`, body: { count },
+          eventId: id, guestId: g.id, dir, label: `${dir === 'in' ? 'In' : 'Out'}: ${g.name}${count > 1 ? ` ×${count}` : ''}`,
+        });
+        g.inside = Math.max(0, Math.min(g.party, g.inside + (dir === 'in' ? count : -count)));
+        g.admitted = Math.max(g.admitted, g.inside);
+        toast(`📴 Saved offline — ${dir === 'in' ? 'In' : 'Out'}: ${g.name}`, 'info', 2200);
+        drawList();
+        drawNet();
+        return;
+      }
       if (!updated) return;
       Object.assign(g, updated);
       toast(`${dir === 'in' ? '✓ In' : '← Out'}: ${g.name}${count > 1 ? ` ×${count}` : ''}`, dir === 'in' ? 'ok' : 'info', 1800);
@@ -952,11 +1027,20 @@ async function renderDoor(id) {
       const r = await withOverride((extra) => api('POST', `/api/events/${id}/count`, { delta, ...extra }));
       if (r) cap.server = r;
     } catch (err) {
-      handleError(err);
+      if (err.code !== 'offline') handleError(err);
+      else {
+        const capacity = cap.server && cap.server.capacity;
+        if (delta > 0 && capacity && settledCount() + delta > capacity) {
+          toast('Offline: going over capacity needs a manager code, which needs a connection. Wait for signal.', 'error', 6000);
+        } else {
+          queueAdd({ kind: 'count', url: `/api/events/${id}/count`, body: { delta }, eventId: id, label: `Door count ${delta > 0 ? '+' : '−'}${Math.abs(delta)}` });
+        }
+      }
     } finally {
       cap.pending -= 1;
-      if (!cap.pending && cap.server) cap.shown = cap.server.count;
+      if (!cap.pending && cap.server) cap.shown = settledCount();
       drawCap();
+      drawNet();
     }
   }
 
@@ -1065,7 +1149,7 @@ async function renderDoor(id) {
   function onMessage(msg) {
     if (msg.type === 'count') {
       cap.server = msg.headcount;
-      if (!cap.pending) cap.shown = msg.headcount.count;
+      if (!cap.pending) cap.shown = settledCount();
       drawCap();
       return true;
     }
@@ -1079,6 +1163,7 @@ async function renderDoor(id) {
   put(app, 
     header,
     h('main', { class: 'door' },
+      netBar,
       notesBar,
       capBar,
       h('div', { class: 'door-section-label small muted' }, 'Guest list'),
@@ -1118,7 +1203,14 @@ function renderSettings() {
       h('button', {
         class: 'btn btn-danger',
         onclick: async () => {
+          const waiting = queueList().length;
+          if (waiting) {
+            const ok = await confirmDialog('Taps still waiting to sync', `${waiting} door tap${waiting === 1 ? ' is' : 's are'} saved on this phone and haven’t reached the server yet. Logging out now will lose them.`, { confirmText: 'Log out anyway', danger: true });
+            if (!ok) return;
+            queueSave([]);
+          }
           await api('POST', '/api/logout').catch(() => {});
+          if (navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage('clear');
           toLogin();
         },
       }, 'Log out this device')

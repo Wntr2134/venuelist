@@ -748,6 +748,29 @@ test('an older single manager PIN becomes a manager code called "Manager"', () =
   assert.equal(db.prepare("SELECT manager_pin_hash FROM venues WHERE slug = 'pin-venue'").get().manager_pin_hash, null);
 });
 
+test('offline taps: a retried sync with the same op id is applied only once', async () => {
+  const { c } = await onboard('Offline Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-11-20', overridePin: '2468' })).data;
+  const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Pat', plusOnes: 3 })).data;
+  const h1 = { headers: { 'X-Op-Id': 'op-aaaaaaaaaaaa', 'X-Op-At': '2026-11-20T10:00:00Z' } };
+  const first = await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 2 }, h1);
+  const again = await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 2 }, h1);
+  assert.equal(first.data.inside, 2);
+  assert.equal(again.data.inside, 2, 'replayed, not re-applied');
+  const h2 = { headers: { 'X-Op-Id': 'op-bbbbbbbbbbbb' } };
+  await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1 }, h2);
+  const r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1 }, h2);
+  assert.equal(r.data.count, 1);
+  assert.equal((await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1 }, { headers: { 'X-Op-Id': 'bad id!' } })).status, 400);
+  const act = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  assert.ok(act.some((a) => /tapped while offline/.test(a.detail || '')));
+  // Another venue can't replay (or read) this venue's op ids.
+  const other = await onboard('Offline Other');
+  const ev2 = (await other.c.call('POST', '/api/events', { name: 'X', date: '2026-11-20', overridePin: '2468' })).data;
+  const o = await other.c.call('POST', `/api/events/${ev2.id}/count`, { delta: 1 }, h2);
+  assert.equal(o.data.count, 1);
+});
+
 test('/health answers ok without login and leaks nothing', async () => {
   const res = await fetch(`${base}/health`);
   assert.equal(res.status, 200);
@@ -764,6 +787,10 @@ test('pages are served at their routes; path traversal is blocked', async () => 
     '/admin': 'admin.js',
     '/c/sometoken': 'contributor.js',
   };
+  const sw = await fetch(`${base}/sw.js`);
+  assert.equal(sw.status, 200);
+  assert.match(sw.headers.get('content-type'), /javascript/);
+  assert.equal(sw.headers.get('cache-control'), 'no-cache', 'service worker updates are picked up straight away');
   const guide = await fetch(`${base}/guide`);
   assert.equal(guide.status, 200);
   assert.match(await guide.text(), /Door cheat sheet/);
