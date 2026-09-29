@@ -4,7 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { getSetting, setSetting, tx } = require('./db');
+const { getSetting, setSetting, tx, slugify, uniqueSlug } = require('./db');
 const auth = require('./auth');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -191,6 +191,8 @@ function log(db, { eventId, guest, action, detail, actor, via }) {
 
 function contributorLocked(db, contributor) {
   const e = getEvent(db, contributor.event_id);
+  const venue = db.prepare('SELECT active FROM venues WHERE id = ?').get(e.venue_id);
+  if (!venue || !venue.active) return 'This venue’s guest list is currently unavailable.';
   if (e.archived) return 'This event has been archived.';
   if (!contributor.active) return 'This link has been disabled by the venue.';
   if (e.cutoff_at && Date.now() > Date.parse(e.cutoff_at)) return 'The guest list cutoff for this event has passed.';
@@ -300,7 +302,12 @@ const SECURITY_HEADERS = {
 
 function serveStatic(req, res, pathname) {
   let file;
-  if (pathname === '/' || pathname === '/index.html') file = 'index.html';
+  if (pathname === '/' || pathname === '/index.html') file = 'index.html'; // public landing page
+  else if (pathname === '/app' || pathname === '/app/') file = 'app.html'; // venue app
+  else if (pathname === '/login' || /^\/v\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'login.html';
+  else if (/^\/setup\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'setup.html';
+  else if (pathname === '/admin' || pathname === '/admin/') file = 'admin.html';
+  else if (pathname === '/guide' || pathname === '/guide/') file = 'guide.html';
   else if (/^\/c\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'contributor.html';
   else file = pathname.replace(/^\/+/, '');
 
@@ -373,85 +380,348 @@ function createApp(db, options = {}) {
     return auth.createLimiter({ max: 10, windowMs: 10 * 60 * 1000 });
   }
 
-  const hasPassword = () => !!getSetting(db, 'password_hash');
-  const venueName = () => getSetting(db, 'venue_name') || 'Venue';
+  const SETUP_LINK_DAYS = 7;
+  const DUMMY_HASH = auth.hashPassword(crypto.randomBytes(8).toString('hex'));
+  const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
   function publish(eventId, type, extra = {}) {
     hub.publish(eventId, { type, at: now(), ...extra });
   }
 
-  // ----- session -----
+  function venueOut(v) {
+    return { id: v.id, slug: v.slug, name: v.name };
+  }
+
+  function password(v, field = 'Password') {
+    const p = str(v, field, { required: true, max: 200 });
+    if (p.length < 8) throw new HttpError(400, 'Password must be at least 8 characters');
+    return p;
+  }
+
+  function limit(req) {
+    if (loginLimiter.blocked(clientIp(req))) throw new HttpError(429, 'Too many wrong attempts. Try again in a few minutes.');
+  }
+
+  function failed(req) {
+    loginLimiter.fail(clientIp(req));
+  }
+
+  // The venue for a request's session cookie, or null. Sessions die when the venue's
+  // password changes or the owner disables the venue.
+  function sessionVenue(req) {
+    const s = auth.venueSession(db, req);
+    if (!s) return null;
+    const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(s.venueId);
+    if (!v || !v.active || !v.password_hash || v.password_version !== s.version) return null;
+    return v;
+  }
+
+  function newSetupLink(venueId) {
+    const token = crypto.randomBytes(24).toString('base64url');
+    const expires = new Date(Date.now() + SETUP_LINK_DAYS * 86400 * 1000).toISOString();
+    db.prepare('UPDATE venues SET setup_token_hash = ?, setup_expires_at = ? WHERE id = ?').run(sha256(token), expires, venueId);
+    return { setupPath: `/setup/${token}`, setupExpiresAt: expires };
+  }
+
+  function venueBySetupToken(token) {
+    const v = db.prepare('SELECT * FROM venues WHERE setup_token_hash = ?').get(sha256(token));
+    if (!v || !v.setup_expires_at || Date.parse(v.setup_expires_at) < Date.now()) {
+      throw new HttpError(404, 'This setup link has expired or already been used. Ask Riderly for a new one.');
+    }
+    if (!v.active) throw new HttpError(403, 'This venue has been disabled.');
+    return v;
+  }
+
+  // ----- public -----
 
   // Used by deploys and uptime checks. Deliberately reveals nothing else.
   route('GET', /^\/health$/, () => {
     db.prepare('SELECT 1').get();
     return { ok: true };
-  }, { public: true });
+  }, { auth: 'public' });
 
-  route('GET', /^\/api\/session$/, ({ req }) => ({
-    needsSetup: !hasPassword(),
-    setupCodeRequired: !hasPassword() && !!options.setupCode,
-    authed: auth.isAuthed(db, req),
-    venueName: venueName(),
-  }), { public: true });
+  // What the landing page needs. Never lists venues.
+  route('GET', /^\/api\/public$/, () => ({
+    contactEmail: getSetting(db, 'contact_email') || null,
+  }), { auth: 'public' });
 
-  route('POST', /^\/api\/setup$/, ({ req, body, res }) => {
-    if (hasPassword()) throw new HttpError(409, 'Already set up');
-    // On a public server, only someone who can read the server log can claim the venue.
+  // Public "request access" form on the landing page. Lands in the owner's /admin inbox.
+  const requestLimiter = auth.createLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
+  route('POST', /^\/api\/request-access$/, ({ req, body }) => {
+    const ip = clientIp(req);
+    if (requestLimiter.blocked(ip)) throw new HttpError(429, 'Thanks — we’ve already got your request. We’ll be in touch.');
+    requestLimiter.fail(ip); // counts every submission
+    if (body.website) return { ok: true }; // honeypot field: bots fill it, people never see it
+    const email = str(body.email, 'Email', { required: true, max: 120 });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
+    const pending = db.prepare("SELECT COUNT(*) AS n FROM access_requests WHERE status = 'new'").get().n;
+    if (pending >= 200) throw new HttpError(503, 'We’re catching up on requests — please try again later.');
+    db.prepare(
+      'INSERT INTO access_requests (venue_name, contact_name, email, phone, message, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(
+      str(body.venueName, 'Venue name', { required: true, max: 120 }),
+      str(body.name, 'Your name', { required: true, max: 80 }),
+      email,
+      str(body.phone, 'Phone', { max: 40 }) || null,
+      str(body.message, 'Message', { max: 1000 }) || null,
+      now()
+    );
+    return { ok: true };
+  }, { auth: 'public' });
+
+  // ----- venue login -----
+
+  route('GET', /^\/api\/session$/, ({ req }) => {
+    const v = sessionVenue(req);
+    return { authed: !!v, venue: v ? venueOut(v) : null };
+  }, { auth: 'public' });
+
+  route('POST', /^\/api\/login$/, ({ req, body, res }) => {
+    limit(req);
+    // Accept "brunswick-ballroom", "Brunswick Ballroom" or a pasted /v/brunswick-ballroom link.
+    const raw = str(body.venue, 'Venue ID', { required: true, max: 200 }).replace(/^.*\/v\//, '').replace(/[/?#].*$/, '');
+    const pw = str(body.password, 'Password', { max: 200 });
+    const v = db.prepare('SELECT * FROM venues WHERE slug = ?').get(slugify(raw));
+    // Same work whether or not the venue exists, so the response doesn't reveal which venues are real.
+    const ok = auth.verifyPassword(pw, (v && v.password_hash) || DUMMY_HASH) && !!v && !!v.password_hash;
+    if (!ok) {
+      failed(req);
+      throw new HttpError(401, 'Venue ID or password is wrong.');
+    }
+    if (!v.active) throw new HttpError(403, 'This venue has been disabled. Contact Riderly.');
+    db.prepare('UPDATE venues SET last_login_at = ? WHERE id = ?').run(now(), v.id);
+    res.setHeader('Set-Cookie', auth.venueCookie(db, v, secureCookies));
+    return { ok: true, venue: venueOut(v) };
+  }, { auth: 'public' });
+
+  route('POST', /^\/api\/logout$/, ({ res }) => {
+    res.setHeader('Set-Cookie', auth.clearVenueCookie(secureCookies));
+    return { ok: true };
+  }, { auth: 'public' });
+
+  // ----- venue setup links (sent by the owner) -----
+
+  route('GET', /^\/api\/setup\/([A-Za-z0-9_-]+)$/, ({ params }) => {
+    const v = venueBySetupToken(params[0]);
+    return { venue: venueOut(v), reset: !!v.password_hash };
+  }, { auth: 'public' });
+
+  route('POST', /^\/api\/setup\/([A-Za-z0-9_-]+)$/, ({ req, params, body, res }) => {
+    limit(req);
+    const v = venueBySetupToken(params[0]);
+    const hash = auth.hashPassword(password(body.password));
+    const version = v.password_hash ? v.password_version + 1 : v.password_version; // a reset logs out old devices
+    const t = now();
+    db.prepare(
+      `UPDATE venues SET password_hash = ?, password_version = ?, setup_token_hash = NULL, setup_expires_at = NULL,
+         setup_at = COALESCE(setup_at, ?), last_login_at = ? WHERE id = ?`
+    ).run(hash, version, t, t, v.id);
+    const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(v.id);
+    res.setHeader('Set-Cookie', auth.venueCookie(db, fresh, secureCookies));
+    return { ok: true, venue: venueOut(fresh) };
+  }, { auth: 'public' });
+
+  // ----- venue settings -----
+
+  route('PUT', /^\/api\/settings$/, ({ venue, body, res }) => {
+    if (body.venueName !== undefined) {
+      db.prepare('UPDATE venues SET name = ? WHERE id = ?').run(str(body.venueName, 'Venue name', { max: 80, required: true }), venue.id);
+    }
+    if (body.newPassword) {
+      if (!auth.verifyPassword(str(body.currentPassword, 'Current password', { max: 200 }), venue.password_hash)) {
+        throw new HttpError(401, 'Current password is wrong');
+      }
+      db.prepare('UPDATE venues SET password_hash = ?, password_version = password_version + 1 WHERE id = ?').run(
+        auth.hashPassword(password(body.newPassword, 'New password')), venue.id
+      );
+    }
+    const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(venue.id);
+    // Keep this device signed in; every other device must log in again after a password change.
+    res.setHeader('Set-Cookie', auth.venueCookie(db, fresh, secureCookies));
+    return { ok: true, venue: venueOut(fresh) };
+  });
+
+  // ----- owner (Riderly) -----
+
+  const ownerHasPassword = () => !!getSetting(db, 'owner_password_hash');
+
+  route('GET', /^\/api\/owner\/session$/, ({ req }) => ({
+    needsSetup: !ownerHasPassword(),
+    setupCodeRequired: !ownerHasPassword() && !!options.setupCode,
+    authed: auth.isOwner(db, req),
+  }), { auth: 'public' });
+
+  route('POST', /^\/api\/owner\/setup$/, ({ req, body, res }) => {
+    if (ownerHasPassword()) throw new HttpError(409, 'Already set up');
+    limit(req);
+    // On a public server, only someone who can read the server log can claim the owner account.
     if (options.setupCode) {
-      if (!loginLimiter(clientIp(req))) throw new HttpError(429, 'Too many attempts. Try again in a few minutes.');
       const given = Buffer.from(str(body.setupCode, 'Setup code', { max: 100 }).toUpperCase());
       const expected = Buffer.from(options.setupCode);
       if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+        failed(req);
         throw new HttpError(403, 'Wrong setup code. It is printed in the server log.');
       }
     }
-    const password = str(body.password, 'Password', { required: true, max: 200 });
-    if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters');
-    setSetting(db, 'password_hash', auth.hashPassword(password));
-    setSetting(db, 'venue_name', str(body.venueName, 'Venue name', { max: 80 }) || 'Venue');
-    res.setHeader('Set-Cookie', auth.createSessionCookie(db, secureCookies));
+    setSetting(db, 'owner_password_hash', auth.hashPassword(password(body.password)));
+    res.setHeader('Set-Cookie', auth.ownerCookie(db, secureCookies));
     return { ok: true };
-  }, { public: true });
+  }, { auth: 'public' });
 
-  route('POST', /^\/api\/login$/, ({ req, body, res }) => {
-    const ip = clientIp(req);
-    if (!loginLimiter(ip)) throw new HttpError(429, 'Too many attempts. Try again in a few minutes.');
-    const password = str(body.password, 'Password', { max: 200 });
-    if (!auth.verifyPassword(password, getSetting(db, 'password_hash'))) {
+  route('POST', /^\/api\/owner\/login$/, ({ req, body, res }) => {
+    limit(req);
+    const ok = auth.verifyPassword(str(body.password, 'Password', { max: 200 }), getSetting(db, 'owner_password_hash') || DUMMY_HASH);
+    if (!ok || !ownerHasPassword()) {
+      failed(req);
       throw new HttpError(401, 'Wrong password');
     }
-    res.setHeader('Set-Cookie', auth.createSessionCookie(db, secureCookies));
+    res.setHeader('Set-Cookie', auth.ownerCookie(db, secureCookies));
     return { ok: true };
-  }, { public: true });
+  }, { auth: 'public' });
 
-  route('POST', /^\/api\/logout$/, ({ res }) => {
-    res.setHeader('Set-Cookie', auth.clearSessionCookie(secureCookies));
+  route('POST', /^\/api\/owner\/logout$/, ({ res }) => {
+    res.setHeader('Set-Cookie', auth.clearOwnerCookie(secureCookies));
     return { ok: true };
-  }, { public: true });
+  }, { auth: 'public' });
 
-  route('PUT', /^\/api\/settings$/, ({ body, res }) => {
-    if (body.venueName !== undefined) {
-      setSetting(db, 'venue_name', str(body.venueName, 'Venue name', { max: 80, required: true }));
+  // Owner sees venues and counts only — never guest names.
+  route('GET', /^\/api\/owner\/venues$/, () => {
+    const rows = db
+      .prepare(
+        `SELECT v.*,
+           (SELECT COUNT(*) FROM events e WHERE e.venue_id = v.id) AS event_count,
+           (SELECT COUNT(*) FROM events e WHERE e.venue_id = v.id AND e.archived = 0 AND e.date >= date('now', '-1 day')) AS upcoming,
+           (SELECT COUNT(*) FROM guests g JOIN events e ON e.id = g.event_id WHERE e.venue_id = v.id) AS guest_count,
+           (SELECT MAX(a.at) FROM activity a JOIN events e ON e.id = a.event_id WHERE e.venue_id = v.id) AS last_activity
+         FROM venues v ORDER BY v.name COLLATE NOCASE`
+      )
+      .all();
+    const requests = db
+      .prepare("SELECT * FROM access_requests ORDER BY status = 'done', id DESC LIMIT 100")
+      .all()
+      .map((r) => ({
+        id: r.id,
+        venueName: r.venue_name,
+        name: r.contact_name,
+        email: r.email,
+        phone: r.phone,
+        message: r.message,
+        status: r.status,
+        createdAt: r.created_at,
+      }));
+    return {
+      contactEmail: getSetting(db, 'contact_email') || '',
+      requests,
+      venues: rows.map((v) => ({
+        ...venueOut(v),
+        status: !v.active ? 'disabled' : v.password_hash ? 'active' : 'pending',
+        setupLinkActive: !!v.setup_expires_at && Date.parse(v.setup_expires_at) > Date.now(),
+        setupExpiresAt: v.setup_expires_at,
+        createdAt: v.created_at,
+        setupAt: v.setup_at,
+        lastLoginAt: v.last_login_at,
+        lastActivity: v.last_activity,
+        eventCount: v.event_count,
+        upcoming: v.upcoming,
+        guestCount: v.guest_count,
+      })),
+    };
+  }, { auth: 'owner' });
+
+  route('POST', /^\/api\/owner\/venues$/, ({ body }) => {
+    const name = str(body.name, 'Venue name', { required: true, max: 80 });
+    const wanted = str(body.slug, 'Venue ID', { max: 40 });
+    let slug;
+    if (wanted) {
+      slug = slugify(wanted);
+      if (db.prepare('SELECT 1 FROM venues WHERE slug = ?').get(slug)) throw new HttpError(409, `Venue ID "${slug}" is taken.`);
+    } else {
+      slug = uniqueSlug(db, name);
+    }
+    const info = db.prepare('INSERT INTO venues (slug, name, created_at) VALUES (?, ?, ?)').run(slug, name, now());
+    const id = Number(info.lastInsertRowid);
+    return { venue: venueOut(db.prepare('SELECT * FROM venues WHERE id = ?').get(id)), ...newSetupLink(id) };
+  }, { auth: 'owner' });
+
+  function ownerVenue(id) {
+    const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(id);
+    if (!v) throw new HttpError(404, 'Venue not found');
+    return v;
+  }
+
+  route('POST', /^\/api\/owner\/venues\/(\d+)\/setup-link$/, ({ params }) => {
+    const v = ownerVenue(params[0]);
+    return { venue: venueOut(v), reset: !!v.password_hash, ...newSetupLink(v.id) };
+  }, { auth: 'owner' });
+
+  route('PUT', /^\/api\/owner\/venues\/(\d+)$/, ({ params, body }) => {
+    const v = ownerVenue(params[0]);
+    const name = body.name !== undefined ? str(body.name, 'Venue name', { required: true, max: 80 }) : v.name;
+    const active = body.active !== undefined ? (body.active ? 1 : 0) : v.active;
+    db.prepare('UPDATE venues SET name = ?, active = ? WHERE id = ?').run(name, active, v.id);
+    return venueOut(ownerVenue(v.id));
+  }, { auth: 'owner' });
+
+  route('DELETE', /^\/api\/owner\/venues\/(\d+)$/, ({ params, body }) => {
+    const v = ownerVenue(params[0]);
+    if (str(body.confirm, 'Confirmation', { max: 80 }) !== v.slug) {
+      throw new HttpError(400, `Type the venue ID "${v.slug}" to confirm.`);
+    }
+    db.prepare('DELETE FROM venues WHERE id = ?').run(v.id); // cascades to events, guests, contributors, activity
+    return { ok: true };
+  }, { auth: 'owner' });
+
+  route('PUT', /^\/api\/owner\/requests\/(\d+)$/, ({ params, body }) => {
+    const status = body.status === 'done' ? 'done' : 'new';
+    const r = db.prepare('UPDATE access_requests SET status = ? WHERE id = ?').run(status, params[0]);
+    if (!r.changes) throw new HttpError(404, 'Request not found');
+    return { ok: true };
+  }, { auth: 'owner' });
+
+  route('DELETE', /^\/api\/owner\/requests\/(\d+)$/, ({ params }) => {
+    db.prepare('DELETE FROM access_requests WHERE id = ?').run(params[0]);
+    return { ok: true };
+  }, { auth: 'owner' });
+
+  route('PUT', /^\/api\/owner\/settings$/, ({ body, res }) => {
+    if (body.contactEmail !== undefined) {
+      const email = str(body.contactEmail, 'Contact email', { max: 120 });
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
+      setSetting(db, 'contact_email', email);
     }
     if (body.newPassword) {
-      const current = str(body.currentPassword, 'Current password', { max: 200 });
-      if (!auth.verifyPassword(current, getSetting(db, 'password_hash'))) {
+      if (!auth.verifyPassword(str(body.currentPassword, 'Current password', { max: 200 }), getSetting(db, 'owner_password_hash'))) {
         throw new HttpError(401, 'Current password is wrong');
       }
-      const next = str(body.newPassword, 'New password', { max: 200 });
-      if (next.length < 8) throw new HttpError(400, 'Password must be at least 8 characters');
-      setSetting(db, 'password_hash', auth.hashPassword(next));
-      setSetting(db, 'password_version', String(Number(getSetting(db, 'password_version') || '1') + 1));
-      // Keep this device signed in; every other device must log in again.
-      res.setHeader('Set-Cookie', auth.createSessionCookie(db, secureCookies));
+      setSetting(db, 'owner_password_hash', auth.hashPassword(password(body.newPassword, 'New password')));
+      setSetting(db, 'owner_password_version', String(Number(getSetting(db, 'owner_password_version') || 1) + 1));
+      res.setHeader('Set-Cookie', auth.ownerCookie(db, secureCookies));
     }
-    return { ok: true, venueName: venueName() };
-  });
+    return { ok: true };
+  }, { auth: 'owner' });
+
+  // Everything below is scoped to the logged-in venue: ids from another venue are "not found".
+  function evt(venue, id) {
+    const e = getEvent(db, id);
+    if (e.venue_id !== venue.id) throw new HttpError(404, 'Event not found');
+    return e;
+  }
+
+  function gst(venue, id) {
+    const g = getGuest(db, id);
+    if (getEvent(db, g.event_id).venue_id !== venue.id) throw new HttpError(404, 'Guest not found');
+    return g;
+  }
+
+  function ctb(venue, id) {
+    const c = getContributor(db, id);
+    if (getEvent(db, c.event_id).venue_id !== venue.id) throw new HttpError(404, 'Contributor not found');
+    return c;
+  }
 
   // ----- events -----
 
-  route('GET', /^\/api\/events$/, ({ query }) => {
+  route('GET', /^\/api\/events$/, ({ venue, query }) => {
     const archived = query.get('archived') === '1' ? 1 : 0;
     const rows = db
       .prepare(
@@ -460,10 +730,10 @@ function createApp(db, options = {}) {
            (SELECT COALESCE(SUM(1 + plus_ones), 0) FROM guests g WHERE g.event_id = e.id) AS expected,
            (SELECT COALESCE(SUM(admitted), 0) FROM guests g WHERE g.event_id = e.id) AS admitted,
            (SELECT COUNT(*) FROM contributors c WHERE c.event_id = e.id) AS contributor_count
-         FROM events e WHERE e.archived = ?
+         FROM events e WHERE e.venue_id = ? AND e.archived = ?
          ORDER BY e.date ${archived ? 'DESC' : 'ASC'}, e.id`
       )
-      .all(archived);
+      .all(venue.id, archived);
     return rows.map((r) => ({
       ...eventOut(r),
       guestCount: r.guest_count,
@@ -473,13 +743,14 @@ function createApp(db, options = {}) {
     }));
   });
 
-  route('POST', /^\/api\/events$/, ({ req, body }) => {
+  route('POST', /^\/api\/events$/, ({ venue, req, body }) => {
     const actor = actorFrom(req);
     const info = db
       .prepare(
-        'INSERT INTO events (name, date, doors_time, capacity, cutoff_at, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO events (venue_id, name, date, doors_time, capacity, cutoff_at, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
+        venue.id,
         str(body.name, 'Event name', { required: true, max: 120 }),
         dateStr(body.date),
         timeStr(body.doorsTime),
@@ -494,8 +765,8 @@ function createApp(db, options = {}) {
     return eventOut(getEvent(db, id));
   });
 
-  route('GET', /^\/api\/events\/(\d+)$/, ({ params }) => {
-    const e = getEvent(db, params[0]);
+  route('GET', /^\/api\/events\/(\d+)$/, ({ venue, params }) => {
+    const e = evt(venue, params[0]);
     const contributors = db
       .prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY name COLLATE NOCASE')
       .all(e.id)
@@ -508,9 +779,9 @@ function createApp(db, options = {}) {
     return { event: eventOut(e), contributors, guests, stats: stats(guests), listTypes: LIST_TYPES };
   });
 
-  route('PUT', /^\/api\/events\/(\d+)$/, ({ req, params, body }) => {
+  route('PUT', /^\/api\/events\/(\d+)$/, ({ venue, req, params, body }) => {
     const actor = actorFrom(req);
-    const e = getEvent(db, params[0]);
+    const e = evt(venue, params[0]);
     const next = {
       name: body.name !== undefined ? str(body.name, 'Event name', { required: true, max: 120 }) : e.name,
       date: body.date !== undefined ? dateStr(body.date) : e.date,
@@ -529,16 +800,16 @@ function createApp(db, options = {}) {
     return eventOut(getEvent(db, e.id));
   });
 
-  route('DELETE', /^\/api\/events\/(\d+)$/, ({ req, params }) => {
+  route('DELETE', /^\/api\/events\/(\d+)$/, ({ venue, req, params }) => {
     actorFrom(req);
-    const e = getEvent(db, params[0]);
+    const e = evt(venue, params[0]);
     db.prepare('DELETE FROM events WHERE id = ?').run(e.id);
     publish(e.id, 'deleted');
     return { ok: true };
   });
 
-  route('GET', /^\/api\/events\/(\d+)\/activity$/, ({ params, query }) => {
-    const e = getEvent(db, params[0]);
+  route('GET', /^\/api\/events\/(\d+)\/activity$/, ({ venue, params, query }) => {
+    const e = evt(venue, params[0]);
     const limit = Math.min(Number(query.get('limit')) || 200, 1000);
     return db
       .prepare('SELECT * FROM activity WHERE event_id = ? ORDER BY id DESC LIMIT ?')
@@ -555,8 +826,8 @@ function createApp(db, options = {}) {
       }));
   });
 
-  route('GET', /^\/api\/events\/(\d+)\/export\.csv$/, ({ params, res }) => {
-    const e = getEvent(db, params[0]);
+  route('GET', /^\/api\/events\/(\d+)\/export\.csv$/, ({ venue, params, res }) => {
+    const e = evt(venue, params[0]);
     const guests = listGuests(db, e.id);
     const header = [
       'Name', 'Plus ones', 'Party', 'List', 'VIP', 'Contributor', 'Notes',
@@ -581,8 +852,8 @@ function createApp(db, options = {}) {
     return undefined;
   });
 
-  route('GET', /^\/api\/events\/(\d+)\/stream$/, ({ req, params, res }) => {
-    const e = getEvent(db, params[0]);
+  route('GET', /^\/api\/events\/(\d+)\/stream$/, ({ venue, req, params, res }) => {
+    const e = evt(venue, params[0]);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-store',
@@ -598,9 +869,9 @@ function createApp(db, options = {}) {
 
   // ----- contributors (venue side) -----
 
-  route('POST', /^\/api\/events\/(\d+)\/contributors$/, ({ req, params, body }) => {
+  route('POST', /^\/api\/events\/(\d+)\/contributors$/, ({ venue, req, params, body }) => {
     const actor = actorFrom(req);
-    const e = getEvent(db, params[0]);
+    const e = evt(venue, params[0]);
     const info = db
       .prepare(
         'INSERT INTO contributors (event_id, name, list_type, allocation, token, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
@@ -621,9 +892,9 @@ function createApp(db, options = {}) {
     return contributorOut(c);
   });
 
-  route('PUT', /^\/api\/contributors\/(\d+)$/, ({ req, params, body }) => {
+  route('PUT', /^\/api\/contributors\/(\d+)$/, ({ venue, req, params, body }) => {
     const actor = actorFrom(req);
-    const c = getContributor(db, params[0]);
+    const c = ctb(venue, params[0]);
     const next = {
       name: body.name !== undefined ? str(body.name, 'Contributor name', { required: true, max: 80 }) : c.name,
       list_type: body.listType !== undefined ? listType(body.listType) : c.list_type,
@@ -640,17 +911,17 @@ function createApp(db, options = {}) {
     return contributorOut(getContributor(db, c.id));
   });
 
-  route('POST', /^\/api\/contributors\/(\d+)\/regenerate$/, ({ req, params }) => {
+  route('POST', /^\/api\/contributors\/(\d+)\/regenerate$/, ({ venue, req, params }) => {
     const actor = actorFrom(req);
-    const c = getContributor(db, params[0]);
+    const c = ctb(venue, params[0]);
     db.prepare('UPDATE contributors SET token = ? WHERE id = ?').run(newToken(), c.id);
     log(db, { eventId: c.event_id, action: 'contributor.relink', detail: c.name, actor, via: 'venue' });
     return contributorOut(getContributor(db, c.id));
   });
 
-  route('DELETE', /^\/api\/contributors\/(\d+)$/, ({ req, params }) => {
+  route('DELETE', /^\/api\/contributors\/(\d+)$/, ({ venue, req, params }) => {
     const actor = actorFrom(req);
-    const c = getContributor(db, params[0]);
+    const c = ctb(venue, params[0]);
     const n = db.prepare('SELECT COUNT(*) AS n FROM guests WHERE contributor_id = ?').get(c.id).n;
     if (n > 0) throw new HttpError(409, `${c.name} still has ${n} guest(s). Remove them or disable the link instead.`);
     db.prepare('DELETE FROM contributors WHERE id = ?').run(c.id);
@@ -685,10 +956,10 @@ function createApp(db, options = {}) {
     };
   }
 
-  route('POST', /^\/api\/events\/(\d+)\/guests$/, ({ req, params, body }) => {
+  route('POST', /^\/api\/events\/(\d+)\/guests$/, ({ venue, req, params, body }) => {
     const actor = actorFrom(req);
-    const e = getEvent(db, params[0]);
-    const contributor = body.contributorId ? getContributor(db, body.contributorId) : null;
+    const e = evt(venue, params[0]);
+    const contributor = body.contributorId ? ctb(venue, body.contributorId) : null;
     if (contributor && contributor.event_id !== e.id) throw new HttpError(400, 'Contributor belongs to another event');
     const data = guestInput(body, { listType: contributor?.list_type });
     const via = body.atDoor ? 'door' : 'venue';
@@ -705,10 +976,10 @@ function createApp(db, options = {}) {
     return guestOut(g);
   });
 
-  route('POST', /^\/api\/events\/(\d+)\/guests\/import$/, ({ req, params, body }) => {
+  route('POST', /^\/api\/events\/(\d+)\/guests\/import$/, ({ venue, req, params, body }) => {
     const actor = actorFrom(req);
-    const e = getEvent(db, params[0]);
-    const contributor = body.contributorId ? getContributor(db, body.contributorId) : null;
+    const e = evt(venue, params[0]);
+    const contributor = body.contributorId ? ctb(venue, body.contributorId) : null;
     if (contributor && contributor.event_id !== e.id) throw new HttpError(400, 'Contributor belongs to another event');
     const rows = parseImport(body.text);
     if (!rows.length) throw new HttpError(400, 'Nothing to import');
@@ -726,14 +997,14 @@ function createApp(db, options = {}) {
     return { added: added.length };
   });
 
-  route('PUT', /^\/api\/guests\/(\d+)$/, ({ req, params, body }) => {
+  route('PUT', /^\/api\/guests\/(\d+)$/, ({ venue, req, params, body }) => {
     const actor = actorFrom(req);
-    const g = getGuest(db, params[0]);
+    const g = gst(venue, params[0]);
     const e = getEvent(db, g.event_id);
     const contributor =
       body.contributorId !== undefined
         ? body.contributorId
-          ? getContributor(db, body.contributorId)
+          ? ctb(venue, body.contributorId)
           : null
         : g.contributor_id
           ? getContributor(db, g.contributor_id)
@@ -765,9 +1036,9 @@ function createApp(db, options = {}) {
     return guestOut(getGuest(db, g.id));
   });
 
-  route('DELETE', /^\/api\/guests\/(\d+)$/, ({ req, params }) => {
+  route('DELETE', /^\/api\/guests\/(\d+)$/, ({ venue, req, params }) => {
     const actor = actorFrom(req);
-    const g = getGuest(db, params[0]);
+    const g = gst(venue, params[0]);
     tx(db, () => {
       db.prepare('DELETE FROM guests WHERE id = ?').run(g.id);
       log(db, { eventId: g.event_id, guest: g, action: 'guest.remove', actor, via: 'venue' });
@@ -778,10 +1049,10 @@ function createApp(db, options = {}) {
 
   // ----- door: check in / check out -----
 
-  function move(req, params, body, direction) {
+  function move(venue, req, params, body, direction) {
     const actor = actorFrom(req);
     const result = tx(db, () => {
-      const g = getGuest(db, params[0]);
+      const g = gst(venue, params[0]);
       const party = 1 + g.plus_ones;
       const room = direction === 'in' ? party - g.inside : g.inside;
       if (room <= 0) {
@@ -819,10 +1090,14 @@ function createApp(db, options = {}) {
     return out;
   }
 
-  route('POST', /^\/api\/guests\/(\d+)\/checkin$/, ({ req, params, body }) => move(req, params, body, 'in'));
-  route('POST', /^\/api\/guests\/(\d+)\/checkout$/, ({ req, params, body }) => move(req, params, body, 'out'));
+  route('POST', /^\/api\/guests\/(\d+)\/checkin$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'in'));
+  route('POST', /^\/api\/guests\/(\d+)\/checkout$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'out'));
 
   // ----- contributor portal (token links, no login) -----
+
+  function venueOfEvent(eventId) {
+    return db.prepare('SELECT v.* FROM venues v JOIN events e ON e.venue_id = v.id WHERE e.id = ?').get(eventId);
+  }
 
   function contributorByToken(token) {
     const c = db.prepare('SELECT * FROM contributors WHERE token = ?').get(token);
@@ -844,7 +1119,7 @@ function createApp(db, options = {}) {
     }));
     const used = guests.reduce((n, g) => n + g.party, 0);
     return {
-      venueName: venueName(),
+      venueName: venueOfEvent(e.id)?.name || 'Venue',
       event: { name: e.name, date: e.date, doorsTime: e.doors_time, cutoffAt: e.cutoff_at },
       contributor: { name: c.name, listType: c.list_type, allocation: c.allocation },
       used,
@@ -854,7 +1129,7 @@ function createApp(db, options = {}) {
     };
   }
 
-  route('GET', /^\/api\/c\/([A-Za-z0-9_-]+)$/, ({ params }) => portalView(contributorByToken(params[0])), { public: true });
+  route('GET', /^\/api\/c\/([A-Za-z0-9_-]+)$/, ({ params }) => portalView(contributorByToken(params[0])), { auth: 'public' });
 
   route('POST', /^\/api\/c\/([A-Za-z0-9_-]+)\/guests$/, ({ req, params, body }) => {
     const actor = actorFrom(req);
@@ -872,7 +1147,7 @@ function createApp(db, options = {}) {
     });
     publish(e.id, 'guests', { actor, guestId: g.id });
     return portalView(c);
-  }, { public: true });
+  }, { auth: 'public' });
 
   function portalGuest(c, gid) {
     const g = getGuest(db, gid);
@@ -903,7 +1178,7 @@ function createApp(db, options = {}) {
     });
     publish(c.event_id, 'guests', { actor, guestId: g.id });
     return portalView(c);
-  }, { public: true });
+  }, { auth: 'public' });
 
   route('DELETE', /^\/api\/c\/([A-Za-z0-9_-]+)\/guests\/(\d+)$/, ({ req, params }) => {
     const actor = actorFrom(req);
@@ -918,7 +1193,7 @@ function createApp(db, options = {}) {
     });
     publish(c.event_id, 'guests', { actor, guestId: g.id });
     return portalView(c);
-  }, { public: true });
+  }, { auth: 'public' });
 
   // ----- dispatcher -----
 
@@ -934,9 +1209,13 @@ function createApp(db, options = {}) {
     try {
       const r = routes.find((x) => x.method === req.method && x.pattern.test(pathname));
       if (!r) throw new HttpError(404, 'Not found');
-      if (!r.public) {
-        if (!hasPassword()) throw new HttpError(401, 'Setup required');
-        if (!auth.isAuthed(db, req)) throw new HttpError(401, 'Please log in');
+      let venue = null;
+      const mode = r.auth || 'venue';
+      if (mode === 'venue') {
+        venue = sessionVenue(req);
+        if (!venue) throw new HttpError(401, 'Please log in');
+      } else if (mode === 'owner') {
+        if (!auth.isOwner(db, req)) throw new HttpError(401, 'Please log in');
       }
       // Mutations must be JSON: blocks cross-site form posts (CSRF) alongside SameSite cookies.
       if (req.method !== 'GET' && !(req.headers['content-type'] || '').includes('application/json')) {
@@ -944,7 +1223,7 @@ function createApp(db, options = {}) {
       }
       const params = pathname.match(r.pattern).slice(1);
       const body = req.method === 'GET' ? {} : await readJson(req);
-      const result = await r.handler({ req, res, params, body, query: url.searchParams });
+      const result = await r.handler({ venue, req, res, params, body, query: url.searchParams });
       if (result !== undefined && !res.headersSent) send(res, 200, result);
     } catch (err) {
       if (!(err instanceof HttpError)) console.error(err);

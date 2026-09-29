@@ -14,12 +14,12 @@ const BACKUP_KEEP_DAYS = Number(process.env.BACKUP_KEEP_DAYS) || 30;
 
 const db = openDb(DB_FILE);
 
-// Until a venue password exists, claiming the venue needs a one-time code that
-// only someone with access to the server log can see.
+// Until the owner (Riderly admin) password exists, claiming /admin needs a one-time
+// code that only someone with access to the server log can see.
 let setupCode = null;
-if (!getSetting(db, 'password_hash') && process.env.SETUP_CODE_DISABLED !== '1') {
+if (!getSetting(db, 'owner_password_hash') && process.env.SETUP_CODE_DISABLED !== '1') {
   setupCode = crypto.randomBytes(5).toString('hex').toUpperCase();
-  console.log(`First-time setup code: ${setupCode}  (enter it on the setup screen)`);
+  console.log(`Owner setup code: ${setupCode}  (enter it at /admin)`);
 }
 
 const server = createApp(db, {

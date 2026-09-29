@@ -12,8 +12,23 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS venues (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug              TEXT NOT NULL UNIQUE,     -- the "venue ID" staff type to log in
+  name              TEXT NOT NULL,
+  password_hash     TEXT,                     -- NULL until the venue finishes setup
+  password_version  INTEGER NOT NULL DEFAULT 1,
+  setup_token_hash  TEXT,                     -- sha256 of the one-time setup link token
+  setup_expires_at  TEXT,
+  active            INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL,
+  setup_at          TEXT,
+  last_login_at     TEXT
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue_id    INTEGER REFERENCES venues(id) ON DELETE CASCADE,
   name        TEXT NOT NULL,
   date        TEXT NOT NULL,            -- YYYY-MM-DD
   doors_time  TEXT,                     -- HH:MM
@@ -74,6 +89,17 @@ CREATE TABLE IF NOT EXISTS activity (
 );
 
 CREATE INDEX IF NOT EXISTS idx_activity_event ON activity(event_id, id);
+
+CREATE TABLE IF NOT EXISTS access_requests (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue_name    TEXT NOT NULL,
+  contact_name  TEXT NOT NULL,
+  email         TEXT NOT NULL,
+  phone         TEXT,
+  message       TEXT,
+  status        TEXT NOT NULL DEFAULT 'new',   -- 'new' | 'done'
+  created_at    TEXT NOT NULL
+);
 `;
 
 function openDb(file) {
@@ -81,7 +107,53 @@ function openDb(file) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+function migrate(db) {
+  // v1 databases had no venues: add the column, then adopt the old single venue.
+  const cols = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
+  if (!cols.includes('venue_id')) {
+    db.exec('ALTER TABLE events ADD COLUMN venue_id INTEGER REFERENCES venues(id) ON DELETE CASCADE');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_events_venue ON events(venue_id)');
+
+  const legacyHash = getSetting(db, 'password_hash');
+  const venueCount = db.prepare('SELECT COUNT(*) AS n FROM venues').get().n;
+  if (legacyHash && venueCount === 0) {
+    tx(db, () => {
+      const name = getSetting(db, 'venue_name') || 'My venue';
+      const t = new Date().toISOString();
+      const info = db
+        .prepare(
+          'INSERT INTO venues (slug, name, password_hash, password_version, created_at, setup_at) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(uniqueSlug(db, name), name, legacyHash, Number(getSetting(db, 'password_version') || 1), t, t);
+      db.prepare('UPDATE events SET venue_id = ? WHERE venue_id IS NULL').run(Number(info.lastInsertRowid));
+      db.prepare("DELETE FROM settings WHERE key IN ('password_hash', 'venue_name', 'password_version')").run();
+    });
+  }
+}
+
+function slugify(name) {
+  const s = String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '');
+  return s || 'venue';
+}
+
+function uniqueSlug(db, name) {
+  const base = slugify(name);
+  let slug = base;
+  for (let i = 2; db.prepare('SELECT 1 FROM venues WHERE slug = ?').get(slug); i++) slug = `${base}-${i}`;
+  return slug;
 }
 
 function getSetting(db, key) {
@@ -107,4 +179,4 @@ function tx(db, fn) {
   }
 }
 
-module.exports = { openDb, getSetting, setSetting, tx };
+module.exports = { openDb, getSetting, setSetting, tx, slugify, uniqueSlug };

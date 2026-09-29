@@ -248,3 +248,16 @@ function norm(s) {
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '');
 }
+
+// Mirrors the server's slugify() so the admin can preview a venue ID while typing.
+function slugPreview(name) {
+  return String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '');
+}

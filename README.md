@@ -1,13 +1,16 @@
-# VenueList
+# Riderly Guest List
 
-A guest list and door check-in web app for live music venues.
+A multi-venue guest list and door check-in web app for live music venues.
 
-- **One venue account.** Staff, managers and door crew all log in with the same venue password. There are no individual user accounts.
-- **Name per device.** The first time someone opens the app on a device, it asks for their name (e.g. "Sam (Door 1)"). Every add, edit, check-in and check-out is logged against that name.
-- **Event contributors.** Artists, tour managers and promoters get a private link for a show. They add their own guests straight onto the event's list, without an account. Each contributor can have an allocation (heads, including plus-ones), and all links lock at the event's cutoff time.
-- **Door mode.** A big search box and big IN / OUT buttons for every guest. Partial check-in works for parties with plus-ones (e.g. 2 of 3 in), and people can check out and back in. Counters show who's inside, who has arrived, and how many VIPs are in. It syncs live across every door device.
-- **VIP.** VIPs are highlighted gold at the door, and every door screen gets an alert when a VIP arrives.
-- **Office tools.** Paste a list in straight from Excel or Sheets, export to CSV, view the full activity log, and archive old events.
+- **Landing page** (`/`) explains the product and has a **Request access** form. Requests land in the owner dashboard.
+- **Owner dashboard** (`/admin`): add a venue, get a one-time setup link (with a ready-to-send message), see each venue's status and counts, and reset, disable or delete venues. The owner never sees guest names.
+- **Venue setup** (`/setup/<token>`): the venue manager opens the link and picks the venue password. It works once and expires after 7 days.
+- **One login per venue.** Staff open the venue's link (`/v/<venue-id>`), type the shared password, and put their own name on the device. Every change is logged against that name.
+- **Contributor links** for artists, tour managers and promoters (`/c/<token>`), with allocations and cutoffs.
+- **Door mode:** IN/OUT per guest, partial plus-ones, re-entry, walk-ups, and live sync across devices.
+- **VIPs** are highlighted gold, with an alert on every door screen when one arrives.
+- **Guide** at `/guide`: the user manual for managers, door staff and contributors.
+- **Venues are fully isolated.** An ID from another venue is simply "not found".
 
 ## Running it
 
@@ -18,7 +21,9 @@ npm start            # http://localhost:3000
 npm test             # API tests
 ```
 
-On first visit you'll be asked to set the venue name and password, plus a one-time setup code that the server prints to its log on start. `GET /health` returns `{"ok": true}`.
+On first start the server prints an **owner setup code** to its log. Open `/admin`, enter the code, and set the owner password. Then add venues from there. `GET /health` returns `{"ok": true}`.
+
+Upgrading from the single-venue version is automatic: the old venue becomes the first venue, with the same password and all its events.
 
 ### Environment variables
 
@@ -47,15 +52,18 @@ docker run -d -p 3000:3000 -v venuelist-data:/data -e SECURE_COOKIES=1 -e TRUST_
 
 - Put it behind HTTPS (e.g. Caddy, nginx, Cloudflare, or your host's proxy). Contributor links and the venue password travel over the network.
 - Live sync uses Server-Sent Events on `/api/events/:id/stream`. If you use nginx, disable buffering for that path (the app already sends `X-Accel-Buffering: no`). Door screens also re-sync every 30 seconds as a fallback.
-- First-time setup needs the one-time code from the server log, so a stranger can't claim the venue first.
+- Claiming `/admin` needs the one-time code from the server log, so a stranger can't take the owner account.
+- Login rate-limiting counts only wrong passwords, so a whole venue on one Wi-Fi never locks itself out.
 - All data lives in one SQLite file (`DB_FILE`). The app snapshots it nightly to `BACKUP_DIR`; copy those off the server too.
 
 ## How it works
 
 | Who | Where | Login |
 |---|---|---|
-| Venue staff | `/` — events, guest lists, contributors, activity, settings | Venue password + device name |
-| Door staff | `/#/door/<event>` — search, IN / OUT | Venue password + device name |
+| Public | `/` landing + request access, `/guide` manual | None |
+| Owner (Riderly) | `/admin` — venues, setup links, access requests | Owner password |
+| Venue manager | `/setup/<token>` once, then `/app` | Setup link, then venue password |
+| Venue staff | `/v/<venue-id>` → `/app` (events, lists, contributors, door mode, settings) | Venue password + device name |
 | Contributors | `/c/<token>` — add, edit or remove their own guests | Private link + device name |
 
 Rules the server enforces:

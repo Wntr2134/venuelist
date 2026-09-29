@@ -4,16 +4,226 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0d0d12">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="description" content="Guest lists and door check-in for live music venues. Artists and promoters add their own guests with a link; door staff check people in and out on any phone.">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/styles.css">
-  <title>Guest List</title>
+  <title>Riderly Guest List</title>
 </head>
-<body>
-  <div id="app"><main class="center"><div class="muted">Loading…</div></main></div>
-  <script src="/js/common.js"></script>
-  <script src="/js/app.js"></script>
+<body class="landing">
+  <header class="landing-nav">
+    <a class="brand" href="/"><span class="logo">★</span><strong>Riderly Guest List</strong></a>
+    <nav class="nav-links">
+      <a href="#how" class="hide-sm">How it works</a>
+      <a href="/guide" class="hide-sm">Guide</a>
+      <a class="btn btn-small" href="/login" id="nav-login">Log in</a>
+      <a class="btn btn-small btn-primary" href="#request">Request access</a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ============ HERO ============ -->
+    <section class="hero-grid">
+      <div class="hero">
+        <p class="eyebrow">For live music venues</p>
+        <h1>The guest list, sorted <span class="grad">before doors.</span></h1>
+        <p class="lede">Artists, tour managers and promoters add their own guests with a link. Door staff check people in and out on any phone. Everyone works off the same list, live.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary btn-lg" href="#request">Request access</a>
+          <a class="btn btn-lg" href="#how">See how it works</a>
+        </div>
+        <ul class="ticks small">
+          <li>No app to install</li>
+          <li>No staff accounts</li>
+          <li>Works on any phone</li>
+        </ul>
+      </div>
+
+      <div class="hero-visual" aria-hidden="true">
+        <!-- Door mode phone -->
+        <div class="phone phone-back">
+          <div class="ph-top"><span>Door · Fri 19:30</span><i class="dot"></i></div>
+          <div class="ph-counters">
+            <div><b class="c-in">142</b><span>inside</span></div>
+            <div><b>156/210</b><span>arrived</span></div>
+            <div><b class="c-vip">3/4</b><span>VIP in</span></div>
+          </div>
+          <div class="ph-search">jane</div>
+          <div class="ph-row is-in">
+            <div><strong>Jane Smith <em>+2</em></strong><small><i class="tag t-artist">Artist</i> Headliner TM · <b class="c-in">2/3 in</b></small></div>
+            <div class="ph-btns"><span class="b-out">OUT</span><span class="b-in">IN</span></div>
+          </div>
+          <div class="ph-row vip">
+            <div><strong><i class="tag t-vipb">★ VIP</i> Janelle Ortiz</strong><small><i class="tag t-media">Media</i> Venue</small></div>
+            <div class="ph-btns"><span class="b-out off">OUT</span><span class="b-in">IN</span></div>
+          </div>
+          <div class="ph-row">
+            <div><strong>Janik Brooks <em>+1</em></strong><small><i class="tag">Guest</i> Promoter — Jess</small></div>
+            <div class="ph-btns"><span class="b-out off">OUT</span><span class="b-in">IN</span></div>
+          </div>
+        </div>
+
+        <!-- Contributor link phone -->
+        <div class="phone phone-front">
+          <div class="ph-top"><span>Guest list · Headliner TM</span></div>
+          <div class="ph-card">
+            <small class="muted">Fri 3 Oct · Doors 19:30</small>
+            <strong class="ph-title">The Headliners</strong>
+            <div class="ph-alloc"><div><b>6</b><span>on your list</span></div><div><b class="c-in">14</b><span>left of 20</span></div></div>
+          </div>
+          <div class="ph-card">
+            <span class="ph-label">Full name</span>
+            <div class="ph-input">Priya Patel</div>
+            <span class="ph-label">Plus ones</span>
+            <div class="ph-input short">1</div>
+            <div class="ph-cta">Add to list</div>
+          </div>
+        </div>
+
+        <div class="float-toast">★ VIP arrived: Janelle Ortiz <small>checked in by Sam (Door 1)</small></div>
+      </div>
+    </section>
+
+    <!-- ============ HOW IT WORKS ============ -->
+    <section class="how-steps" id="how">
+      <p class="eyebrow center-text">How it works</p>
+      <h2 class="section-title">Three steps from announce to doors</h2>
+
+      <div class="steps">
+        <article class="step">
+          <div class="step-num">1</div>
+          <h3>Create the show, send links</h3>
+          <p>Add the event, then a contributor for each act or promoter. Each gets a private link with their own allocation and a cutoff time.</p>
+          <div class="mini">
+            <div class="mini-row"><strong>Headliner — TM</strong><span class="tag t-artist">Artist</span></div>
+            <div class="mini-bar"><i class="w60"></i></div>
+            <div class="mini-row small muted"><span>12 / 20 heads used</span><span class="mini-link">Copy link</span></div>
+            <div class="mini-row"><strong>Promoter — Jess</strong><span class="tag">Guest</span></div>
+            <div class="mini-bar"><i class="w30"></i></div>
+            <div class="mini-row small muted"><span>3 / 10 heads used</span><span class="mini-link">Copy link</span></div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">2</div>
+          <h3>They add their own guests</h3>
+          <p>No login, no app. They open the link, add names and plus-ones, and can see what’s left. It locks automatically at the cutoff.</p>
+          <div class="mini">
+            <div class="mini-row"><strong>Jane Smith <em>+2</em></strong><span class="small muted">Tom (TM)</span></div>
+            <div class="mini-row"><strong>Alex Nguyen</strong><span class="small muted">Tom (TM)</span></div>
+            <div class="mini-row"><strong>Priya Patel <em>+1</em></strong><span class="small muted">Tom (TM)</span></div>
+            <div class="mini-lock small">🔒 List closes Fri 5:00 pm</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">3</div>
+          <h3>Door checks them in</h3>
+          <p>Search a name, tap IN. Parties with plus-ones can arrive in bits (“2 of 3 in”), step out and come back. Every door phone updates instantly.</p>
+          <div class="mini">
+            <div class="mini-row"><strong>Jane Smith <em>+2</em></strong><span class="c-in small"><b>2/3 in</b></span></div>
+            <div class="mini-picks"><span>1</span><span>2</span><span class="pick-all">All 3</span></div>
+            <div class="mini-row small muted"><span>Checked in by Sam (Door 1)</span><span>7:42 pm</span></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ FEATURES ============ -->
+    <section class="feature-grid">
+      <div class="feature">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0"/></svg>
+        <h3>One login, names on every change</h3>
+        <p>The whole venue shares one password. Each phone asks for a name once, so you always know who added, edited or let someone in.</p>
+      </div>
+      <div class="feature">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+        <h3>Contributor links</h3>
+        <p>Allocations counted in heads including plus-ones, automatic cutoffs, and links you can switch off or replace in one tap.</p>
+      </div>
+      <div class="feature">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h10M10 6l6 6-6 6M20 4v16"/></svg>
+        <h3>Check in <em>and</em> out</h3>
+        <p>Partial plus-ones, re-entry and walk-ups. Live counts for who’s inside, who’s arrived and who hasn’t shown.</p>
+      </div>
+      <div class="feature">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/></svg>
+        <h3>VIPs never wait</h3>
+        <p>VIPs are highlighted gold on every door screen, and everyone gets an alert the moment one arrives.</p>
+      </div>
+      <div class="feature">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+        <h3>Paste in any list</h3>
+        <p>Copy a column straight out of Excel, Sheets or an email. “Jane Smith +2” just works. Export to CSV for settlement.</p>
+      </div>
+      <div class="feature">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>
+        <h3>Private by design</h3>
+        <p>Each venue only ever sees its own lists. Nothing is public, nothing is indexed by search engines, and there’s no tracking.</p>
+      </div>
+    </section>
+
+    <!-- ============ DOOR CLOSE-UP ============ -->
+    <section class="door-band">
+      <div>
+        <p class="eyebrow">Built for a busy door</p>
+        <h2 class="section-title left">Big buttons. Fast search. Every door in sync.</h2>
+        <ul class="bullets">
+          <li><b>Type two letters</b> and the right name is on top.</li>
+          <li><b>Not on the list?</b> Add them as a walk-up straight from the search.</li>
+          <li><b>Door notes</b> — “artist entry via side door” — pinned for every shift.</li>
+          <li><b>Full activity log</b> of every add, edit, check-in and check-out, with names and times.</li>
+        </ul>
+      </div>
+      <div class="door-demo" aria-hidden="true">
+        <div class="ph-counters wide">
+          <div><b class="c-in">142</b><span>inside</span></div>
+          <div><b>156/210</b><span>arrived</span></div>
+          <div><b class="c-vip">3/4</b><span>VIP in</span></div>
+        </div>
+        <div class="ph-row is-in"><div><strong>Chris Lee <em>+1</em></strong><small><i class="tag">Guest</i> Venue · <b class="c-in">2/2 in</b></small></div><div class="ph-btns"><span class="b-out">OUT</span><span class="b-in done">✓ IN</span></div></div>
+        <div class="ph-row has-left"><div><strong>Morgan Hart</strong><small><i class="tag">Guest</i> Venue · <b class="c-out">Left 9:14 pm</b></small></div><div class="ph-btns"><span class="b-out off">OUT</span><span class="b-in">IN</span></div></div>
+        <div class="ph-row"><div><strong>Taylor Brooks <em>+3</em></strong><small><i class="tag t-industry">Industry</i> Promoter — Jess</small><small class="note">Bring ID — under-18 +1</small></div><div class="ph-btns"><span class="b-out off">OUT</span><span class="b-in">IN</span></div></div>
+      </div>
+    </section>
+
+    <!-- ============ REQUEST ACCESS ============ -->
+    <section class="request-band" id="request">
+      <div class="request-copy">
+        <p class="eyebrow">Get your venue on</p>
+        <h2 class="section-title left">Request access</h2>
+        <p class="muted">Tell us about your venue and we’ll send you a setup link — usually the same day. Setup takes about a minute: open the link, choose a password, done.</p>
+        <p class="muted small">Already set up? <a href="/login">Log in here</a> · New to it? <a href="/guide">Read the guide</a></p>
+      </div>
+      <form class="card stack request-form" id="request-form" novalidate>
+        <label class="field"><span>Venue name</span><input name="venueName" required maxlength="120" autocomplete="organization" placeholder="e.g. The Corner Hotel"></label>
+        <div class="grid-2">
+          <label class="field"><span>Your name</span><input name="name" required maxlength="80" autocomplete="name"></label>
+          <label class="field"><span>Phone <small class="muted">(optional)</small></span><input name="phone" maxlength="40" autocomplete="tel" inputmode="tel"></label>
+        </div>
+        <label class="field"><span>Email</span><input name="email" type="email" required maxlength="120" autocomplete="email"></label>
+        <label class="field"><span>Anything we should know? <small class="muted">(optional)</small></span><textarea name="message" rows="3" maxlength="1000" placeholder="Capacity, how many shows a week, how you run the list now…"></textarea></label>
+        <label class="hp" aria-hidden="true">Website <input name="website" tabindex="-1" autocomplete="off"></label>
+        <button class="btn btn-primary btn-block" type="submit">Request access</button>
+        <p class="small muted form-status" id="request-status" role="status"></p>
+      </form>
+    </section>
+
+    <!-- ============ FAQ ============ -->
+    <section class="faq">
+      <h2 class="section-title">Questions</h2>
+      <details><summary>Do our staff need accounts?</summary><p>No. Your venue has one password. Staff open your venue’s link, type the password, and put their name on the phone once.</p></details>
+      <details><summary>Do artists and promoters need to sign up?</summary><p>No. They get a private link for that show. They can add, edit and remove their own guests until your cutoff — and they only ever see their own list.</p></details>
+      <details><summary>Does it replace our ticketing?</summary><p>No — it runs alongside it. This is just for the guest list: comps, artist and crew, industry, media and walk-ups.</p></details>
+      <details><summary>Does it work without internet?</summary><p>Not yet. Door phones need Wi-Fi or mobile data. If one phone drops out, the others keep working and it catches up when it reconnects.</p></details>
+      <details><summary>Can we bring in our existing list?</summary><p>Yes. Paste straight from Excel, Google Sheets or an email — one name per line, with “+2” for plus-ones.</p></details>
+    </section>
+  </main>
+
+  <footer class="landing-foot small muted">
+    <span>Riderly · Melbourne</span>
+    <span class="foot-links"><a href="/guide">Guide</a><a href="/login">Venue log in</a><a href="#request">Request access</a></span>
+  </footer>
+
+  <script src="/js/landing.js"></script>
 </body>
 </html>

@@ -4,7 +4,7 @@
    fmtDate, fmtDateTime, fmtTime, toLocalInput, fromLocalInput, field, formData, norm */
 
 const app = document.getElementById('app');
-const state = { venueName: 'Venue', stream: null, cleanup: [] };
+const state = { venueName: 'Venue', venueSlug: '', stream: null, cleanup: [] };
 const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Door'];
 
 // ---------- boot & routing ----------
@@ -16,10 +16,10 @@ async function boot() {
   } catch (err) {
     return renderFatal(err.message);
   }
-  state.venueName = session.venueName;
-  document.title = `${session.venueName} · Guest List`;
-  if (session.needsSetup) return renderSetup(session.setupCodeRequired);
-  if (!session.authed) return renderLogin();
+  if (!session.authed) return toLogin();
+  state.venueName = session.venue.name;
+  state.venueSlug = session.venue.slug;
+  document.title = `${session.venue.name} · Guest List`;
   await promptDeviceName();
   window.addEventListener('hashchange', route);
   document.addEventListener('vl:name', () => route());
@@ -57,8 +57,7 @@ function go(hash) {
 
 function handleError(err) {
   if (err instanceof ApiError && err.status === 401) {
-    teardown();
-    return renderLogin();
+    return toLogin();
   }
   toast(err.message || 'Something went wrong', 'error', 5000);
 }
@@ -126,50 +125,15 @@ function renderFatal(msg) {
 
 // ---------- setup / login ----------
 
-function renderSetup(needsCode) {
-  const form = h('form', { class: 'card narrow stack' },
-    h('h1', null, 'Set up your venue'),
-    h('p', { class: 'muted' }, 'One shared account for the whole venue. Staff and door crew all log in with this password, then put their own name on their device.'),
-    needsCode
-      ? field('Setup code', h('input', { name: 'setupCode', required: true, maxlength: '20', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false' }), 'Printed in the server log when the app first starts (journalctl -u guestlist).')
-      : null,
-    field('Venue name', h('input', { name: 'venueName', required: true, maxlength: '80', placeholder: 'e.g. Brunswick Ballroom' })),
-    field('Venue password', h('input', { name: 'password', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' }), 'At least 8 characters.'),
-    field('Confirm password', h('input', { name: 'confirm', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' })),
-    h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Create venue account')
-  );
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const d = formData(form);
-    if (d.password !== d.confirm) return toast('Passwords don’t match', 'error');
-    try {
-      await api('POST', '/api/setup', { venueName: d.venueName, password: d.password, setupCode: d.setupCode });
-      location.hash = '';
-      boot();
-    } catch (err) {
-      handleError(err);
-    }
-  });
-  put(app, h('main', { class: 'center' }, form));
-}
-
-function renderLogin() {
-  const form = h('form', { class: 'card narrow stack' },
-    h('div', { class: 'brand' }, h('span', { class: 'logo big' }, '★'), h('h1', null, state.venueName)),
-    h('p', { class: 'muted' }, 'Guest list & door'),
-    field('Venue password', h('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' })),
-    h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Log in')
-  );
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      await api('POST', '/api/login', formData(form));
-      boot();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
-  put(app, h('main', { class: 'center' }, form));
+function toLogin() {
+  teardown();
+  let last = '';
+  try {
+    last = localStorage.getItem('vl.lastVenue') || '';
+  } catch {
+    /* ignore */
+  }
+  location.replace(last ? `/v/${encodeURIComponent(last)}` : '/login');
 }
 
 // ---------- events list ----------
@@ -939,7 +903,7 @@ function renderSettings() {
     e.preventDefault();
     try {
       const r = await api('PUT', '/api/settings', formData(nameForm));
-      state.venueName = r.venueName;
+      state.venueName = r.venue.name;
       toast('Saved', 'ok');
       route();
     } catch (err) {
@@ -965,6 +929,17 @@ function renderSettings() {
     }
   });
 
+  const staffLink = `${location.origin}/v/${state.venueSlug}`;
+  const access = h('div', { class: 'card stack' },
+    h('h3', null, 'Staff login'),
+    h('p', { class: 'muted' }, 'Send staff this link and the venue password. The link fills in your venue, so they only type the password.'),
+    h('div', { class: 'linkbox' },
+      h('input', { readonly: true, value: staffLink, onclick: (e) => e.target.select() }),
+      h('button', { class: 'btn btn-small btn-primary', onclick: () => copy(staffLink) }, 'Copy')
+    ),
+    h('p', { class: 'small muted' }, 'Venue ID: ', h('strong', null, state.venueSlug))
+  );
+
   const device = h('div', { class: 'card stack' },
     h('h3', null, 'This device'),
     h('p', null, 'Signed in as ', h('strong', null, currentName()), '. Changes made here are logged under this name.'),
@@ -974,8 +949,7 @@ function renderSettings() {
         class: 'btn btn-danger',
         onclick: async () => {
           await api('POST', '/api/logout').catch(() => {});
-          location.hash = '';
-          renderLogin();
+          toLogin();
         },
       }, 'Log out this device')
     )
@@ -983,7 +957,7 @@ function renderSettings() {
 
   put(app, 
     topbar({ back: '#/', title: 'Settings' }),
-    h('main', { class: 'page narrow-block stack' }, device, nameForm, pwForm)
+    h('main', { class: 'page narrow-block stack' }, access, device, nameForm, pwForm)
   );
 }
 

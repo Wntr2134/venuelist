@@ -3,7 +3,8 @@
 const crypto = require('node:crypto');
 const { getSetting, setSetting } = require('./db');
 
-const COOKIE = 'vl_session';
+const VENUE_COOKIE = 'vl_session';
+const OWNER_COOKIE = 'vl_owner';
 const SESSION_DAYS = 30;
 
 function hashPassword(password) {
@@ -30,27 +31,12 @@ function secret(db) {
   return s;
 }
 
-// Bumped whenever the password changes, which invalidates every existing session.
-function passwordVersion(db) {
-  return getSetting(db, 'password_version') || '1';
-}
-
 function sign(db, payload) {
   return crypto.createHmac('sha256', secret(db)).update(payload).digest('base64url');
 }
 
-function createSessionCookie(db, secure) {
-  const payload = `${Date.now()}.${passwordVersion(db)}`;
-  const value = `${payload}.${sign(db, payload)}`;
-  return cookieHeader(value, SESSION_DAYS * 86400, secure);
-}
-
-function clearSessionCookie(secure) {
-  return cookieHeader('', 0, secure);
-}
-
-function cookieHeader(value, maxAge, secure) {
-  return `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+function cookieHeader(name, value, maxAge, secure) {
+  return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 }
 
 function parseCookies(req) {
@@ -62,40 +48,90 @@ function parseCookies(req) {
   return out;
 }
 
-function isAuthed(db, req) {
-  const raw = parseCookies(req)[COOKIE];
-  if (!raw) return false;
-  const parts = raw.split('.');
-  if (parts.length !== 3) return false;
-  const [issued, version, mac] = parts;
-  const expected = sign(db, `${issued}.${version}`);
-  if (mac.length !== expected.length) return false;
-  if (!crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) return false;
-  if (version !== passwordVersion(db)) return false;
-  return Date.now() - Number(issued) < SESSION_DAYS * 86400 * 1000;
+// A session is "<fields...>.<issuedAt>.<mac>". Callers check the fields (e.g. password version).
+function issue(db, name, fields, secure) {
+  const payload = [...fields, Date.now()].join('.');
+  return cookieHeader(name, `${payload}.${sign(db, payload)}`, SESSION_DAYS * 86400, secure);
 }
 
-// Simple in-memory limiter for login attempts.
+function read(db, req, name) {
+  const raw = parseCookies(req)[name];
+  if (!raw) return null;
+  const i = raw.lastIndexOf('.');
+  if (i < 0) return null;
+  const payload = raw.slice(0, i);
+  const mac = raw.slice(i + 1);
+  const expected = sign(db, payload);
+  if (mac.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) return null;
+  const fields = payload.split('.');
+  const issued = Number(fields.pop());
+  if (!(Date.now() - issued < SESSION_DAYS * 86400 * 1000)) return null;
+  return fields;
+}
+
+// ----- venue sessions: bound to the venue's password version -----
+
+function venueCookie(db, venue, secure) {
+  return issue(db, VENUE_COOKIE, ['v', venue.id, venue.password_version], secure);
+}
+
+function venueSession(db, req) {
+  const f = read(db, req, VENUE_COOKIE);
+  if (!f || f.length !== 3 || f[0] !== 'v') return null;
+  return { venueId: Number(f[1]), version: Number(f[2]) };
+}
+
+function clearVenueCookie(secure) {
+  return cookieHeader(VENUE_COOKIE, '', 0, secure);
+}
+
+// ----- owner (platform admin) sessions -----
+
+function ownerVersion(db) {
+  return Number(getSetting(db, 'owner_password_version') || 1);
+}
+
+function ownerCookie(db, secure) {
+  return issue(db, OWNER_COOKIE, ['o', ownerVersion(db)], secure);
+}
+
+function isOwner(db, req) {
+  if (!getSetting(db, 'owner_password_hash')) return false;
+  const f = read(db, req, OWNER_COOKIE);
+  return !!f && f.length === 2 && f[0] === 'o' && Number(f[1]) === ownerVersion(db);
+}
+
+function clearOwnerCookie(secure) {
+  return cookieHeader(OWNER_COOKIE, '', 0, secure);
+}
+
+// In-memory limiter that only counts FAILED attempts, so a whole venue logging in
+// from the same Wi-Fi (one public IP) never locks itself out.
 function createLimiter({ max, windowMs }) {
-  const hits = new Map();
-  return function allow(key) {
-    const now = Date.now();
-    const list = (hits.get(key) || []).filter((t) => now - t < windowMs);
-    if (list.length >= max) {
-      hits.set(key, list);
-      return false;
-    }
-    list.push(now);
-    hits.set(key, list);
-    return true;
+  const fails = new Map();
+  const recent = (key) => (fails.get(key) || []).filter((t) => Date.now() - t < windowMs);
+  return {
+    blocked(key) {
+      const list = recent(key);
+      fails.set(key, list);
+      return list.length >= max;
+    },
+    fail(key) {
+      const list = recent(key);
+      list.push(Date.now());
+      fails.set(key, list);
+    },
   };
 }
 
 module.exports = {
   hashPassword,
   verifyPassword,
-  createSessionCookie,
-  clearSessionCookie,
-  isAuthed,
+  venueCookie,
+  venueSession,
+  clearVenueCookie,
+  ownerCookie,
+  isOwner,
+  clearOwnerCookie,
   createLimiter,
 };
