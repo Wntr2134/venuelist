@@ -240,10 +240,10 @@ async function renderEvent(id, tab) {
   let data;
   const ui = { search: '', contributor: state.guestFilter && state.guestFilter.eventId === id ? state.guestFilter.contributor : 'all' };
 
-  const statsBox = h('div', { class: 'stats' });
+  const statsBox = h('div', { class: 'stats event-stats' });
   const tabBody = h('div', { class: 'tab-body' });
-  const tabs = ['guests', 'contributors', 'activity', 'settings'];
-  const tabLabels = { guests: 'Guest list', contributors: 'Contributors', activity: 'Activity', settings: 'Event settings' };
+  const tabs = ['guests', 'contributors', 'report', 'activity', 'settings'];
+  const tabLabels = { guests: 'Guest list', contributors: 'Contributors', report: 'Report', activity: 'Activity', settings: 'Event settings' };
   const header = h('div');
 
   async function load() {
@@ -277,6 +277,7 @@ async function renderEvent(id, tab) {
     if (tab === 'guests') tabBody.append(guestsTab());
     else if (tab === 'contributors') tabBody.append(contributorsTab());
     else if (tab === 'activity') tabBody.append(activityTab());
+    else if (tab === 'report') tabBody.append(reportTab(id));
     else tabBody.append(settingsTab());
     if (keepFocus) {
       const again = tabBody.querySelector(`[data-keep="${keepFocus}"]`);
@@ -397,7 +398,10 @@ async function renderEvent(id, tab) {
     return h('div', { class: 'stack' },
       h('div', { class: 'toolbar' },
         h('p', { class: 'muted' }, 'Contributors are artists, tour managers, promoters or staff who can add guests to this show. Each gets a private link — no account needed. Their spots count against their allocation.'),
-        h('button', { class: 'btn btn-primary', onclick: () => contributorForm(data, null, load) }, '+ Add contributor')
+        h('div', { class: 'row wrap' },
+          h('button', { class: 'btn', onclick: () => copyContributors(data, load) }, 'Copy from another show'),
+          h('button', { class: 'btn btn-primary', onclick: () => contributorForm(data, null, load) }, '+ Add contributor')
+        )
       ),
       cards.length ? h('div', { class: 'contributor-grid' }, cards) : h('div', { class: 'empty' }, 'No contributors yet.')
     );
@@ -515,6 +519,10 @@ function describe(a) {
     case 'contributor.relink': return `issued a new link for ${a.detail}`;
     case 'contributor.delete': return `deleted contributor ${a.detail}`;
     case 'event.create': return a.detail ? `created the event (${a.detail})` : 'created the event';
+    case 'contributor.copy': return `copied contributors — ${a.detail}`;
+    case 'event.purge': return `privacy clean-up — ${a.detail}`;
+    case 'override': return `override: ${a.detail}`;
+    case 'count.set': return `set the door count ${a.detail}`;
     case 'event.update': return 'updated event details';
     case 'event.archive': return 'archived the event';
     case 'event.unarchive': return 'restored the event';
@@ -682,6 +690,160 @@ function contributorForm(data, c, onDone) {
   const m = modal(c ? 'Edit contributor' : 'Add contributor', form, {
     actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, c ? 'Save' : 'Create link')],
   });
+}
+
+async function copyContributors(data, onDone) {
+  let events;
+  try {
+    const [live, archived] = await Promise.all([api('GET', '/api/events'), api('GET', '/api/events?archived=1')]);
+    events = [...live, ...archived].filter((e) => e.id !== data.event.id && e.contributorCount > 0)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  } catch (err) {
+    return handleError(err);
+  }
+  if (!events.length) return toast('No other shows with contributors yet.', 'info');
+  const sel = h('select', null, events.map((e) => h('option', { value: String(e.id) }, `${fmtDate(e.date)} — ${e.name} (${e.contributorCount})`)));
+  const submit = async () => {
+    try {
+      const r = await api('POST', `/api/events/${data.event.id}/contributors/copy`, { fromEventId: Number(sel.value) });
+      m.close();
+      toast(`Copied ${r.added} contributor${r.added === 1 ? '' : 's'}${r.skipped ? ` (${r.skipped} already here)` : ''} — each has a new link to send`, 'ok', 5000);
+      onDone();
+    } catch (err) {
+      handleError(err);
+    }
+  };
+  const m = modal('Copy contributors', h('div', { class: 'stack' },
+    h('p', { class: 'muted' }, 'Copies names, lists and allocations — “same as last Friday”. Guests aren’t copied, and each contributor gets a fresh link to send.'),
+    field('From', sel)
+  ), {
+    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, 'Copy')],
+  });
+}
+
+// ---------- night report ----------
+
+function reportTab(id) {
+  const box = h('div', { class: 'stack report' }, h('div', { class: 'muted' }, 'Loading…'));
+  api('GET', `/api/events/${id}/report`).then((r) => put(box, reportView(id, r))).catch(handleError);
+  return box;
+}
+
+// Arrivals per 15 minutes, in this phone's local time.
+function arrivalsChart(points, title) {
+  if (!points.length) return h('div', { class: 'empty' }, 'No arrivals recorded yet.');
+  const slot = 15 * 60 * 1000;
+  const start = Math.floor(Date.parse(points[0].at) / slot) * slot;
+  const end = Math.floor(Date.parse(points[points.length - 1].at) / slot) * slot;
+  const buckets = [];
+  for (let t = start; t <= end && buckets.length < 96; t += slot) buckets.push({ t, n: 0 });
+  for (const p of points) {
+    const i = Math.floor((Math.floor(Date.parse(p.at) / slot) * slot - start) / slot);
+    if (buckets[i]) buckets[i].n += p.count;
+  }
+  const max = Math.max(...buckets.map((b) => b.n), 1);
+  const peak = buckets.reduce((a, b) => (b.n > a.n ? b : a), buckets[0]);
+  const label = (t) => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const tip = h('div', { class: 'chart-tip', role: 'status' });
+  const bars = buckets.map((b) => h('div', {
+    class: 'chart-col',
+    tabindex: '0',
+    'aria-label': `${label(b.t)}: ${b.n} in`,
+    onmouseenter: (e) => showTip(e.currentTarget, b),
+    onfocus: (e) => showTip(e.currentTarget, b),
+    onmouseleave: () => tip.classList.remove('show'),
+    onblur: () => tip.classList.remove('show'),
+  },
+    h('div', { class: 'chart-bar', style: `height:${b.n ? Math.max(3, (b.n / max) * 100) : 0}%` }),
+    new Date(b.t).getMinutes() === 0 ? h('span', { class: 'chart-x' }, label(b.t)) : null
+  ));
+  function showTip(el, b) {
+    tip.textContent = `${label(b.t)}–${label(b.t + slot)} · ${b.n} in`;
+    const r = el.getBoundingClientRect();
+    const pr = el.parentElement.getBoundingClientRect();
+    tip.style.left = `${Math.min(Math.max(r.left - pr.left + r.width / 2, 60), pr.width - 60)}px`;
+    tip.classList.add('show');
+  }
+  return h('div', { class: 'chart' },
+    h('div', { class: 'chart-head' },
+      h('strong', null, title),
+      h('span', { class: 'muted small' }, `Busiest: ${label(peak.t)} (${peak.n} in 15 min)`)
+    ),
+    h('div', { class: 'chart-plot' },
+      h('div', { class: 'chart-y small muted' }, h('span', null, String(max)), h('span', null, '0')),
+      h('div', { class: 'chart-cols' }, bars, tip)
+    ),
+    h('details', { class: 'chart-table small' },
+      h('summary', null, 'Show as a table'),
+      h('table', { class: 'table mini-table' },
+        h('thead', null, h('tr', null, h('th', null, 'Time'), h('th', null, 'In'))),
+        h('tbody', null, buckets.filter((b) => b.n).map((b) => h('tr', null, h('td', null, `${label(b.t)}–${label(b.t + slot)}`), h('td', null, b.n))))
+      )
+    )
+  );
+}
+
+function reportView(id, r) {
+  const e = r.event;
+  const tile = (label, value, sub) => h('div', { class: 'stat' }, h('div', { class: 'stat-value' }, value), h('div', { class: 'stat-label' }, label), sub ? h('div', { class: 'stat-sub' }, sub) : null);
+  const door = r.door;
+  const useDoor = r.arrivals.doorIn.length > 0;
+  const table = (cols, rows) => h('div', { class: 'table-wrap' }, h('table', { class: 'table report-table' },
+    h('thead', null, h('tr', null, cols.map((c) => h('th', null, c)))),
+    h('tbody', null, rows)
+  ));
+  return [
+    h('div', { class: 'report-head' },
+      h('div', null,
+        h('div', { class: 'muted small' }, r.venueName),
+        h('h2', null, `Night report — ${e.name}`),
+        h('div', { class: 'muted small' }, `${fmtDate(e.date)}${e.doorsTime ? ` · doors ${e.doorsTime}` : ''}${r.firstIn ? ` · first in ${fmtTime(r.firstIn)}` : ''}`)
+      ),
+      h('div', { class: 'row wrap no-print' },
+        h('button', { class: 'btn', onclick: () => window.print() }, 'Print / save PDF'),
+        r.canEmail ? h('button', {
+          class: 'btn btn-primary',
+          onclick: async () => {
+            try {
+              const x = await api('POST', `/api/events/${id}/report/email`);
+              toast(`Report emailed to ${x.to}`, 'ok', 4000);
+            } catch (err) {
+              handleError(err);
+            }
+          },
+        }, `Email to ${r.emailTo}`) : null
+      )
+    ),
+    r.purged ? h('p', { class: 'muted small' }, 'Guest names were removed after the venue’s privacy period — counts are kept.') : null,
+    h('h3', null, 'Door count'),
+    h('div', { class: 'stats' },
+      tile('Peak inside', door.peak, door.capacity ? `capacity ${door.capacity}` : 'no capacity set'),
+      tile('Total in', door.totalIn),
+      tile('Total out', door.totalOut),
+      tile('At close', door.count)
+    ),
+    h('h3', null, 'Guest list'),
+    h('div', { class: 'stats' },
+      tile('On the list', r.guestlist.heads, `${r.guestlist.entries} entries`),
+      tile('Arrived', r.guestlist.arrived, r.guestlist.heads ? `${Math.round((r.guestlist.arrived / r.guestlist.heads) * 100)}%` : ''),
+      tile('No-shows', r.guestlist.noShow),
+      tile('VIP', r.guestlist.vip)
+    ),
+    arrivalsChart(useDoor ? r.arrivals.doorIn : r.arrivals.checkins, useDoor ? 'People in — door count, per 15 minutes' : 'Guest list arrivals, per 15 minutes'),
+    h('h3', null, 'By contributor'),
+    r.byContributor.length ? table(['Contributor', 'List', 'Heads', 'Arrived', 'No-shows'], r.byContributor.map((c) => h('tr', null,
+      h('td', null, c.name), h('td', null, c.listType),
+      h('td', null, c.allocation != null ? `${c.heads} / ${c.allocation}` : c.heads), h('td', null, c.arrived), h('td', null, c.noShow)
+    ))) : h('p', { class: 'muted' }, 'No guests on the list.'),
+    r.byList.length ? h('h3', null, 'By list') : null,
+    r.byList.length ? table(['List', 'Heads', 'Arrived', 'No-shows'], r.byList.map((l) => h('tr', null,
+      h('td', null, l.listType), h('td', null, l.heads), h('td', null, l.arrived), h('td', null, l.noShow)
+    ))) : null,
+    h('h3', null, `Overrides (${r.overrides.length})`),
+    r.overrides.length
+      ? h('ul', { class: 'activity' }, r.overrides.map((o) => h('li', null, h('span', { class: 'time' }, fmtDateTime(o.at)), h('span', { class: 'who' }, o.actor), h('span', { class: 'what' }, o.detail))))
+      : h('p', { class: 'muted' }, 'None — no rules were broken or changed.'),
+  ];
 }
 
 async function toggleContributor(c, onDone) {

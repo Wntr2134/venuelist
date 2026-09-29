@@ -704,3 +704,32 @@ pre.code { padding: 12px; white-space: pre-wrap; margin: 8px 0; }
 .net-bar.waiting { background: #2a2410; border-color: rgba(245, 197, 66, 0.5); color: #efe0b0; }
 .net-probs { margin-top: 8px; font-size: 0.85rem; }
 .net-probs ul { margin: 4px 0; padding-left: 18px; }
+
+/* ---------- night report ---------- */
+
+.report h3 { margin-top: 8px; }
+.report-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.report-table { min-width: 520px; }
+.chart { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.chart-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.chart-plot { display: grid; grid-template-columns: auto 1fr; gap: 8px; height: 180px; }
+.chart-y { display: flex; flex-direction: column; justify-content: space-between; padding-bottom: 20px; text-align: right; font-variant-numeric: tabular-nums; }
+.chart-cols { position: relative; display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid var(--line); padding-bottom: 0; margin-bottom: 20px; }
+.chart-col { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; position: relative; cursor: default; outline: none; }
+.chart-col:hover .chart-bar, .chart-col:focus .chart-bar { filter: brightness(1.2); }
+.chart-bar { width: 100%; max-width: 24px; background: #8b6dff; border-radius: 4px 4px 0 0; }
+.chart-x { position: absolute; bottom: -20px; font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
+.chart-tip { position: absolute; top: -6px; transform: translate(-50%, -100%); background: var(--card-2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 5px 9px; font-size: 0.8rem; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.1s; }
+.chart-tip.show { opacity: 1; }
+.chart-table summary { cursor: pointer; color: var(--accent-2); font-weight: 700; }
+.mini-table { min-width: 0; margin-top: 8px; }
+
+@media print {
+  :root { --bg: #fff; --bg-2: #fff; --card: #fff; --card-2: #f4f4f6; --line: #d8d8e0; --text: #111; --muted: #555; }
+  body { background: #fff; color: #111; }
+  .topbar, .tabs, .no-print, #toasts, .stats-row, .chart-table, .event-stats, .chart-tip { display: none !important; }
+  .page { padding: 0; }
+  .stat, .chart, .table-wrap, .card { break-inside: avoid; box-shadow: none; }
+  .chart-bar { background: #6a4ee0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .stat-accent .stat-value, .stat-vip .stat-value { color: #111; }
+}

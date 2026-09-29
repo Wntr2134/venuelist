@@ -870,6 +870,42 @@ test('email: sign-up alert, approval email, forgot password links, test email', 
   }
 });
 
+test('copy contributors from another show; night report', async () => {
+  const { c } = await onboard('Report Hall');
+  const last = (await c.call('POST', '/api/events', { name: 'Last Friday', date: '2026-10-02', overridePin: '2468' })).data;
+  const tonight = (await c.call('POST', '/api/events', { name: 'Tonight', date: '2026-10-09', venueCapacity: 100, overridePin: '2468' })).data;
+  await c.call('POST', `/api/events/${last.id}/contributors`, { name: 'Headliner TM', listType: 'Artist', allocation: 20 });
+  await c.call('POST', `/api/events/${last.id}/contributors`, { name: 'Promoter Jess', allocation: 10 });
+  await c.call('POST', `/api/events/${tonight.id}/contributors`, { name: 'promoter jess' });
+  const r = await c.call('POST', `/api/events/${tonight.id}/contributors/copy`, { fromEventId: last.id });
+  assert.deepEqual(r.data, { added: 1, skipped: 1 });
+  const ev = (await c.call('GET', `/api/events/${tonight.id}`)).data;
+  const tm = ev.contributors.find((x) => x.name === 'Headliner TM');
+  assert.equal(tm.allocation, 20);
+  const lastTm = (await c.call('GET', `/api/events/${last.id}`)).data.contributors.find((x) => x.name === 'Headliner TM');
+  assert.notEqual(tm.token, lastTm.token, 'copies get their own new links');
+  assert.equal((await c.call('POST', `/api/events/${tonight.id}/contributors/copy`, { fromEventId: tonight.id })).status, 400);
+  const other = await onboard('Report Other');
+  assert.equal((await other.c.call('POST', `/api/events/${tonight.id}/contributors/copy`, { fromEventId: last.id })).status, 404);
+
+  // Night report
+  const g1 = (await c.call('POST', `/api/events/${tonight.id}/guests`, { name: 'A', plusOnes: 2, contributorId: tm.id })).data;
+  await c.call('POST', `/api/events/${tonight.id}/guests`, { name: 'B', vip: true });
+  await c.call('POST', `/api/guests/${g1.id}/checkin`, { count: 2 });
+  await c.call('POST', `/api/events/${tonight.id}/count`, { delta: 5 });
+  await c.call('POST', `/api/events/${tonight.id}/count`, { delta: -1 });
+  const rep = (await c.call('GET', `/api/events/${tonight.id}/report`)).data;
+  assert.deepEqual(rep.door, { count: 4, capacity: 100, peak: 5, totalIn: 5, totalOut: 1 });
+  assert.equal(rep.guestlist.heads, 4);
+  assert.equal(rep.guestlist.arrived, 2);
+  assert.equal(rep.guestlist.noShow, 2);
+  assert.equal(rep.byContributor.find((x) => x.name === 'Headliner TM').arrived, 2);
+  assert.equal(rep.arrivals.checkins[0].count, 2);
+  assert.equal(rep.arrivals.doorIn[0].count, 5);
+  assert.equal(rep.canEmail, false, 'no email set up in tests');
+  assert.equal((await other.c.call('GET', `/api/events/${tonight.id}/report`)).status, 404);
+});
+
 test('/health answers ok without login and leaks nothing', async () => {
   const res = await fetch(`${base}/health`);
   assert.equal(res.status, 200);

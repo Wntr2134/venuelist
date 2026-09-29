@@ -1305,6 +1305,109 @@ function createApp(db, options = {}) {
       .map((r) => ({ delta: r.delta, countAfter: r.count_after, source: r.source, actor: r.actor, at: r.at }));
   });
 
+  // ----- copy contributors from another show ("same as last Friday") -----
+
+  route('POST', /^\/api\/events\/(\d+)\/contributors\/copy$/, ({ venue, req, params, body }) => {
+    const actor = actorFrom(req);
+    const e = evt(venue, params[0]);
+    const from = evt(venue, int(body.fromEventId, 'Show to copy from', { min: 1, max: 1e9 }));
+    if (from.id === e.id) throw new HttpError(400, 'Pick a different show to copy from.');
+    const have = new Set(db.prepare('SELECT name FROM contributors WHERE event_id = ?').all(e.id).map((c) => c.name.toLowerCase()));
+    const source = db.prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY id').all(from.id);
+    let added = 0;
+    tx(db, () => {
+      for (const c of source) {
+        if (have.has(c.name.toLowerCase())) continue;
+        db.prepare(
+          'INSERT INTO contributors (event_id, name, list_type, allocation, token, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(e.id, c.name, c.list_type, c.allocation, newToken(), c.notes, now(), actor);
+        added += 1;
+      }
+      if (added) log(db, { eventId: e.id, action: 'contributor.copy', detail: `${added} from ${from.name}`, actor, via: 'venue' });
+    });
+    publish(e.id, 'contributors');
+    return { added, skipped: source.length - added };
+  });
+
+  // ----- night report -----
+
+  function reportFor(e) {
+    const guests = listGuests(db, e.id);
+    const contributors = db.prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY name COLLATE NOCASE').all(e.id);
+    const row = (list) => {
+      const st = stats(list);
+      return { entries: st.guests, heads: st.expected, arrived: st.admitted, noShow: st.noShow };
+    };
+    const byContributor = contributors.map((c) => ({
+      name: c.name, listType: c.list_type, allocation: c.allocation, ...row(guests.filter((g) => g.contributorId === c.id)),
+    }));
+    const direct = guests.filter((g) => !g.contributorId);
+    if (direct.length) byContributor.push({ name: 'Venue / door (no contributor)', listType: '—', allocation: null, ...row(direct) });
+    const lists = [...new Set(guests.map((g) => g.listType))].sort();
+    const byList = lists.map((t) => ({ listType: t, ...row(guests.filter((g) => g.listType === t)) }));
+    const act = (sql) => db.prepare(sql).all(e.id);
+    const checkins = act("SELECT at, detail FROM activity WHERE event_id = ? AND action = 'guest.checkin' ORDER BY id")
+      .map((a) => ({ at: a.at, count: Number((a.detail || '').match(/^(\d+)/)?.[1] || 1) }));
+    const doorIn = act("SELECT at, delta FROM headcount_log WHERE event_id = ? AND source IN ('clicker', 'guestlist') AND delta > 0 ORDER BY id")
+      .map((r) => ({ at: r.at, count: r.delta }));
+    const overrides = act("SELECT at, actor, detail FROM activity WHERE event_id = ? AND action = 'override' ORDER BY id")
+      .map((a) => ({ at: a.at, actor: a.actor, detail: a.detail }));
+    const st = stats(guests);
+    return {
+      event: eventOut(e),
+      venueName: venue_name_of(e),
+      door: headcountOut(e),
+      guestlist: { entries: st.guests, heads: st.expected, arrived: st.admitted, noShow: st.noShow, vip: st.vip },
+      byContributor,
+      byList,
+      arrivals: { checkins, doorIn },
+      firstIn: [checkins[0]?.at, doorIn[0]?.at].filter(Boolean).sort()[0] || null,
+      overrides,
+      purged: !!e.purged_at,
+    };
+  }
+
+  function venue_name_of(e) {
+    return db.prepare('SELECT name FROM venues WHERE id = ?').get(e.venue_id)?.name || '';
+  }
+
+  route('GET', /^\/api\/events\/(\d+)\/report$/, ({ venue, params }) => {
+    const r = reportFor(evt(venue, params[0]));
+    r.canEmail = !!(venue.email && mailConfig());
+    r.emailTo = venue.email || null;
+    return r;
+  });
+
+  route('POST', /^\/api\/events\/(\d+)\/report\/email$/, async ({ venue, req, params }) => {
+    actorFrom(req);
+    const e = evt(venue, params[0]);
+    if (!venue.email) throw new HttpError(400, 'Add a contact email in the venue admin page first.');
+    if (!mailConfig()) throw new HttpError(400, 'Email isn’t set up on the server yet.');
+    const r = reportFor(e);
+    const pad = (s, n) => String(s).padEnd(n);
+    const lines = [
+      `${r.venueName} — ${e.name}`,
+      `${e.date}${e.doors_time ? ` · doors ${e.doors_time}` : ''}`,
+      '',
+      'DOOR COUNT',
+      `  Capacity: ${r.door.capacity ?? 'not set'}   Peak: ${r.door.peak}   In: ${r.door.totalIn}   Out: ${r.door.totalOut}   At close: ${r.door.count}`,
+      '',
+      'GUEST LIST',
+      `  ${r.guestlist.heads} on the list (${r.guestlist.entries} entries) · ${r.guestlist.arrived} arrived · ${r.guestlist.noShow} no-shows · ${r.guestlist.vip} VIP`,
+      '',
+      'BY CONTRIBUTOR (heads / arrived / no-shows)',
+      ...r.byContributor.map((c) => `  ${pad(c.name, 34)} ${pad(`${c.heads}${c.allocation != null ? `/${c.allocation}` : ''}`, 8)} ${pad(c.arrived, 6)} ${c.noShow}`),
+      '',
+      `OVERRIDES (${r.overrides.length})`,
+      ...(r.overrides.length ? r.overrides.map((o) => `  ${o.actor}: ${o.detail}`) : ['  None']),
+      '',
+      `Full report: ${PUBLIC_URL}/app#/event/${e.id}/report`,
+    ];
+    const sent = await mail({ to: venue.email, subject: `Night report — ${e.name} (${e.date})`, text: lines.join('\n') });
+    if (!sent) throw new HttpError(502, 'The email couldn’t be sent. Check the email setup.');
+    return { ok: true, to: venue.email };
+  });
+
   // ----- contributors (venue side) -----
 
   route('POST', /^\/api\/events\/(\d+)\/contributors$/, ({ venue, req, params, body }) => {
