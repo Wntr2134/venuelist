@@ -27,6 +27,8 @@
       <a href="#contributors">4. Contributor links</a>
       <a href="#list">5. Managing the guest list</a>
       <a href="#door">6. Door mode</a>
+      <a href="#counter">6b. Door counter (capacity)</a>
+      <a href="#override">6c. Manager override PIN</a>
       <a href="#activity">7. Activity &amp; export</a>
       <a href="#contributor-view">8. What contributors see</a>
       <a href="#settings">9. Settings &amp; passwords</a>
@@ -146,6 +148,37 @@ Sam Lee, bring ID</pre>
         <p>The green dot at the top right means the phone is live. If it turns red, it’s reconnecting — keep going; it catches up automatically (the list also refreshes every 30 seconds).</p>
       </section>
 
+      <section id="counter">
+        <h2>6b. Door counter (capacity)</h2>
+        <p>At the top of door mode is a shared digital clicker — like the hand tally counters on the door, but every phone sees the same number, live.</p>
+        <ul>
+          <li><b>+</b> for each person in, <b>−</b> for each person out. The number updates on every door phone straight away.</li>
+          <li><b>Set the venue capacity</b> by tapping the number (or in Edit event). The bar turns <span class="c-vip">amber</span> from 80% and <span class="c-out">red</span> from 95%.</li>
+          <li><b>At capacity</b>, the + button asks for the <a href="#override">manager override PIN</a> before letting anyone else in.</li>
+          <li><b>⤢ Full screen</b> gives the person on the door a giant + and − (the phone buzzes on each tap on Android, and the screen stays awake).</li>
+          <li><b>Peak, in and out</b> totals are kept for the night. Tap the number to correct the count (e.g. after a head count) or reset it.</li>
+          <li><b>Guest list check-ins also count</b> is <i>off</i> by default so a guest isn’t counted twice when someone is clicking everyone through. Turn it on if your door staff only use this app.</li>
+        </ul>
+      </section>
+
+      <section id="override">
+        <h2>6c. Manager override PIN</h2>
+        <p>Staff share one login, so rules are protected by a separate <b>manager override PIN</b> that only managers know. It’s set when the venue is first set up.</p>
+        <p>Staff are asked for the PIN when they try to:</p>
+        <ul>
+          <li>let someone in past <b>venue capacity</b> (with + or a guest list check-in that counts)</li>
+          <li>add a guest past a <b>contributor’s allocation</b> or the night’s <b>guest list cap</b></li>
+          <li>change those limits, <b>correct or reset the door count</b>, or <b>delete an event</b></li>
+        </ul>
+        <p>Every override is saved in the <b>Activity</b> log with the name on the phone and what was overridden.</p>
+        <table class="guide-table">
+          <tr><th>Need to…</th><th>Do this</th></tr>
+          <tr><td>Change the PIN</td><td>⚙ Settings → Manager override PIN (needs the current PIN).</td></tr>
+          <tr><td>Forgot the PIN</td><td>Ask Riderly for a <b>PIN reset link</b> — it works once, lasts 24 hours, and your old PIN keeps working until it’s used.</td></tr>
+          <tr><td>Forgot the staff password</td><td>Ask Riderly for a <b>password reset link</b>. Using it logs out every device. The PIN doesn’t change.</td></tr>
+        </table>
+      </section>
+
       <section id="activity">
         <h2>7. Activity &amp; export</h2>
         <p>The <b>Activity</b> tab lists every change for the show — who added whom, every check-in and check-out, contributor changes — with the name of the person and the time.</p>
@@ -194,6 +227,7 @@ Sam Lee, bring ID</pre>
           <li>Stepping out? <b>OUT</b>. Back again? <b>IN</b>.</li>
           <li>Not on the list? Ask the manager, then <b>+ Walk-up</b>.</li>
           <li>Gold = VIP. Look after them.</li>
+          <li>Clicker: <b>+</b> in, <b>−</b> out. Red = at capacity — get a manager.</li>
         </ol>
       </section>
 

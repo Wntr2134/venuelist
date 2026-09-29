@@ -160,11 +160,26 @@ function venueCard(v) {
         h('input', { readonly: true, value: loginLink, onclick: (e) => e.target.select() }),
         h('button', { class: 'btn btn-small', onclick: () => copy(loginLink) }, 'Copy staff link'))
       : null,
+    v.status === 'pending'
+      ? h('div', { class: 'row wrap' }, h('button', { class: 'btn btn-small btn-primary', onclick: () => newLink(v) }, 'Get setup link'))
+      : h('div', { class: 'reset-grid' },
+        h('div', { class: 'reset-box' },
+          h('div', { class: 'reset-title' }, '🔑 Staff password'),
+          h('div', { class: 'row wrap' },
+            h('button', { class: 'btn btn-small', onclick: () => newLink(v) }, 'Send reset link'),
+            h('button', { class: 'btn btn-small', onclick: () => setSecret(v, 'password') }, 'Set new password')
+          )
+        ),
+        h('div', { class: 'reset-box' },
+          h('div', { class: 'reset-title' }, '🔒 Manager override PIN ',
+            h('span', { class: `badge ${v.hasManagerPin ? 's-active' : 's-pending'}` }, v.hasManagerPin ? 'Set' : 'Not set')),
+          h('div', { class: 'row wrap' },
+            h('button', { class: 'btn btn-small', onclick: () => pinLink(v) }, 'Send reset link'),
+            h('button', { class: 'btn btn-small', onclick: () => setSecret(v, 'pin') }, 'Set new PIN')
+          )
+        )
+      ),
     h('div', { class: 'row wrap' },
-      h('button', {
-        class: `btn btn-small${v.status === 'pending' ? ' btn-primary' : ''}`,
-        onclick: () => newLink(v),
-      }, v.status === 'pending' ? 'Get setup link' : 'Reset password link'),
       h('button', { class: 'btn btn-small', onclick: () => rename(v) }, 'Rename'),
       h('button', { class: 'btn btn-small', onclick: () => toggle(v) }, v.status === 'disabled' ? 'Enable' : 'Disable'),
       h('button', { class: 'btn btn-small btn-ghost-danger', onclick: () => remove(v) }, 'Delete')
@@ -255,7 +270,7 @@ function showSetupLink(r, reset, request) {
     ? `mailto:${request.email}?subject=${encodeURIComponent(`Your guest list for ${r.venue.name}`)}&body=${encodeURIComponent(msg)}`
     : null;
   const canShare = typeof navigator.share === 'function';
-  modal(reset ? 'Password reset link' : `${r.venue.name} added`, h('div', { class: 'stack' },
+  modal(reset ? 'Staff password reset link' : `${r.venue.name} added`, h('div', { class: 'stack' },
     h('p', null, 'Send this to the venue manager. It works once and expires in 7 days.'),
     h('div', { class: 'linkbox' },
       h('input', { readonly: true, value: url, onclick: (e) => e.target.select() }),
@@ -271,9 +286,63 @@ function showSetupLink(r, reset, request) {
   ));
 }
 
+// Owner sets a new staff password or manager PIN directly (e.g. while on the phone to them).
+function setSecret(v, kind) {
+  const isPin = kind === 'pin';
+  const a = h('input', { type: 'password', required: true, minlength: isPin ? '4' : '8', autocomplete: 'new-password' });
+  const b = h('input', { type: 'password', required: true, minlength: isPin ? '4' : '8', autocomplete: 'new-password' });
+  const form = h('form', { class: 'stack' },
+    h('p', { class: 'muted' }, isPin
+      ? `Sets a new manager override PIN for ${v.name}. Nobody is logged out. Tell the manager the new PIN directly — not staff.`
+      : `Sets a new staff password for ${v.name}. Every device logged into ${v.name} is logged out. The manager PIN doesn’t change.`),
+    field(isPin ? 'New PIN (at least 4 characters)' : 'New password (at least 8 characters)', a),
+    field('Type it again', b)
+  );
+  const submit = async (e) => {
+    if (e) e.preventDefault();
+    if (!form.reportValidity()) return;
+    if (a.value !== b.value) return toast('They don’t match', 'error');
+    try {
+      await api('PUT', `/api/owner/venues/${v.id}/${isPin ? 'pin' : 'password'}`, isPin ? { pin: a.value } : { password: a.value });
+      m.close();
+      toast(isPin ? `New PIN set for ${v.name}` : `New password set — ${v.name} devices logged out`, 'ok', 4000);
+      renderDashboard();
+    } catch (err) {
+      toast(err.message, 'error', 5000);
+    }
+  };
+  form.addEventListener('submit', submit);
+  const m = modal(isPin ? 'Set new manager PIN' : 'Set new staff password', form, {
+    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, isPin ? 'Set PIN' : 'Set password')],
+  });
+}
+
+// One-time link (24 h) the manager uses to choose a new PIN themselves.
+async function pinLink(v) {
+  try {
+    const r = await api('POST', `/api/owner/venues/${v.id}/pin-link`);
+    const url = `${location.origin}${r.pinPath}`;
+    const msg = `Here’s a link to set a new manager override PIN for ${v.name} on Riderly Guest List: ${url}\n\nIt works once and expires in 24 hours. Your current PIN keeps working until you use it. Please don’t share it with staff.`;
+    modal('Manager PIN reset link', h('div', { class: 'stack' },
+      h('p', null, 'Send this to the venue manager only — whoever opens it can set the PIN. Works once, expires in 24 hours.'),
+      h('div', { class: 'linkbox' },
+        h('input', { readonly: true, value: url, onclick: (e) => e.target.select() }),
+        h('button', { class: 'btn btn-small', onclick: () => copy(url) }, 'Copy link')
+      ),
+      h('textarea', { rows: '5', readonly: true, class: 'message' }, msg),
+      h('div', { class: 'row wrap' },
+        h('button', { class: 'btn btn-primary', onclick: () => copy(msg) }, 'Copy message'),
+        typeof navigator.share === 'function' ? h('button', { class: 'btn', onclick: () => navigator.share({ text: msg }).catch(() => {}) }, 'Share…') : null
+      )
+    ));
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
 async function newLink(v) {
   if (v.status === 'active') {
-    const ok = await confirmDialog('Reset password link?', `This makes a link that lets ${v.name} set a new password. When it’s used, every device logged into ${v.name} is logged out.`, { confirmText: 'Make link' });
+    const ok = await confirmDialog('Staff password reset link?', `This makes a one-time link (7 days) that lets ${v.name} choose a new staff password. When it’s used, every device logged into ${v.name} is logged out. The manager PIN doesn’t change.`, { confirmText: 'Make link' });
     if (!ok) return;
   }
   try {

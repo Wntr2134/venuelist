@@ -72,8 +72,8 @@
     <!-- ================= MARQUEE ================= -->
     <div class="marquee" aria-hidden="true">
       <div class="marquee-track">
-        <span>Artist lists</span><span>Tour managers</span><span>Promoters</span><span>Industry</span><span>Media</span><span>Crew</span><span>Walk-ups</span><span>★ VIP alerts</span><span>Plus-ones</span><span>Re-entry</span><span>Cutoffs</span><span>Allocations</span><span>CSV export</span><span>Live sync</span>
-        <span>Artist lists</span><span>Tour managers</span><span>Promoters</span><span>Industry</span><span>Media</span><span>Crew</span><span>Walk-ups</span><span>★ VIP alerts</span><span>Plus-ones</span><span>Re-entry</span><span>Cutoffs</span><span>Allocations</span><span>CSV export</span><span>Live sync</span>
+        <span>Artist lists</span><span>Tour managers</span><span>Promoters</span><span>Industry</span><span>Media</span><span>Crew</span><span>Walk-ups</span><span>★ VIP alerts</span><span>Plus-ones</span><span>Re-entry</span><span>Cutoffs</span><span>Allocations</span><span>Capacity counter</span><span>Manager overrides</span><span>CSV export</span><span>Live sync</span>
+        <span>Artist lists</span><span>Tour managers</span><span>Promoters</span><span>Industry</span><span>Media</span><span>Crew</span><span>Walk-ups</span><span>★ VIP alerts</span><span>Plus-ones</span><span>Re-entry</span><span>Cutoffs</span><span>Allocations</span><span>Capacity counter</span><span>Manager overrides</span><span>CSV export</span><span>Live sync</span>
       </div>
     </div>
 
@@ -121,6 +121,7 @@
           <li>Walk-ups added straight from the search</li>
           <li>Door notes pinned for the whole shift</li>
           <li>Gold highlight and an alert on every door for VIPs</li>
+          <li>Shared + / − capacity counter with a full-screen mode</li>
         </ul>
       </div>
       <div class="showcase-media duo reveal" data-delay="100">
@@ -204,8 +205,8 @@
       </div>
       <div class="feature reveal" data-delay="80">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
-        <h3>Live across every door</h3>
-        <p>Front door, side door, box office — every screen updates the second anyone taps.</p>
+        <h3>Shared capacity counter</h3>
+        <p>A digital clicker every door phone shares: tap + and −, set your capacity, and watch it go amber then red. Peak, in and out, all logged.</p>
       </div>
       <div class="feature reveal" data-delay="160">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/></svg>
@@ -219,8 +220,8 @@
       </div>
       <div class="feature reveal" data-delay="80">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z"/></svg>
-        <h3>Cutoffs &amp; allocations</h3>
-        <p>Contributor links lock at your cutoff and can’t go over their allocation. You can still override.</p>
+        <h3>Manager override PIN</h3>
+        <p>Staff can’t go over capacity or an allocation on their own — a manager PIN is needed, and every override is logged by name.</p>
       </div>
       <div class="feature reveal" data-delay="160">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>
@@ -249,6 +250,13 @@
           <label class="field"><span>Password</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
           <label class="field"><span>Type it again</span><input name="confirm" type="password" required minlength="8" autocomplete="new-password"></label>
         </div>
+        <div class="pin-box">
+          <div class="small"><strong>🔒 Manager override PIN</strong> <span class="muted">— managers only. Needed to go over capacity or a guest list limit.</span></div>
+          <div class="grid-2">
+            <label class="field"><span>Manager PIN</span><input name="managerPin" type="password" required minlength="4" autocomplete="off" inputmode="numeric"></label>
+            <label class="field"><span>Type it again</span><input name="pinConfirm" type="password" required minlength="4" autocomplete="off" inputmode="numeric"></label>
+          </div>
+        </div>
         <div class="grid-2">
           <label class="field"><span>Your name</span><input name="name" required maxlength="80" autocomplete="name"></label>
           <label class="field"><span>Phone <small class="muted">(optional)</small></span><input name="phone" maxlength="40" autocomplete="tel" inputmode="tel"></label>
@@ -268,6 +276,7 @@
       <details><summary>Do artists and promoters need to sign up?</summary><p>No. They get a private link for that show. They can add, edit and remove their own guests until your cutoff — and they only ever see their own list.</p></details>
       <details><summary>Does it replace our ticketing?</summary><p>No — it runs alongside it. It’s for the guest list: comps, artist and crew, industry, media and walk-ups.</p></details>
       <details><summary>What do door staff need?</summary><p>Any phone or tablet with a browser. Add it to the home screen and it opens like an app.</p></details>
+      <details><summary>Can staff go over capacity or a guest list limit?</summary><p>Not on their own. Each venue has a manager override PIN, set when the venue is created. Going over a limit — or changing one — asks for it, and every override is logged with the name on the phone.</p></details>
       <details><summary>Does it work without internet?</summary><p>Not yet — door phones need Wi-Fi or mobile data. If one phone drops out, the others keep working and it catches up when it reconnects.</p></details>
       <details><summary>Can we bring in our existing list?</summary><p>Yes. Paste straight from Excel, Google Sheets or an email — one name per line, with “+2” for plus-ones.</p></details>
     </section>

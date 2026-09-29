@@ -19,6 +19,7 @@ async function boot() {
   if (!session.authed) return toLogin();
   state.venueName = session.venue.name;
   state.venueSlug = session.venue.slug;
+  state.hasManagerPin = session.venue.hasManagerPin;
   document.title = `${session.venue.name} · Guest List`;
   await promptDeviceName();
   window.addEventListener('hashchange', route);
@@ -74,7 +75,7 @@ function live(eventId, onChange, onMessage) {
       return;
     }
     if (msg.type === 'hello') return;
-    if (onMessage) onMessage(msg);
+    if (onMessage && onMessage(msg) === true) return; // handled without a reload
     clearTimeout(timer);
     timer = setTimeout(onChange, 150);
   };
@@ -152,6 +153,9 @@ async function renderEvents(archived) {
       right: h('a', { class: 'icon-btn', href: '#/settings', title: 'Venue settings', 'aria-label': 'Settings' }, '⚙'),
     }),
     h('main', { class: 'page' },
+      state.hasManagerPin ? null : h('a', { class: 'pin-banner', href: '#/settings' },
+        h('strong', null, '🔒 Set a manager override PIN'),
+        h('span', null, ' — without one, staff can go over capacity and guest list limits with just a tap. Takes 10 seconds →')),
       h('div', { class: 'page-head' },
         h('h1', null, archived ? 'Archived events' : 'Events'),
         h('div', { class: 'row' },
@@ -197,15 +201,23 @@ function eventForm(existing) {
       field('Guest list cutoff', h('input', { name: 'cutoffAt', type: 'datetime-local', value: toLocalInput(e.cutoffAt) }), 'Contributor links lock after this.'),
       field('Guest list cap (heads)', h('input', { name: 'capacity', type: 'number', min: '1', value: e.capacity ?? '' }), 'Optional total across all lists.')
     ),
+    h('div', { class: 'grid-2' },
+      field('Venue capacity (door counter)', h('input', { name: 'venueCapacity', type: 'number', min: '1', value: e.venueCapacity ?? '', placeholder: 'e.g. 500' }), 'For the + / − counter in door mode.'),
+      h('label', { class: 'check check-top' }, h('input', { type: 'checkbox', name: 'countGuestlist', checked: !!e.countGuestlist }),
+        h('span', null, 'Guest list check-ins also add to the door count', h('small', { class: 'muted block' }, 'Leave off if someone’s clicking everyone through the door.')))
+    ),
     field('Notes for door staff', h('textarea', { name: 'notes', rows: '3', maxlength: '2000' }, e.notes || ''))
   );
   const submit = async (ev) => {
     if (ev) ev.preventDefault();
     if (!form.reportValidity()) return;
     const d = formData(form);
-    const body = { ...d, cutoffAt: fromLocalInput(d.cutoffAt), capacity: d.capacity || null };
+    const body = { ...d, cutoffAt: fromLocalInput(d.cutoffAt), capacity: d.capacity || null, venueCapacity: d.venueCapacity || null };
     try {
-      const saved = existing ? await api('PUT', `/api/events/${e.id}`, body) : await api('POST', '/api/events', body);
+      const saved = await withOverride((extra) => existing
+        ? api('PUT', `/api/events/${e.id}`, { ...body, ...extra })
+        : api('POST', '/api/events', body));
+      if (!saved) return;
       m.close();
       toast(existing ? 'Event saved' : 'Event created', 'ok');
       go(`#/event/${saved.id}/${existing ? 'settings' : 'contributors'}`);
@@ -416,6 +428,8 @@ async function renderEvent(id, tab) {
           h('dt', null, 'Doors'), h('dd', null, e.doorsTime || '—'),
           h('dt', null, 'Cutoff'), h('dd', null, e.cutoffAt ? fmtDateTime(e.cutoffAt) : 'None — contributors can add until you disable their link'),
           h('dt', null, 'Guest list cap'), h('dd', null, e.capacity ? `${e.capacity} heads` : 'None'),
+          h('dt', null, 'Venue capacity'), h('dd', null, e.venueCapacity ? `${e.venueCapacity} (door counter)` : 'Not set'),
+          h('dt', null, 'Door count'), h('dd', null, e.countGuestlist ? 'Clicker + guest list check-ins' : 'Clicker only'),
           h('dt', null, 'Door notes'), h('dd', null, e.notes || '—'),
           h('dt', null, 'Created'), h('dd', null, `${fmtDateTime(e.createdAt)} by ${e.createdBy}`)
         ),
@@ -443,7 +457,8 @@ async function renderEvent(id, tab) {
               const ok = await confirmDialog('Delete event?', `This permanently deletes “${e.name}”, all ${data.guests.length} guest entries, contributors and history. This can’t be undone.`, { confirmText: 'Delete forever', danger: true });
               if (!ok) return;
               try {
-                await api('DELETE', `/api/events/${id}`);
+                const done = await withOverride((extra) => api('DELETE', `/api/events/${id}`, extra));
+                if (!done) return;
                 toast('Event deleted', 'ok');
                 go('#/');
               } catch (err) {
@@ -539,7 +554,7 @@ function guestForm(data, g, onDone, { atDoor = false } = {}) {
     h('label', { class: 'check vip-check' }, h('input', { type: 'checkbox', name: 'vip', checked: g ? g.vip : false }), h('span', null, '★ VIP — highlight at the door and alert when they arrive'))
   );
 
-  const submit = async (ev, force = false) => {
+  const submit = async (ev) => {
     if (ev) ev.preventDefault();
     if (!form.reportValidity()) return;
     const d = formData(form);
@@ -551,20 +566,16 @@ function guestForm(data, g, onDone, { atDoor = false } = {}) {
       vip: d.vip,
       notes: d.notes,
       atDoor,
-      force,
     };
     try {
-      if (editing) await api('PUT', `/api/guests/${g.id}`, body);
-      else await api('POST', `/api/events/${data.event.id}/guests`, body);
+      const saved = await withOverride((extra) => editing
+        ? api('PUT', `/api/guests/${g.id}`, { ...body, ...extra })
+        : api('POST', `/api/events/${data.event.id}/guests`, { ...body, ...extra }));
+      if (!saved) return;
       m.close();
       toast(editing ? 'Guest saved' : `${body.name} added`, 'ok');
       onDone();
     } catch (err) {
-      if (err.status === 409 && /Allocation|full/.test(err.message)) {
-        const ok = await confirmDialog('Over the limit', `${err.message} Add anyway as venue override?`, { confirmText: 'Override & save' });
-        if (ok) return submit(null, true);
-        return;
-      }
       handleError(err);
     }
   };
@@ -593,11 +604,13 @@ function importForm(data, onDone) {
     if (ev) ev.preventDefault();
     const d = formData(form);
     try {
-      const r = await api('POST', `/api/events/${data.event.id}/guests/import`, {
+      const r = await withOverride((extra) => api('POST', `/api/events/${data.event.id}/guests/import`, {
         text: d.text,
         contributorId: d.contributorId ? Number(d.contributorId) : null,
         listType: d.listType,
-      });
+        ...extra,
+      }));
+      if (!r) return;
       m.close();
       toast(`Imported ${r.added} guest${r.added === 1 ? '' : 's'}`, 'ok');
       onDone();
@@ -644,7 +657,10 @@ function contributorForm(data, c, onDone) {
     const d = formData(form);
     const body = { ...d, allocation: d.allocation === '' ? null : Number(d.allocation) };
     try {
-      const saved = c ? await api('PUT', `/api/contributors/${c.id}`, body) : await api('POST', `/api/events/${data.event.id}/contributors`, body);
+      const saved = await withOverride((extra) => c
+        ? api('PUT', `/api/contributors/${c.id}`, { ...body, ...extra })
+        : api('POST', `/api/events/${data.event.id}/contributors`, body));
+      if (!saved) return;
       m.close();
       if (!c) {
         const link = `${location.origin}/c/${saved.token}`;
@@ -704,6 +720,9 @@ async function renderDoor(id) {
   let data;
   const ui = { search: '', filter: 'all' };
   const counters = h('div', { class: 'door-counters' });
+  const capBar = h('div');
+  // Shared clicker: taps show instantly, the server's number wins once no taps are in flight.
+  const cap = { server: null, shown: 0, pending: 0, full: null };
   const list = h('div', { class: 'door-list' });
   const header = h('div');
   const notesBar = h('div');
@@ -758,6 +777,11 @@ async function renderDoor(id) {
       right: h('span', { id: 'live-dot', class: 'live-dot', title: 'Live' }),
     }));
     put(notesBar, e.notes ? h('div', { class: 'door-notes' }, '📌 ', e.notes) : '');
+    if (!cap.pending) {
+      cap.server = e.headcount;
+      cap.shown = e.headcount.count;
+    }
+    drawCap();
     const s = data.stats;
     put(counters, 
       h('div', { class: 'counter counter-main' }, h('b', null, s.inside), h('span', null, 'inside')),
@@ -823,7 +847,8 @@ async function renderDoor(id) {
       if (!count) return;
     }
     try {
-      const updated = await api('POST', `/api/guests/${g.id}/${dir === 'in' ? 'checkin' : 'checkout'}`, { count });
+      const updated = await withOverride((extra) => api('POST', `/api/guests/${g.id}/${dir === 'in' ? 'checkin' : 'checkout'}`, { count, ...extra }));
+      if (!updated) return;
       Object.assign(g, updated);
       toast(`${dir === 'in' ? '✓ In' : '← Out'}: ${g.name}${count > 1 ? ` ×${count}` : ''}`, dir === 'in' ? 'ok' : 'info', 1800);
       if (dir === 'in' && ui.search) {
@@ -858,6 +883,174 @@ async function renderDoor(id) {
     });
   }
 
+  // ----- door counter -----
+
+  function capLevel(count, capacity) {
+    if (!capacity) return 'none';
+    const pct = count / capacity;
+    if (pct > 1) return 'over';
+    if (pct >= 0.95) return 'full';
+    if (pct >= 0.8) return 'warn';
+    return 'ok';
+  }
+
+  function capView(big) {
+    const hc = cap.server || { capacity: null, peak: 0, totalIn: 0, totalOut: 0 };
+    const count = cap.shown;
+    const capacity = hc.capacity;
+    const level = capLevel(count, capacity);
+    const pct = capacity ? Math.min(100, Math.round((count / capacity) * 100)) : 0;
+    const label = !capacity ? 'Door count'
+      : level === 'over' ? `OVER CAPACITY by ${count - capacity}`
+        : level === 'full' ? (count >= capacity ? 'AT CAPACITY' : `${capacity - count} left`)
+          : `${capacity - count} spaces left`;
+    return h('div', { class: `capbar lvl-${level}${big ? ' capbar-big' : ''}` },
+      h('button', { class: 'cap-btn cap-minus', 'aria-label': 'Count one out', onclick: () => tap(-1) }, '−'),
+      h('button', { class: 'cap-mid', onclick: () => capSheet(), title: 'Door count settings' },
+        h('div', { class: 'cap-num' }, h('b', null, String(count)), capacity ? h('span', null, ` / ${capacity}`) : null),
+        capacity ? h('div', { class: 'cap-track' }, h('div', { class: 'cap-fill', style: `width:${pct}%` })) : null,
+        h('div', { class: 'cap-label' }, capacity ? label : h('span', null, 'Door count · ', h('u', null, 'set capacity')))
+      ),
+      h('button', { class: 'cap-btn cap-plus', 'aria-label': 'Count one in', onclick: () => tap(1) }, '+')
+    );
+  }
+
+  function drawCap() {
+    put(capBar,
+      capView(false),
+      h('div', { class: 'cap-tools small muted' },
+        h('span', null, `Peak ${cap.server ? cap.server.peak : 0} · In ${cap.server ? cap.server.totalIn : 0} · Out ${cap.server ? cap.server.totalOut : 0}`),
+        h('span', { class: 'row' },
+          h('button', { class: 'linklike', onclick: () => capSheet() }, '⚙ Settings'),
+          h('button', { class: 'linklike', onclick: () => openClicker() }, '⤢ Full screen')
+        )
+      )
+    );
+    if (cap.full) put(cap.full.body, capView(true), fullStats());
+  }
+
+  function fullStats() {
+    const hc = cap.server || { peak: 0, totalIn: 0, totalOut: 0 };
+    return h('div', { class: 'clicker-stats' },
+      h('span', null, h('b', null, hc.peak), ' peak'),
+      h('span', null, h('b', null, hc.totalIn), ' in'),
+      h('span', null, h('b', null, hc.totalOut), ' out'),
+      h('span', null, h('b', null, data ? data.stats.inside : 0), ' guest list inside')
+    );
+  }
+
+  async function tap(delta) {
+    if (delta < 0 && cap.shown <= 0) return;
+    cap.pending += 1;
+    cap.shown = Math.max(0, cap.shown + delta);
+    drawCap();
+    if (navigator.vibrate) navigator.vibrate(delta > 0 ? 12 : [8, 40, 8]);
+    try {
+      const r = await withOverride((extra) => api('POST', `/api/events/${id}/count`, { delta, ...extra }));
+      if (r) cap.server = r;
+    } catch (err) {
+      handleError(err);
+    } finally {
+      cap.pending -= 1;
+      if (!cap.pending && cap.server) cap.shown = cap.server.count;
+      drawCap();
+    }
+  }
+
+  function openClicker() {
+    const body = h('div', { class: 'clicker-body' });
+    const shell = h('div', { class: 'clicker', role: 'dialog', 'aria-label': 'Door counter' },
+      h('div', { class: 'clicker-head' },
+        h('div', null, h('strong', null, data ? data.event.name : ''), h('div', { class: 'small muted' }, `Counting as ${currentName()}`)),
+        h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => closeClicker() }, '✕')
+      ),
+      body
+    );
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeClicker();
+      if (e.key === '+' || e.key === '=' || e.key === 'ArrowUp') tap(1);
+      if (e.key === '-' || e.key === 'ArrowDown') tap(-1);
+    };
+    document.addEventListener('keydown', onKey);
+    cap.full = { shell, body, onKey };
+    document.body.append(shell);
+    // Keep the screen awake while counting, where supported.
+    if (navigator.wakeLock) navigator.wakeLock.request('screen').then((l) => { if (cap.full) cap.full.lock = l; }).catch(() => {});
+    drawCap();
+  }
+
+  function closeClicker() {
+    if (!cap.full) return;
+    document.removeEventListener('keydown', cap.full.onKey);
+    if (cap.full.lock) cap.full.lock.release().catch(() => {});
+    cap.full.shell.remove();
+    cap.full = null;
+  }
+  state.cleanup.push(closeClicker);
+
+  function capSheet() {
+    const e = data.event;
+    const hc = cap.server || e.headcount;
+    const capInput = h('input', { type: 'number', min: '1', value: hc.capacity ?? '', placeholder: 'e.g. 500', inputmode: 'numeric' });
+    const countInput = h('input', { type: 'number', min: '0', value: String(cap.shown), inputmode: 'numeric' });
+    const gl = h('input', { type: 'checkbox', checked: !!e.countGuestlist });
+    const save = async (body, msg) => {
+      try {
+        const r = await withOverride((extra) => api('PUT', `/api/events/${id}`, { ...body, ...extra }));
+        if (!r) return false;
+        toast(msg, 'ok');
+        load();
+        return true;
+      } catch (err) {
+        handleError(err);
+        return false;
+      }
+    };
+    const setCount = async (count, resetStats) => {
+      try {
+        const r = await withOverride((extra) => api('PUT', `/api/events/${id}/count`, { count, resetStats, ...extra }));
+        if (!r) return;
+        cap.server = r;
+        cap.shown = r.count;
+        drawCap();
+        m.close();
+        toast(resetStats ? 'Counter reset' : `Count set to ${r.count}`, 'ok');
+      } catch (err) {
+        handleError(err);
+      }
+    };
+    const m = modal('Door count', h('div', { class: 'stack' },
+      h('div', { class: 'cap-stats' },
+        h('div', null, h('b', null, cap.shown), h('span', null, 'now')),
+        h('div', null, h('b', null, hc.peak), h('span', null, 'peak')),
+        h('div', null, h('b', null, hc.totalIn), h('span', null, 'in')),
+        h('div', null, h('b', null, hc.totalOut), h('span', null, 'out'))
+      ),
+      h('div', { class: 'card stack' },
+        field('Venue capacity', capInput, 'The + button asks for a manager override past this.'),
+        h('button', { class: 'btn btn-primary', onclick: async () => { if (await save({ venueCapacity: capInput.value || null }, 'Capacity saved')) m.close(); } }, 'Save capacity')
+      ),
+      h('label', { class: 'check' }, gl, h('span', null, 'Guest list check-ins also add to the door count')),
+      h('div', { class: 'card stack' },
+        field('Correct the count', countInput, 'e.g. after a manual head count.'),
+        h('div', { class: 'row wrap' },
+          h('button', { class: 'btn', onclick: () => setCount(Number(countInput.value) || 0, false) }, 'Set count'),
+          h('button', {
+            class: 'btn btn-ghost-danger',
+            onclick: async () => {
+              const ok = await confirmDialog('Reset the counter?', 'Sets the count to 0 and clears peak, in and out for this show.', { confirmText: 'Reset', danger: true });
+              if (ok) setCount(0, true);
+            },
+          }, 'Reset to 0')
+        )
+      ),
+      h('p', { class: 'small muted' }, 'Changes here may need the manager override PIN.')
+    ));
+    gl.addEventListener('change', async () => {
+      if (!(await save({ countGuestlist: gl.checked }, gl.checked ? 'Guest list check-ins now count' : 'Guest list check-ins no longer count'))) gl.checked = !gl.checked;
+    });
+  }
+
   function walkUp(name) {
     guestForm(data, null, load, { atDoor: true });
     setTimeout(() => {
@@ -867,9 +1060,16 @@ async function renderDoor(id) {
   }
 
   function onMessage(msg) {
+    if (msg.type === 'count') {
+      cap.server = msg.headcount;
+      if (!cap.pending) cap.shown = msg.headcount.count;
+      drawCap();
+      return true;
+    }
     if (msg.move === 'in' && msg.vip && msg.actor !== currentName()) {
       toast(`★ VIP arrived: ${msg.name} (checked in by ${msg.actor})`, 'vip', 6000);
     }
+    return false;
   }
 
   drawFilters();
@@ -877,6 +1077,8 @@ async function renderDoor(id) {
     header,
     h('main', { class: 'door' },
       notesBar,
+      capBar,
+      h('div', { class: 'door-section-label small muted' }, 'Guest list'),
       counters,
       h('div', { class: 'door-controls' },
         search,
@@ -929,6 +1131,32 @@ function renderSettings() {
     }
   });
 
+  const pinA = h('input', { type: 'password', required: true, minlength: '4', autocomplete: 'off', inputmode: 'numeric' });
+  const pinB = h('input', { type: 'password', required: true, minlength: '4', autocomplete: 'off', inputmode: 'numeric' });
+  const pinCur = h('input', { type: 'password', required: true, autocomplete: 'off', inputmode: 'numeric' });
+  const pinForm = h('form', { class: 'card stack pin-card' },
+    h('h3', null, '🔒 Manager override PIN'),
+    h('p', { class: 'muted' }, state.hasManagerPin
+      ? 'Needed to go over capacity or a guest list limit, and to change those limits. Managers only — don’t share it with staff.'
+      : 'Not set yet. Once set, staff need it to go over capacity or a guest list limit, and to change those limits.'),
+    state.hasManagerPin ? field('Current PIN', pinCur, 'Forgotten it? Riderly can send the manager a reset link.') : null,
+    field(state.hasManagerPin ? 'New PIN' : 'Choose a PIN', pinA, 'At least 4 characters. 6 digits is a good choice.'),
+    field('Type it again', pinB),
+    h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, state.hasManagerPin ? 'Change PIN' : 'Set PIN'))
+  );
+  pinForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (pinA.value !== pinB.value) return toast('PINs don’t match', 'error');
+    try {
+      const r = await api('PUT', '/api/settings', { newPin: pinA.value, currentPin: state.hasManagerPin ? pinCur.value : undefined });
+      state.hasManagerPin = r.venue.hasManagerPin;
+      toast('Manager PIN saved', 'ok');
+      renderSettings();
+    } catch (err) {
+      handleError(err);
+    }
+  });
+
   const staffLink = `${location.origin}/v/${state.venueSlug}`;
   const access = h('div', { class: 'card stack' },
     h('h3', null, 'Staff login'),
@@ -957,7 +1185,7 @@ function renderSettings() {
 
   put(app, 
     topbar({ back: '#/', title: 'Settings' }),
-    h('main', { class: 'page narrow-block stack' }, access, device, nameForm, pwForm)
+    h('main', { class: 'page narrow-block stack' }, access, pinForm, device, nameForm, pwForm)
   );
 }
 

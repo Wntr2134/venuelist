@@ -61,9 +61,10 @@ function currentName() {
 }
 
 class ApiError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -83,7 +84,7 @@ async function api(method, url, body) {
   } catch {
     data = { error: text };
   }
-  if (!res.ok) throw new ApiError(res.status, (data && data.error) || `Request failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, (data && data.error) || `Request failed (${res.status})`, data && data.code);
   return data;
 }
 
@@ -260,4 +261,57 @@ function slugPreview(name) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
     .replace(/-+$/g, '');
+}
+
+// ---------- manager override ----------
+
+function askManagerPin(reason) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      m.close();
+      resolve(v);
+    };
+    const input = h('input', { type: 'password', autocomplete: 'off', maxlength: '100', placeholder: 'Manager PIN' });
+    const form = h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); if (input.value) finish(input.value); } },
+      h('div', { class: 'override-reason' }, '🔒 ', reason),
+      h('p', { class: 'muted small' }, 'A manager needs to enter the override PIN. It’s logged against your name.'),
+      input
+    );
+    const m = modal('Manager override', form, {
+      actions: [
+        h('button', { class: 'btn', onclick: () => finish(null) }, 'Cancel'),
+        h('button', { class: 'btn btn-primary', onclick: () => input.value && finish(input.value) }, 'Override'),
+      ],
+      onClose: () => finish(null),
+    });
+  });
+}
+
+// Runs call(extra). If the server says a rule is being broken, asks for confirmation
+// (venue has no PIN yet) or the manager PIN, then retries. Returns null if cancelled.
+async function withOverride(call) {
+  try {
+    return await call({});
+  } catch (err) {
+    if (err.code === 'confirm') {
+      const ok = await confirmDialog('Go over the limit?', `${err.message} Continue anyway?`, { confirmText: 'Yes, continue' });
+      return ok ? call({ force: true }) : null;
+    }
+    if (err.code !== 'override') throw err;
+    let reason = err.message;
+    for (;;) {
+      const pin = await askManagerPin(reason);
+      if (pin === null) return null;
+      try {
+        return await call({ overridePin: pin });
+      } catch (e2) {
+        if (e2.code !== 'override') throw e2;
+        toast('Wrong manager PIN', 'error');
+        reason = e2.message.replace(/^Wrong manager PIN\. /, '');
+      }
+    }
+  }
 }

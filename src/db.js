@@ -90,6 +90,18 @@ CREATE TABLE IF NOT EXISTS activity (
 
 CREATE INDEX IF NOT EXISTS idx_activity_event ON activity(event_id, id);
 
+-- Door clicker: every tap of + / − (or a manual correction), for peak and history.
+CREATE TABLE IF NOT EXISTS headcount_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id    INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  delta       INTEGER NOT NULL,
+  count_after INTEGER NOT NULL,
+  source      TEXT NOT NULL,               -- 'clicker' | 'set' | 'guestlist'
+  actor       TEXT NOT NULL,
+  at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_headcount_event ON headcount_log(event_id, id);
+
 CREATE TABLE IF NOT EXISTS access_requests (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   venue_name    TEXT NOT NULL,
@@ -119,10 +131,30 @@ function migrate(db) {
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_events_venue ON events(venue_id)');
 
+  // Manager override PIN (hashed) — needed to break rules like capacity or allocations.
+  const venueCols = db.prepare('PRAGMA table_info(venues)').all().map((c) => c.name);
+  if (!venueCols.includes('manager_pin_hash')) db.exec('ALTER TABLE venues ADD COLUMN manager_pin_hash TEXT');
+  if (!venueCols.includes('pin_token_hash')) db.exec('ALTER TABLE venues ADD COLUMN pin_token_hash TEXT');
+  if (!venueCols.includes('pin_token_expires')) db.exec('ALTER TABLE venues ADD COLUMN pin_token_expires TEXT');
+
+  // Door capacity counter (shared clicker) per event.
+  const evCols = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
+  for (const [col, def] of [
+    ['venue_capacity', 'INTEGER'],
+    ['head_count', 'INTEGER NOT NULL DEFAULT 0'],
+    ['head_peak', 'INTEGER NOT NULL DEFAULT 0'],
+    ['head_in', 'INTEGER NOT NULL DEFAULT 0'],
+    ['head_out', 'INTEGER NOT NULL DEFAULT 0'],
+    ['count_guestlist', 'INTEGER NOT NULL DEFAULT 0'],
+  ]) {
+    if (!evCols.includes(col)) db.exec(`ALTER TABLE events ADD COLUMN ${col} ${def}`);
+  }
+
   // Sign-ups carry the username and password the venue chose, so approving them is one tap.
   const reqCols = db.prepare('PRAGMA table_info(access_requests)').all().map((c) => c.name);
   if (!reqCols.includes('slug')) db.exec('ALTER TABLE access_requests ADD COLUMN slug TEXT');
   if (!reqCols.includes('password_hash')) db.exec('ALTER TABLE access_requests ADD COLUMN password_hash TEXT');
+  if (!reqCols.includes('pin_hash')) db.exec('ALTER TABLE access_requests ADD COLUMN pin_hash TEXT');
 
   const legacyHash = getSetting(db, 'password_hash');
   const venueCount = db.prepare('SELECT COUNT(*) AS n FROM venues').get().n;

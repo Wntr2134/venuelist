@@ -11,9 +11,10 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Door'];
 
 class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    this.code = code; // e.g. 'override' → the client asks for the manager PIN
   }
 }
 
@@ -82,7 +83,36 @@ function eventOut(e) {
     archived: !!e.archived,
     createdAt: e.created_at,
     createdBy: e.created_by,
+    venueCapacity: e.venue_capacity ?? null,
+    countGuestlist: !!e.count_guestlist,
+    headcount: headcountOut(e),
   };
+}
+
+function headcountOut(e) {
+  return {
+    count: e.head_count || 0,
+    capacity: e.venue_capacity ?? null,
+    peak: e.head_peak || 0,
+    totalIn: e.head_in || 0,
+    totalOut: e.head_out || 0,
+  };
+}
+
+// Moves the shared door count by delta (never below 0) and logs it. Call inside a transaction.
+function bumpHeadcount(db, eventId, delta, source, actor) {
+  const e = db.prepare('SELECT head_count FROM events WHERE id = ?').get(eventId);
+  const after = Math.max(0, (e.head_count || 0) + delta);
+  const applied = after - (e.head_count || 0);
+  if (!applied) return 0;
+  db.prepare(
+    `UPDATE events SET head_count = ?, head_peak = MAX(head_peak, ?),
+       head_in = head_in + ?, head_out = head_out + ? WHERE id = ?`
+  ).run(after, after, Math.max(0, applied), Math.max(0, -applied), eventId);
+  db.prepare('INSERT INTO headcount_log (event_id, delta, count_after, source, actor, at) VALUES (?, ?, ?, ?, ?, ?)').run(
+    eventId, applied, after, source, actor, new Date().toISOString()
+  );
+  return applied;
 }
 
 function contributorOut(c) {
@@ -204,7 +234,7 @@ function checkAllocation(db, contributor, party, excludeGuestId) {
   const used = headsFor(db, contributor.id, excludeGuestId);
   if (used + party > contributor.allocation) {
     const left = Math.max(0, contributor.allocation - used);
-    throw new HttpError(409, `Allocation exceeded — ${left} spot${left === 1 ? '' : 's'} left of ${contributor.allocation}.`);
+    throw Object.assign(new HttpError(409, `Allocation exceeded — ${left} spot${left === 1 ? '' : 's'} left of ${contributor.allocation}.`), { rule: true });
   }
 }
 
@@ -212,7 +242,7 @@ function checkCapacity(db, event, party, excludeGuestId) {
   if (!event.capacity) return;
   const used = eventHeads(db, event.id, excludeGuestId);
   if (used + party > event.capacity) {
-    throw new HttpError(409, `Event guest list is full (${used}/${event.capacity} heads).`);
+    throw Object.assign(new HttpError(409, `Event guest list is full (${used}/${event.capacity} heads).`), { rule: true });
   }
 }
 
@@ -311,6 +341,7 @@ function serveStatic(req, res, pathname) {
   else if (/^\/setup\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'setup.html';
   else if (pathname === '/admin' || pathname === '/admin/') file = 'admin.html';
   else if (pathname === '/guide' || pathname === '/guide/') file = 'guide.html';
+  else if (/^\/pin\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'pin.html';
   else if (/^\/c\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'contributor.html';
   else file = pathname.replace(/^\/+/, '');
 
@@ -399,12 +430,18 @@ function createApp(db, options = {}) {
   }
 
   function venueOut(v) {
-    return { id: v.id, slug: v.slug, name: v.name };
+    return { id: v.id, slug: v.slug, name: v.name, hasManagerPin: !!v.manager_pin_hash };
   }
 
   function password(v, field = 'Password') {
     const p = str(v, field, { required: true, max: 200 });
     if (p.length < 8) throw new HttpError(400, 'Password must be at least 8 characters');
+    return p;
+  }
+
+  function managerPin(v, field = 'Manager override PIN') {
+    const p = str(v, field, { required: true, max: 100 });
+    if (p.length < 4) throw new HttpError(400, `${field} must be at least 4 characters`);
     return p;
   }
 
@@ -472,11 +509,11 @@ function createApp(db, options = {}) {
     );
   }
 
-  function createVenue({ name, slug, passwordHash }) {
+  function createVenue({ name, slug, passwordHash, pinHash }) {
     const t = now();
     const info = db
-      .prepare('INSERT INTO venues (slug, name, password_hash, created_at, setup_at) VALUES (?, ?, ?, ?, ?)')
-      .run(slug, name, passwordHash || null, t, passwordHash ? t : null);
+      .prepare('INSERT INTO venues (slug, name, password_hash, manager_pin_hash, created_at, setup_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(slug, name, passwordHash || null, pinHash || null, t, passwordHash ? t : null);
     return db.prepare('SELECT * FROM venues WHERE id = ?').get(Number(info.lastInsertRowid));
   }
 
@@ -492,6 +529,7 @@ function createApp(db, options = {}) {
     const email = str(body.email, 'Email', { required: true, max: 120 });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
     const hash = auth.hashPassword(password(body.password));
+    const pinHash = auth.hashPassword(managerPin(body.managerPin));
     if (usernameTaken(username)) throw new HttpError(409, `Username "${username}" is taken — try another.`);
     const pending = db.prepare("SELECT COUNT(*) AS n FROM access_requests WHERE status = 'new'").get().n;
     if (pending >= 200) throw new HttpError(503, 'We’re catching up on sign-ups — please try again later.');
@@ -502,11 +540,12 @@ function createApp(db, options = {}) {
     const message = str(body.message, 'Message', { max: 1000 }) || null;
     const autoApprove = getSetting(db, 'auto_approve') === '1';
     db.prepare(
-      `INSERT INTO access_requests (venue_name, contact_name, email, phone, message, slug, password_hash, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(venueName, contact, email, phone, message, username, autoApprove ? null : hash, autoApprove ? 'done' : 'new', now());
+      `INSERT INTO access_requests (venue_name, contact_name, email, phone, message, slug, password_hash, pin_hash, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(venueName, contact, email, phone, message, username, autoApprove ? null : hash, autoApprove ? null : pinHash,
+      autoApprove ? 'done' : 'new', now());
     if (!autoApprove) return { status: 'pending', username };
-    const v = createVenue({ name: venueName, slug: username, passwordHash: hash });
+    const v = createVenue({ name: venueName, slug: username, passwordHash: hash, pinHash });
     res.setHeader('Set-Cookie', auth.venueCookie(db, v, secureCookies));
     return { status: 'active', venue: venueOut(v) };
   }, { auth: 'public' });
@@ -549,27 +588,51 @@ function createApp(db, options = {}) {
 
   route('GET', /^\/api\/setup\/([A-Za-z0-9_-]+)$/, ({ params }) => {
     const v = venueBySetupToken(params[0]);
-    return { venue: venueOut(v), reset: !!v.password_hash };
+    return { venue: venueOut(v), reset: !!v.password_hash, needsPin: !v.manager_pin_hash };
   }, { auth: 'public' });
 
   route('POST', /^\/api\/setup\/([A-Za-z0-9_-]+)$/, ({ req, params, body, res }) => {
     limit(req);
     const v = venueBySetupToken(params[0]);
     const hash = auth.hashPassword(password(body.password));
+    // Whoever sets the venue up also sets the manager PIN, so staff can never claim it first.
+    const pinHash = v.manager_pin_hash || auth.hashPassword(managerPin(body.managerPin));
     const version = v.password_hash ? v.password_version + 1 : v.password_version; // a reset logs out old devices
     const t = now();
     db.prepare(
-      `UPDATE venues SET password_hash = ?, password_version = ?, setup_token_hash = NULL, setup_expires_at = NULL,
-         setup_at = COALESCE(setup_at, ?), last_login_at = ? WHERE id = ?`
-    ).run(hash, version, t, t, v.id);
+      `UPDATE venues SET password_hash = ?, password_version = ?, manager_pin_hash = ?, setup_token_hash = NULL,
+         setup_expires_at = NULL, setup_at = COALESCE(setup_at, ?), last_login_at = ? WHERE id = ?`
+    ).run(hash, version, pinHash, t, t, v.id);
     const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(v.id);
     res.setHeader('Set-Cookie', auth.venueCookie(db, fresh, secureCookies));
     return { ok: true, venue: venueOut(fresh) };
   }, { auth: 'public' });
 
+  // ----- manager PIN reset link (sent by the owner) -----
+
+  function venueByPinToken(token) {
+    const v = db.prepare('SELECT * FROM venues WHERE pin_token_hash = ?').get(sha256(token));
+    if (!v || !v.pin_token_expires || Date.parse(v.pin_token_expires) < Date.now()) {
+      throw new HttpError(404, 'This PIN reset link has expired or already been used. Ask Riderly for a new one.');
+    }
+    if (!v.active) throw new HttpError(403, 'This venue has been disabled.');
+    return v;
+  }
+
+  route('GET', /^\/api\/pin\/([A-Za-z0-9_-]+)$/, ({ params }) => ({ venue: venueOut(venueByPinToken(params[0])) }), { auth: 'public' });
+
+  route('POST', /^\/api\/pin\/([A-Za-z0-9_-]+)$/, ({ req, params, body }) => {
+    limit(req);
+    const v = venueByPinToken(params[0]);
+    db.prepare('UPDATE venues SET manager_pin_hash = ?, pin_token_hash = NULL, pin_token_expires = NULL WHERE id = ?').run(
+      auth.hashPassword(managerPin(body.pin)), v.id
+    );
+    return { ok: true, venue: venueOut(v) };
+  }, { auth: 'public' });
+
   // ----- venue settings -----
 
-  route('PUT', /^\/api\/settings$/, ({ venue, body, res }) => {
+  route('PUT', /^\/api\/settings$/, ({ venue, req, body, res }) => {
     if (body.venueName !== undefined) {
       db.prepare('UPDATE venues SET name = ? WHERE id = ?').run(str(body.venueName, 'Venue name', { max: 80, required: true }), venue.id);
     }
@@ -580,6 +643,18 @@ function createApp(db, options = {}) {
       db.prepare('UPDATE venues SET password_hash = ?, password_version = password_version + 1 WHERE id = ?').run(
         auth.hashPassword(password(body.newPassword, 'New password')), venue.id
       );
+    }
+    if (body.newPin !== undefined) {
+      if (venue.manager_pin_hash) {
+        const key = `pin:${venue.id}:${clientIp(req)}`;
+        if (loginLimiter.blocked(key)) throw new HttpError(429, 'Too many wrong PINs. Try again in a few minutes.');
+        if (!auth.verifyPassword(str(body.currentPin, 'Current PIN', { max: 100 }), venue.manager_pin_hash)) {
+          loginLimiter.fail(key);
+          throw new HttpError(401, 'Current manager PIN is wrong. Riderly can reset it if it’s forgotten.');
+        }
+      }
+      const pin = managerPin(body.newPin, 'Manager PIN');
+      db.prepare('UPDATE venues SET manager_pin_hash = ? WHERE id = ?').run(auth.hashPassword(pin), venue.id);
     }
     const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(venue.id);
     // Keep this device signed in; every other device must log in again after a password change.
@@ -664,6 +739,7 @@ function createApp(db, options = {}) {
       venues: rows.map((v) => ({
         ...venueOut(v),
         status: !v.active ? 'disabled' : v.password_hash ? 'active' : 'pending',
+        hasManagerPin: !!v.manager_pin_hash,
         setupLinkActive: !!v.setup_expires_at && Date.parse(v.setup_expires_at) > Date.now(),
         setupExpiresAt: v.setup_expires_at,
         createdAt: v.created_at,
@@ -697,6 +773,36 @@ function createApp(db, options = {}) {
     return { venue: venueOut(v), reset: !!v.password_hash, ...newSetupLink(v.id) };
   }, { auth: 'owner' });
 
+  // Owner sets a new staff password directly (e.g. over the phone). Logs out every device.
+  route('PUT', /^\/api\/owner\/venues\/(\d+)\/password$/, ({ params, body }) => {
+    const v = ownerVenue(params[0]);
+    const hash = auth.hashPassword(password(body.password, 'New password'));
+    db.prepare(
+      `UPDATE venues SET password_hash = ?, password_version = password_version + 1, setup_token_hash = NULL,
+         setup_expires_at = NULL, setup_at = COALESCE(setup_at, ?) WHERE id = ?`
+    ).run(hash, now(), v.id);
+    return { ok: true, venue: venueOut(ownerVenue(v.id)) };
+  }, { auth: 'owner' });
+
+  // Owner sets a new manager override PIN directly. Nobody is logged out.
+  route('PUT', /^\/api\/owner\/venues\/(\d+)\/pin$/, ({ params, body }) => {
+    const v = ownerVenue(params[0]);
+    db.prepare('UPDATE venues SET manager_pin_hash = ?, pin_token_hash = NULL, pin_token_expires = NULL WHERE id = ?').run(
+      auth.hashPassword(managerPin(body.pin, 'New PIN')), v.id
+    );
+    return { ok: true, venue: venueOut(ownerVenue(v.id)) };
+  }, { auth: 'owner' });
+
+  // Forgotten manager PIN: a one-time link (24 h) for the manager. The old PIN keeps
+  // working until the link is used, so the door is never without one.
+  route('POST', /^\/api\/owner\/venues\/(\d+)\/pin-link$/, ({ params }) => {
+    const v = ownerVenue(params[0]);
+    const token = crypto.randomBytes(24).toString('base64url');
+    const expires = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    db.prepare('UPDATE venues SET pin_token_hash = ?, pin_token_expires = ? WHERE id = ?').run(sha256(token), expires, v.id);
+    return { venue: venueOut(v), pinPath: `/pin/${token}`, expiresAt: expires };
+  }, { auth: 'owner' });
+
   route('PUT', /^\/api\/owner\/venues\/(\d+)$/, ({ params, body }) => {
     const v = ownerVenue(params[0]);
     const name = body.name !== undefined ? str(body.name, 'Venue name', { required: true, max: 80 }) : v.name;
@@ -717,7 +823,7 @@ function createApp(db, options = {}) {
   route('PUT', /^\/api\/owner\/requests\/(\d+)$/, ({ params, body }) => {
     const status = body.status === 'done' ? 'done' : 'new';
     const r = db.prepare('UPDATE access_requests SET status = ? WHERE id = ?').run(status, params[0]);
-    if (status === 'done') db.prepare('UPDATE access_requests SET password_hash = NULL WHERE id = ?').run(params[0]);
+    if (status === 'done') db.prepare('UPDATE access_requests SET password_hash = NULL, pin_hash = NULL WHERE id = ?').run(params[0]);
     if (!r.changes) throw new HttpError(404, 'Request not found');
     return { ok: true };
   }, { auth: 'owner' });
@@ -731,8 +837,8 @@ function createApp(db, options = {}) {
     let slug = r.slug;
     if (!slug || db.prepare('SELECT 1 FROM venues WHERE slug = ?').get(slug)) slug = uniqueSlug(db, slug || r.venue_name);
     const v = tx(db, () => {
-      const created = createVenue({ name: r.venue_name, slug, passwordHash: r.password_hash });
-      db.prepare("UPDATE access_requests SET status = 'done', password_hash = NULL WHERE id = ?").run(r.id);
+      const created = createVenue({ name: r.venue_name, slug, passwordHash: r.password_hash, pinHash: r.pin_hash });
+      db.prepare("UPDATE access_requests SET status = 'done', password_hash = NULL, pin_hash = NULL WHERE id = ?").run(r.id);
       return created;
     });
     const out = { venue: venueOut(v), request: { name: r.contact_name, email: r.email }, live: !!r.password_hash };
@@ -781,6 +887,46 @@ function createApp(db, options = {}) {
     return c;
   }
 
+  // ----- manager override -----
+  // Breaking a rule (over capacity, over an allocation) or changing one needs the venue's
+  // manager PIN. Before a venue has set a PIN: breaking a rule needs an explicit "are you
+  // sure" (force), and changing rules is allowed (soft).
+  function override(venue, req, body, reason, { eventId, actor, soft = false } = {}) {
+    if (!venue.manager_pin_hash) {
+      if (soft) return;
+      if (!body.force) throw new HttpError(409, reason, 'confirm');
+      if (eventId) log(db, { eventId, action: 'override', detail: `${reason} (confirmed — no manager PIN set)`, actor, via: 'venue' });
+      return;
+    }
+    const given = body.overridePin === undefined || body.overridePin === null ? '' : String(body.overridePin);
+    if (!given) throw new HttpError(403, reason, 'override');
+    const key = `pin:${venue.id}:${clientIp(req)}`;
+    if (loginLimiter.blocked(key)) throw new HttpError(429, 'Too many wrong PINs. Try again in a few minutes.');
+    if (!auth.verifyPassword(given.slice(0, 100), venue.manager_pin_hash)) {
+      loginLimiter.fail(key);
+      throw new HttpError(403, `Wrong manager PIN. ${reason}`, 'override');
+    }
+    if (eventId) log(db, { eventId, action: 'override', detail: reason, actor, via: 'manager PIN' });
+  }
+
+  // Runs a rule check; if it fails, the manager override decides.
+  function ruled(venue, req, body, ctx, check) {
+    try {
+      check();
+    } catch (err) {
+      if (!(err instanceof HttpError && err.rule)) throw err;
+      override(venue, req, body, err.message, ctx);
+    }
+  }
+
+  function checkVenueCapacity(e, adding) {
+    if (!e.venue_capacity || adding <= 0) return;
+    const after = (e.head_count || 0) + adding;
+    if (after > e.venue_capacity) {
+      throw Object.assign(new HttpError(409, `Over venue capacity: ${after} / ${e.venue_capacity}.`), { rule: true });
+    }
+  }
+
   // ----- events -----
 
   route('GET', /^\/api\/events$/, ({ venue, query }) => {
@@ -809,7 +955,7 @@ function createApp(db, options = {}) {
     const actor = actorFrom(req);
     const info = db
       .prepare(
-        'INSERT INTO events (venue_id, name, date, doors_time, capacity, cutoff_at, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO events (venue_id, name, date, doors_time, capacity, cutoff_at, notes, created_at, created_by, venue_capacity, count_guestlist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         venue.id,
@@ -820,7 +966,9 @@ function createApp(db, options = {}) {
         isoOrNull(body.cutoffAt, 'Cutoff'),
         str(body.notes, 'Notes', { max: 2000 }) || null,
         now(),
-        actor
+        actor,
+        int(body.venueCapacity, 'Venue capacity', { min: 1, max: 100000, nullable: true }),
+        body.countGuestlist ? 1 : 0
       );
     const id = Number(info.lastInsertRowid);
     log(db, { eventId: id, action: 'event.create', actor, via: 'venue' });
@@ -852,19 +1000,32 @@ function createApp(db, options = {}) {
       cutoff_at: body.cutoffAt !== undefined ? isoOrNull(body.cutoffAt, 'Cutoff') : e.cutoff_at,
       notes: body.notes !== undefined ? str(body.notes, 'Notes', { max: 2000 }) || null : e.notes,
       archived: body.archived !== undefined ? (body.archived ? 1 : 0) : e.archived,
+      venue_capacity: body.venueCapacity !== undefined
+        ? int(body.venueCapacity, 'Venue capacity', { min: 1, max: 100000, nullable: true })
+        : e.venue_capacity,
+      count_guestlist: body.countGuestlist !== undefined ? (body.countGuestlist ? 1 : 0) : e.count_guestlist,
     };
+    if (next.venue_capacity !== e.venue_capacity || next.capacity !== e.capacity || next.count_guestlist !== e.count_guestlist) {
+      override(venue, req, body, 'Changing capacity or guest list limits needs a manager.', { eventId: e.id, actor, soft: true });
+    }
     db.prepare(
-      'UPDATE events SET name = ?, date = ?, doors_time = ?, capacity = ?, cutoff_at = ?, notes = ?, archived = ? WHERE id = ?'
-    ).run(next.name, next.date, next.doors_time, next.capacity, next.cutoff_at, next.notes, next.archived, e.id);
+      `UPDATE events SET name = ?, date = ?, doors_time = ?, capacity = ?, cutoff_at = ?, notes = ?, archived = ?,
+         venue_capacity = ?, count_guestlist = ? WHERE id = ?`
+    ).run(next.name, next.date, next.doors_time, next.capacity, next.cutoff_at, next.notes, next.archived,
+      next.venue_capacity, next.count_guestlist, e.id);
+    if (next.venue_capacity !== e.venue_capacity) {
+      publish(e.id, 'count', { headcount: headcountOut(getEvent(db, e.id)), actor });
+    }
     const action = next.archived !== e.archived ? (next.archived ? 'event.archive' : 'event.unarchive') : 'event.update';
     log(db, { eventId: e.id, action, actor, via: 'venue' });
     publish(e.id, 'event');
     return eventOut(getEvent(db, e.id));
   });
 
-  route('DELETE', /^\/api\/events\/(\d+)$/, ({ venue, req, params }) => {
+  route('DELETE', /^\/api\/events\/(\d+)$/, ({ venue, req, params, body }) => {
     actorFrom(req);
     const e = evt(venue, params[0]);
+    override(venue, req, body, 'Deleting an event needs a manager.', { soft: true });
     db.prepare('DELETE FROM events WHERE id = ?').run(e.id);
     publish(e.id, 'deleted');
     return { ok: true };
@@ -929,6 +1090,50 @@ function createApp(db, options = {}) {
     return undefined;
   });
 
+  // ----- door capacity counter (shared clicker) -----
+
+  route('POST', /^\/api\/events\/(\d+)\/count$/, ({ venue, req, params, body }) => {
+    const actor = actorFrom(req);
+    const delta = int(body.delta, 'Delta', { min: -50, max: 50 });
+    const e = evt(venue, params[0]);
+    tx(db, () => {
+      ruled(venue, req, body, { eventId: e.id, actor }, () => checkVenueCapacity(getEvent(db, e.id), delta));
+      bumpHeadcount(db, e.id, delta, 'clicker', actor);
+    });
+    const headcount = headcountOut(getEvent(db, e.id));
+    publish(e.id, 'count', { headcount, actor });
+    return headcount;
+  });
+
+  // Manual correction ("we counted 312") or reset to 0.
+  route('PUT', /^\/api\/events\/(\d+)\/count$/, ({ venue, req, params, body }) => {
+    const actor = actorFrom(req);
+    const e = evt(venue, params[0]);
+    const target = int(body.count, 'Count', { min: 0, max: 100000 });
+    override(venue, req, body, 'Correcting or resetting the door count needs a manager.', { soft: true });
+    tx(db, () => {
+      const cur = getEvent(db, e.id).head_count || 0;
+      if (target === cur) return;
+      db.prepare('UPDATE events SET head_count = ?, head_peak = MAX(head_peak, ?) WHERE id = ?').run(target, target, e.id);
+      db.prepare('INSERT INTO headcount_log (event_id, delta, count_after, source, actor, at) VALUES (?, ?, ?, ?, ?, ?)').run(
+        e.id, target - cur, target, 'set', actor, now()
+      );
+      if (body.resetStats) db.prepare('UPDATE events SET head_peak = ?, head_in = 0, head_out = 0 WHERE id = ?').run(target, e.id);
+      log(db, { eventId: e.id, action: 'count.set', detail: `${cur} → ${target}`, actor, via: 'door' });
+    });
+    const headcount = headcountOut(getEvent(db, e.id));
+    publish(e.id, 'count', { headcount, actor });
+    return headcount;
+  });
+
+  route('GET', /^\/api\/events\/(\d+)\/count\/log$/, ({ venue, params }) => {
+    const e = evt(venue, params[0]);
+    return db
+      .prepare('SELECT delta, count_after, source, actor, at FROM headcount_log WHERE event_id = ? ORDER BY id DESC LIMIT 200')
+      .all(e.id)
+      .map((r) => ({ delta: r.delta, countAfter: r.count_after, source: r.source, actor: r.actor, at: r.at }));
+  });
+
   // ----- contributors (venue side) -----
 
   route('POST', /^\/api\/events\/(\d+)\/contributors$/, ({ venue, req, params, body }) => {
@@ -965,6 +1170,9 @@ function createApp(db, options = {}) {
       active: body.active !== undefined ? (body.active ? 1 : 0) : c.active,
       notes: body.notes !== undefined ? str(body.notes, 'Notes', { max: 500 }) || null : c.notes,
     };
+    if (next.allocation !== c.allocation) {
+      override(venue, req, body, `Changing ${c.name}’s allocation needs a manager.`, { eventId: c.event_id, actor, soft: true });
+    }
     db.prepare('UPDATE contributors SET name = ?, list_type = ?, allocation = ?, active = ?, notes = ? WHERE id = ?').run(
       next.name, next.list_type, next.allocation, next.active, next.notes, c.id
     );
@@ -1026,10 +1234,9 @@ function createApp(db, options = {}) {
     const data = guestInput(body, { listType: contributor?.list_type });
     const via = body.atDoor ? 'door' : 'venue';
     const g = tx(db, () => {
-      if (!body.force) {
-        checkCapacity(db, e, 1 + data.plusOnes, 0);
-        if (contributor) checkAllocation(db, contributor, 1 + data.plusOnes, 0);
-      }
+      const ctx = { eventId: e.id, actor };
+      ruled(venue, req, body, ctx, () => checkCapacity(db, e, 1 + data.plusOnes, 0));
+      if (contributor) ruled(venue, req, body, ctx, () => checkAllocation(db, contributor, 1 + data.plusOnes, 0));
       const g = insertGuest(e, contributor, data, actor, via);
       log(db, { eventId: e.id, guest: g, action: 'guest.add', detail: data.plusOnes ? `+${data.plusOnes}` : null, actor, via });
       return g;
@@ -1047,14 +1254,18 @@ function createApp(db, options = {}) {
     if (!rows.length) throw new HttpError(400, 'Nothing to import');
     if (rows.length > 2000) throw new HttpError(400, 'Too many rows (max 2000)');
     const lt = listType(body.listType, contributor?.list_type || 'Guest');
-    const added = tx(db, () =>
-      rows.map((r) => {
+    const heads = rows.reduce((n, r) => n + 1 + Math.min(50, Math.max(0, Number(r.plusOnes) || 0)), 0);
+    const added = tx(db, () => {
+      const ctx = { eventId: e.id, actor };
+      ruled(venue, req, body, ctx, () => checkCapacity(db, e, heads, 0));
+      if (contributor) ruled(venue, req, body, ctx, () => checkAllocation(db, contributor, heads, 0));
+      return rows.map((r) => {
         const data = guestInput({ ...r, listType: lt });
         const g = insertGuest(e, contributor, data, actor, 'venue');
         log(db, { eventId: e.id, guest: g, action: 'guest.add', detail: 'import', actor, via: 'venue' });
         return g;
-      })
-    );
+      });
+    });
     publish(e.id, 'guests', { actor });
     return { added: added.length };
   });
@@ -1083,10 +1294,9 @@ function createApp(db, options = {}) {
       throw new HttpError(409, `${g.admitted} of this party have already arrived — can't reduce below that.`);
     }
     tx(db, () => {
-      if (!body.force) {
-        checkCapacity(db, e, 1 + data.plusOnes, g.id);
-        if (contributor) checkAllocation(db, contributor, 1 + data.plusOnes, g.id);
-      }
+      const ctx = { eventId: e.id, actor };
+      ruled(venue, req, body, ctx, () => checkCapacity(db, e, 1 + data.plusOnes, g.id));
+      if (contributor) ruled(venue, req, body, ctx, () => checkAllocation(db, contributor, 1 + data.plusOnes, g.id));
       db.prepare(
         `UPDATE guests SET contributor_id = ?, name = ?, plus_ones = ?, list_type = ?, vip = ?, notes = ?,
            updated_at = ?, updated_by = ? WHERE id = ?`
@@ -1130,6 +1340,11 @@ function createApp(db, options = {}) {
       db.prepare(
         'UPDATE guests SET inside = ?, admitted = ?, first_in_at = COALESCE(first_in_at, ?), last_move_at = ?, updated_at = ?, updated_by = ? WHERE id = ?'
       ).run(inside, admitted, direction === 'in' ? t : null, t, t, actor, g.id);
+      const ev = getEvent(db, g.event_id);
+      if (ev.count_guestlist) {
+        if (direction === 'in') ruled(venue, req, body, { eventId: ev.id, actor }, () => checkVenueCapacity(ev, count));
+        bumpHeadcount(db, g.event_id, direction === 'in' ? count : -count, 'guestlist', actor);
+      }
       log(db, {
         eventId: g.event_id,
         guest: g,
@@ -1291,7 +1506,7 @@ function createApp(db, options = {}) {
       if (!(err instanceof HttpError)) console.error(err);
       if (res.headersSent) return res.end();
       const status = err instanceof HttpError ? err.status : 500;
-      send(res, status, { error: status === 500 ? 'Something went wrong' : err.message });
+      send(res, status, { error: status === 500 ? 'Something went wrong' : err.message, ...(err.code ? { code: err.code } : {}) });
     }
   }
 
