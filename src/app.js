@@ -953,25 +953,29 @@ function createApp(db, options = {}) {
 
   route('POST', /^\/api\/events$/, ({ venue, req, body }) => {
     const actor = actorFrom(req);
+    // Validate first, so a typo doesn't cost the manager a PIN entry.
+    const values = [
+      venue.id,
+      str(body.name, 'Event name', { required: true, max: 120 }),
+      dateStr(body.date),
+      timeStr(body.doorsTime),
+      int(body.capacity, 'Capacity', { min: 1, nullable: true }),
+      isoOrNull(body.cutoffAt, 'Cutoff'),
+      str(body.notes, 'Notes', { max: 2000 }) || null,
+      now(),
+      actor,
+      int(body.venueCapacity, 'Venue capacity', { min: 1, max: 100000, nullable: true }),
+      body.countGuestlist ? 1 : 0,
+    ];
+    // New shows need a manager's say-so once the venue has a PIN.
+    override(venue, req, body, 'Creating an event needs a manager.', { soft: true });
     const info = db
       .prepare(
         'INSERT INTO events (venue_id, name, date, doors_time, capacity, cutoff_at, notes, created_at, created_by, venue_capacity, count_guestlist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(
-        venue.id,
-        str(body.name, 'Event name', { required: true, max: 120 }),
-        dateStr(body.date),
-        timeStr(body.doorsTime),
-        int(body.capacity, 'Capacity', { min: 1, nullable: true }),
-        isoOrNull(body.cutoffAt, 'Cutoff'),
-        str(body.notes, 'Notes', { max: 2000 }) || null,
-        now(),
-        actor,
-        int(body.venueCapacity, 'Venue capacity', { min: 1, max: 100000, nullable: true }),
-        body.countGuestlist ? 1 : 0
-      );
+      .run(...values);
     const id = Number(info.lastInsertRowid);
-    log(db, { eventId: id, action: 'event.create', actor, via: 'venue' });
+    log(db, { eventId: id, action: 'event.create', detail: venue.manager_pin_hash ? 'authorised with manager PIN' : null, actor, via: 'venue' });
     return eventOut(getEvent(db, id));
   });
 

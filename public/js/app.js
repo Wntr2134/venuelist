@@ -216,7 +216,7 @@ function eventForm(existing) {
     try {
       const saved = await withOverride((extra) => existing
         ? api('PUT', `/api/events/${e.id}`, { ...body, ...extra })
-        : api('POST', '/api/events', body));
+        : api('POST', '/api/events', { ...body, ...extra }));
       if (!saved) return;
       m.close();
       toast(existing ? 'Event saved' : 'Event created', 'ok');
@@ -511,7 +511,7 @@ function describe(a) {
     case 'contributor.update': return `updated contributor ${a.detail}`;
     case 'contributor.relink': return `issued a new link for ${a.detail}`;
     case 'contributor.delete': return `deleted contributor ${a.detail}`;
-    case 'event.create': return 'created the event';
+    case 'event.create': return a.detail ? `created the event (${a.detail})` : 'created the event';
     case 'event.update': return 'updated event details';
     case 'event.archive': return 'archived the event';
     case 'event.unarchive': return 'restored the event';

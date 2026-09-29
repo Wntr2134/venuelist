@@ -159,7 +159,7 @@ test('venues are isolated from each other', async () => {
   const a = await onboard('Isolation A');
   const b = await onboard('Isolation B');
 
-  const ev = (await a.c.call('POST', '/api/events', { name: 'A show', date: '2026-10-10' })).data;
+  const ev = (await a.c.call('POST', '/api/events', { name: 'A show', date: '2026-10-10', overridePin: '2468' })).data;
   const contrib = (await a.c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'A promoter' })).data;
   const guest = (await a.c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Secret Guest' })).data;
 
@@ -188,7 +188,7 @@ test('venues are isolated from each other', async () => {
   }
 
   // B can't attach A's contributor to its own event either.
-  const bEv = (await b.c.call('POST', '/api/events', { name: 'B show', date: '2026-10-10' })).data;
+  const bEv = (await b.c.call('POST', '/api/events', { name: 'B show', date: '2026-10-10', overridePin: '2468' })).data;
   const r = await b.c.call('POST', `/api/events/${bEv.id}/guests`, { name: 'X', contributorId: contrib.id });
   assert.equal(r.status, 404);
 
@@ -200,7 +200,7 @@ test('venues are isolated from each other', async () => {
 
 test('full flow: contributor link, allocations, door check in/out, attribution', async () => {
   const { c } = await onboard('Flow Hall');
-  let r = await c.call('POST', '/api/events', { name: 'Big Band', date: '2026-10-10', doorsTime: '19:30' }, { actor: 'Will' });
+  let r = await c.call('POST', '/api/events', { name: 'Big Band', date: '2026-10-10', doorsTime: '19:30', overridePin: '2468' }, { actor: 'Will' });
   const eventId = r.data.id;
   assert.equal(r.data.createdBy, 'Will');
 
@@ -269,11 +269,11 @@ test('full flow: contributor link, allocations, door check in/out, attribution',
 
 test('cutoff, guest-list cap, paste import, CSV formula guard', async () => {
   const { c } = await onboard('Rules Hall');
-  let r = await c.call('POST', '/api/events', { name: 'Past cutoff', date: '2026-10-11', cutoffAt: new Date(Date.now() - 60000).toISOString() });
+  let r = await c.call('POST', '/api/events', { name: 'Past cutoff', date: '2026-10-11', cutoffAt: new Date(Date.now() - 60000).toISOString(), overridePin: '2468' });
   const token = (await c.call('POST', `/api/events/${r.data.id}/contributors`, { name: 'Promoter' })).data.token;
   assert.match((await client().call('GET', `/api/c/${token}`)).data.locked, /cutoff/);
 
-  r = await c.call('POST', '/api/events', { name: 'Small', date: '2026-10-12', capacity: 2 });
+  r = await c.call('POST', '/api/events', { name: 'Small', date: '2026-10-12', capacity: 2, overridePin: '2468' });
   assert.equal((await c.call('POST', `/api/events/${r.data.id}/guests`, { name: 'A', plusOnes: 1 })).status, 200);
   assert.equal((await c.call('POST', `/api/events/${r.data.id}/guests`, { name: 'B' })).data.code, 'override');
 
@@ -282,7 +282,7 @@ test('cutoff, guest-list cap, paste import, CSV formula guard', async () => {
     { name: 'Alex', plusOnes: 1, notes: 'photographer' },
     { name: 'Sam Lee', plusOnes: 0, notes: 'bring ID' },
   ]);
-  r = await c.call('POST', '/api/events', { name: 'Import', date: '2026-10-13' });
+  r = await c.call('POST', '/api/events', { name: 'Import', date: '2026-10-13', overridePin: '2468' });
   assert.equal((await c.call('POST', `/api/events/${r.data.id}/guests/import`, { text: 'A +1\nB\nC, 2', listType: 'Media' })).data.added, 3);
 
   await c.call('POST', `/api/events/${r.data.id}/guests`, { name: '=HYPERLINK("x")' });
@@ -323,7 +323,7 @@ test('owner reset link: old password works until used, then all devices are logg
 
 test('disabling a venue locks staff and contributor links; enabling restores', async () => {
   const { c, venue } = await onboard('Disable Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-10-20' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-10-20', overridePin: '2468' })).data;
   const token = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'TM' })).data.token;
 
   await owner.call('PUT', `/api/owner/venues/${venue.id}`, { active: false });
@@ -338,7 +338,7 @@ test('disabling a venue locks staff and contributor links; enabling restores', a
 
 test('deleting a venue needs its ID typed and removes all its data', async () => {
   const { c, venue } = await onboard('Delete Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-10-20' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-10-20', overridePin: '2468' })).data;
   const token = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'TM' })).data.token;
   await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Gone Soon' });
 
@@ -422,7 +422,7 @@ test('owner can choose a username when adding a venue', async () => {
 
 test('door counter: shared +/−, never below zero, peak and totals', async () => {
   const { c } = await onboard('Counter Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Gig', date: '2026-10-30', venueCapacity: 3 })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Gig', date: '2026-10-30', venueCapacity: 3, overridePin: '2468' })).data;
   assert.equal(ev.headcount.capacity, 3);
   let r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1 }, { actor: 'Sam' });
   r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 2 }, { actor: 'Alex' });
@@ -507,7 +507,7 @@ test('manager override: confirm before a PIN exists, PIN required after', async 
 
 test('guest list check-ins count toward capacity only when switched on', async () => {
   const { c } = await onboard('Combined Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-11-01', venueCapacity: 2 })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-11-01', venueCapacity: 2, overridePin: '2468' })).data;
   const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Pat', plusOnes: 2 })).data;
   let r = await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 1 });
   assert.equal((await c.call('GET', `/api/events/${ev.id}`)).data.event.headcount.count, 0, 'off by default');
@@ -534,7 +534,7 @@ test('owner can set a new password or PIN directly — separately', async () => 
   // PIN reset: nobody logged out, new PIN works.
   assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/pin`, { pin: '8642' })).status, 200);
   assert.equal((await staff.call('GET', '/api/events')).status, 200, 'PIN reset logs nobody out');
-  const ev = (await staff.call('POST', '/api/events', { name: 'X', date: '2026-11-02' })).data;
+  const ev = (await staff.call('POST', '/api/events', { name: 'X', date: '2026-11-02', overridePin: '8642' })).data;
   assert.equal((await staff.call('PUT', `/api/events/${ev.id}/count`, { count: 3, overridePin: '1111' })).status, 403);
   assert.equal((await staff.call('PUT', `/api/events/${ev.id}/count`, { count: 3, overridePin: '8642' })).status, 200);
 
@@ -545,6 +545,25 @@ test('owner can set a new password or PIN directly — separately', async () => 
   const again = client();
   assert.equal((await again.call('POST', '/api/login', { username: 'direct-hall', password: 'newpass456' })).status, 200);
   assert.equal((await again.call('PUT', `/api/events/${ev.id}/count`, { count: 4, overridePin: '8642' })).status, 200, 'PIN survives a password reset');
+});
+
+test('creating an event needs the manager PIN once the venue has one', async () => {
+  const { c, venue } = await onboard('Create Hall', 'venuepass1', '5151');
+  let r = await c.call('POST', '/api/events', { name: 'Unapproved', date: '2026-11-05' });
+  assert.equal(r.status, 403);
+  assert.equal(r.data.code, 'override');
+  assert.equal((await c.call('POST', '/api/events', { name: 'Bad', date: '2026-11-05', overridePin: '0000' })).status, 403);
+  r = await c.call('POST', '/api/events', { name: '', date: '2026-11-05' });
+  assert.equal(r.status, 400, 'bad input is rejected before asking for the PIN');
+  r = await c.call('POST', '/api/events', { name: 'Approved', date: '2026-11-05', overridePin: '5151' }, { actor: 'Sam' });
+  assert.equal(r.status, 200);
+  const act = (await c.call('GET', `/api/events/${r.data.id}/activity`)).data;
+  assert.ok(act.some((a) => a.action === 'event.create' && a.actor === 'Sam' && a.detail === 'authorised with manager PIN'));
+  assert.equal((await c.call('GET', '/api/events')).data.length, 1, 'only the approved event exists');
+
+  // A venue that hasn't set a PIN yet can still create events.
+  appDb.prepare('UPDATE venues SET manager_pin_hash = NULL WHERE id = ?').run(venue.id);
+  assert.equal((await c.call('POST', '/api/events', { name: 'No PIN yet', date: '2026-11-06' })).status, 200);
 });
 
 test('/health answers ok without login and leaks nothing', async () => {

@@ -33,7 +33,7 @@ async function main() {
   };
 
   // ----- demo venue (all names fictional) -----
-  await call('POST', '/api/signup', { venueName: 'The Velvet Room', username: 'velvet-room', name: 'Demo', email: 'demo@example.com', password: 'demo-password' });
+  await call('POST', '/api/signup', { venueName: 'The Velvet Room', username: 'velvet-room', name: 'Demo', email: 'demo@example.com', password: 'demo-password', managerPin: '975310' });
   await call('POST', '/api/owner/setup', { password: 'owner-password' }).catch(() => {});
   // Approve via the owner session in a separate jar.
   let ownerCookie = '';
@@ -44,11 +44,12 @@ async function main() {
   await call('POST', '/api/login', { username: 'velvet-room', password: 'demo-password' });
 
   const ev = await call('POST', '/api/events', {
+    overridePin: '975310',
     name: 'Midnight Arcade — Album Launch', date: iso(0), doorsTime: '19:30',
     notes: 'Artist entry via the laneway door. Photo passes at merch. Wristbands: gold = all areas.',
   });
   for (const [name, date] of [['Low Tide + Paper Moons', iso(2)], ['Sunday Soul Sessions', iso(4)], ['The Hollow Pines (Sold Out)', iso(8)], ['Club Night: HYPERSONIC', iso(10)]]) {
-    const e = await call('POST', '/api/events', { name, date, doorsTime: '20:00' });
+    const e = await call('POST', '/api/events', { name, date, doorsTime: '20:00', overridePin: '975310' });
     await call('POST', `/api/events/${e.id}/contributors`, { name: 'Headliner — TM', listType: 'Artist', allocation: 12 });
     await call('POST', `/api/events/${e.id}/guests/import`, { text: 'Rory Quinn +1\nMaya Chen\nLeo Barros +2\nAsha Patel' });
   }
