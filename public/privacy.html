@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0d12">
+  <meta name="description" content="How Riderly Guest List handles guest, contributor and venue information.">
+  <link rel="canonical" href="https://guestlist.riderly.com.au/privacy">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="/css/styles.css">
+  <title>Privacy · Riderly Guest List</title>
+</head>
+<body class="landing guide-page">
+  <header class="landing-nav">
+    <a class="brand" href="/"><span class="logo">★</span><strong>Riderly Guest List</strong></a>
+    <nav class="nav-links">
+      <a href="/" class="hide-sm">Home</a>
+      <a class="btn btn-small" href="/login">Log in</a>
+    </nav>
+  </header>
+
+  <main class="legal">
+    <article class="guide-body">
+      <h1>Privacy policy</h1>
+      <p class="lede">What Riderly Guest List stores, why, where it lives and how long it’s kept. Written in plain English.</p>
+      <p class="draft-note small">Draft, last updated 29 September 2026. This policy is being reviewed and may change. We’ll tell venues about any changes that matter.</p>
+
+      <section>
+        <h2>Who we are</h2>
+        <p>Riderly Guest List (“Riderly”, “we”) is a guest list and door tool for live music venues, run from Melbourne, Victoria. We aim to handle personal information in line with the Australian Privacy Principles in the <i>Privacy Act 1988</i> (Cth).</p>
+        <p><b>If you’re a guest:</b> the venue decides who goes on its list and what’s written about them. Riderly stores that list on the venue’s behalf. For questions about your details, contact the venue first. They can see, correct and delete them. You can also contact us (see the end of this page).</p>
+      </section>
+
+      <section>
+        <h2>What we store</h2>
+        <table class="guide-table">
+          <thead><tr><th>Who</th><th>What</th></tr></thead>
+          <tbody>
+            <tr><td>Guests</td><td>Name, number of +1s, list type (e.g. Guest, Artist, Media), VIP flag, any note the venue or contributor adds, who added them, and door check-in and check-out times.</td></tr>
+            <tr><td>Contributors</td><td>The name the venue gives them (e.g. an artist or promoter), their allocation and any note.</td></tr>
+            <tr><td>Venue staff</td><td>The name typed on each phone or laptop, and a log of what was done under that name (added a guest, checked someone in, used a manager code).</td></tr>
+            <tr><td>Venues</td><td>Venue name, username, contact name, email, phone (optional) and the message sent with the sign-up. Passwords and manager codes are stored only as one-way hashes. We can’t read them.</td></tr>
+          </tbody>
+        </table>
+        <p>We don’t ask guests for email addresses, phone numbers, dates of birth or ID. Please don’t put sensitive information (health, ID numbers and so on) in notes.</p>
+      </section>
+
+      <section>
+        <h2>Why we use it</h2>
+        <ul>
+          <li>To run the venue’s guest list and door: who’s on the list, who has arrived, how many people are inside.</li>
+          <li>To show the venue who did what, so mistakes can be traced and fixed.</li>
+          <li>To run venue accounts: logins, password resets and service emails (for example “your venue is live” or a night report the venue asks for).</li>
+          <li>To keep the service secure: stopping password guessing and keeping backups.</li>
+        </ul>
+        <p>We don’t sell personal information, use it for advertising, or share guest lists between venues. Each venue sees only its own data.</p>
+      </section>
+
+      <section>
+        <h2>Cookies and storage on your device</h2>
+        <p>We use only what’s needed to make the app work. There’s no analytics, advertising or tracking from third parties.</p>
+        <ul>
+          <li><b>Login cookies</b> keep a venue, venue admin or Riderly admin signed in. They are signed, can’t be read by scripts on the page, and expire after 30 days.</li>
+          <li><b>On the phone itself</b> (browser storage): the name typed on that device, a random device ID used to limit wrong password attempts, and door taps waiting to sync while offline. The door app also keeps a copy of the current show on the phone so it keeps working if the venue Wi-Fi drops. Logging out deletes that copy.</li>
+          <li>Contributor links need no login or cookie. The private link itself is the key, so treat it like a password.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Where it’s stored, and who else is involved</h2>
+        <ul>
+          <li><b>Hosting:</b> the app and its database run on a private cloud server rented from DigitalOcean, LLC. Guest lists are only reachable through a venue login or that contributor’s own link. Nothing is published or listed publicly.</li>
+          <li><b>Backups:</b> a copy of the database is saved every night on the same server and kept for 30 days. An encrypted copy is also stored in a private DigitalOcean Spaces storage bucket in Sydney. It can’t be opened without a passphrase that only Riderly holds.</li>
+          <li><b>Email:</b> service emails are sent through Google’s Gmail. They go to venue contacts and Riderly only, never to guests. A night report contains totals, contributor names and staff names, not the full guest list.</li>
+        </ul>
+        <p>DigitalOcean and Google are US companies, so some information may be handled by their systems outside Australia. We use them because of their security practices, and we send them only what the service needs.</p>
+      </section>
+
+      <section>
+        <h2>How long we keep it</h2>
+        <ul>
+          <li><b>Guest details</b> stay until the venue deletes them, deletes the show, or its automatic clean-up runs. A venue can set “keep guest details for X days” in its venue admin page. After that, names and notes are removed and only totals remain (how many were on the list, how many came).</li>
+          <li><b>Backups</b> roll over. Copies on the server are deleted after 30 days. Off-site copies are overwritten each week (one per weekday) and each year (one per month). So a deleted name can remain in a backup for up to 12 months, encrypted and unused unless we need to restore after a failure.</li>
+          <li><b>Venue accounts</b> are kept while the venue uses the service. When a venue is deleted, its shows, guests and activity are deleted with it, apart from the rolling backups above.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Security</h2>
+        <p>All traffic is encrypted (HTTPS). Passwords are hashed with scrypt. Repeated wrong passwords are locked out. Actions that matter (going over capacity, deleting shows, removing guests who have arrived) need a named manager code, and every use is logged. No system is perfect. If there is a data breach likely to cause serious harm, we will tell the affected venues and, where required, the Office of the Australian Information Commissioner (OAIC) and affected people.</p>
+      </section>
+
+      <section>
+        <h2>Your choices</h2>
+        <ul>
+          <li><b>Guests</b> can ask the venue to correct or remove their details at any time, or ask us and we will pass the request on or act on it.</li>
+          <li><b>Venues</b> can export a show’s list as a spreadsheet, edit or delete any guest, set a retention period, and ask us to delete their whole account.</li>
+          <li>If you’re unhappy with how we’ve handled your information, contact us first. If it isn’t resolved, you can complain to the <a href="https://www.oaic.gov.au/privacy/privacy-complaints" rel="noopener">OAIC</a>.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Contact</h2>
+        <p data-contact>Contact Riderly through the venue sign-up on the <a href="/#signup">home page</a>, or ask your venue to pass your request on.</p>
+      </section>
+
+      <p class="muted small guide-foot"><a href="/terms">Terms of use</a> · <a href="/guide">Guide</a> · <a href="/">Home</a></p>
+    </article>
+  </main>
+  <script src="/js/legal.js"></script>
+</body>
+</html>

@@ -137,7 +137,7 @@ Email turns on sign-up alerts, "you're live" emails to venues, and "Forgot passw
 
 ## Off-site backups (DigitalOcean Spaces)
 
-Every night the app encrypts a copy of the database (AES-256, with a passphrase only you know) and uploads it to a private Space in Sydney. It keeps one copy per weekday (`daily-mon.vlb` and so on, overwritten each week) plus one per month (`monthly-2026-10.vlb`). If an upload fails, it retries every hour and emails you (when email is set up). The Backups card in /admin shows the last good copy.
+Every night the app encrypts a copy of the database (AES-256, with a passphrase only you know) and uploads it to a private Space in Sydney. It keeps one copy per weekday (`daily-mon.vlb` and so on, overwritten each week) plus one per month (`monthly-10.vlb` for October, overwritten the next October). So nothing off-site is older than a year. If an upload fails, it retries every hour and emails you (when email is set up). The Backups card in /admin shows the last good copy.
 
 1. DigitalOcean → **Spaces Object Storage** → **Create a Space**. Region **Sydney (SYD1)**, name `riderly-backups`, **File listing: Restricted**. (Spaces is about US$5 a month.)
 2. DigitalOcean → **Spaces Object Storage** → **Access Keys** → **Create Access Key**. Choose **Limited access**, pick `riderly-backups`, **Read/Write/Delete**. Copy the Access Key and the Secret (the secret is shown only once).

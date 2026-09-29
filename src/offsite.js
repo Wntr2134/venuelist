@@ -109,13 +109,14 @@ function putObject(cfg, objectKey, body) {
   });
 }
 
-// Uploads an encrypted copy of a local snapshot, rotating by weekday plus one per month.
+// Uploads an encrypted copy of a local snapshot. Rotation keeps nothing older than a year:
+// daily-<weekday> is overwritten each week, monthly-<01..12> (taken on the 1st) each year.
 async function uploadBackup(cfg, file, at = new Date()) {
   const body = encrypt(fs.readFileSync(file), cfg.passphrase);
   const day = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][at.getUTCDay()];
   const prefix = cfg.prefix.replace(/^\/+/, '');
   const keys = [`${prefix}daily-${day}.vlb`];
-  if (at.getUTCDate() === 1) keys.push(`${prefix}monthly-${at.toISOString().slice(0, 7)}.vlb`);
+  if (at.getUTCDate() === 1) keys.push(`${prefix}monthly-${at.toISOString().slice(5, 7)}.vlb`);
   for (const k of keys) await putObject(cfg, k, body);
   return { keys, bytes: body.length };
 }

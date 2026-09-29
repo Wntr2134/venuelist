@@ -630,7 +630,11 @@ test('wrong attempts lock out one phone, not the whole venue Wi-Fi', async () =>
 test('only the public pages are indexable; robots.txt and sitemap', async () => {
   const home = await fetch(`${base}/`);
   assert.equal(home.headers.get('x-robots-tag'), null);
-  assert.equal((await fetch(`${base}/guide`)).headers.get('x-robots-tag'), null);
+  for (const p of ['/guide', '/privacy', '/terms']) {
+    const r = await fetch(base + p);
+    assert.equal(r.status, 200, p);
+    assert.equal(r.headers.get('x-robots-tag'), null, p);
+  }
   for (const p of ['/app', '/admin', '/login', '/c/x', '/setup/x', '/v/x', '/v/x/admin', '/venue-admin/reset/x']) {
     assert.match((await fetch(base + p)).headers.get('x-robots-tag') || '', /noindex/, p);
   }
@@ -639,6 +643,8 @@ test('only the public pages are indexable; robots.txt and sitemap', async () => 
   assert.match(robots, /Sitemap: https:\/\/guestlist\.riderly\.com\.au\/sitemap\.xml/);
   const sitemap = await (await fetch(`${base}/sitemap.xml`)).text();
   assert.match(sitemap, /<loc>https:\/\/guestlist\.riderly\.com\.au\/guide<\/loc>/);
+  assert.match(sitemap, /<loc>https:\/\/guestlist\.riderly\.com\.au\/privacy<\/loc>/);
+  assert.match(robots, /Allow: \/terms/);
 });
 
 test('owner password can be recovered from the server', async () => {
@@ -1122,7 +1128,7 @@ test('Back up now saves locally, uploads an encrypted copy, and reports failures
   }
 });
 
-test('the monthly copy is added on the 1st', async () => {
+test('the monthly copy is added on the 1st and rotates yearly', async () => {
   const { uploadBackup } = require('../src/offsite');
   const urls = [];
   const s3 = require('node:http').createServer((req, res) => {
@@ -1136,8 +1142,8 @@ test('the monthly copy is added on the 1st', async () => {
   try {
     const cfg = { endpoint: `http://127.0.0.1:${s3.address().port}`, region: 'syd1', bucket: 'b', key: 'k', secret: 's', passphrase: 'p', prefix: 'guestlist/' };
     const r = await uploadBackup(cfg, file, new Date('2026-10-01T03:00:00Z'));
-    assert.deepEqual(r.keys, ['guestlist/daily-thu.vlb', 'guestlist/monthly-2026-10.vlb']);
-    assert.deepEqual(urls, ['/b/guestlist/daily-thu.vlb', '/b/guestlist/monthly-2026-10.vlb']);
+    assert.deepEqual(r.keys, ['guestlist/daily-thu.vlb', 'guestlist/monthly-10.vlb']);
+    assert.deepEqual(urls, ['/b/guestlist/daily-thu.vlb', '/b/guestlist/monthly-10.vlb']);
   } finally {
     s3.close();
     fs.rmSync(dir, { recursive: true, force: true });

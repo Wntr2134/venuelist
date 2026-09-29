@@ -487,6 +487,12 @@ section { scroll-margin-top: 20px; }
 
 /* ---------- guide ---------- */
 
+.legal { max-width: 800px; width: 100%; margin: 0 auto; padding: 16px 16px 48px; }
+.legal .guide-body { max-width: none; }
+.draft-note { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); color: var(--muted); }
+.foot-links { flex-wrap: wrap; }
+@media (max-width: 560px) { .landing-foot { flex-direction: column; gap: 10px; } }
+
 .guide { display: grid; grid-template-columns: 220px 1fr; gap: 36px; align-items: start; padding-top: 16px; }
 @media (max-width: 860px) { .guide { grid-template-columns: 1fr; gap: 16px; } }
 .toc { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 2px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }

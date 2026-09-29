@@ -336,7 +336,7 @@ const SECURITY_HEADERS = {
 };
 
 // Public marketing pages search engines may index; everything else stays out of Google.
-const INDEXABLE = new Set(['index.html', 'guide.html']);
+const INDEXABLE = new Set(['index.html', 'guide.html', 'privacy.html', 'terms.html']);
 const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://guestlist.riderly.com.au').replace(/\/+$/, '');
 
 function serveStatic(req, res, pathname) {
@@ -345,6 +345,8 @@ function serveStatic(req, res, pathname) {
       'User-agent: *',
       'Allow: /$',
       'Allow: /guide',
+      'Allow: /privacy',
+      'Allow: /terms',
       'Allow: /img/',
       'Allow: /css/',
       'Disallow: /',
@@ -357,6 +359,8 @@ function serveStatic(req, res, pathname) {
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>${PUBLIC_URL}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
   <url><loc>${PUBLIC_URL}/guide</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>${PUBLIC_URL}/privacy</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>${PUBLIC_URL}/terms</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
 </urlset>
 `;
     return send(res, 200, xml, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
@@ -370,6 +374,8 @@ function serveStatic(req, res, pathname) {
   else if (/^\/setup\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'setup.html';
   else if (pathname === '/admin' || pathname === '/admin/') file = 'admin.html';
   else if (pathname === '/guide' || pathname === '/guide/') file = 'guide.html';
+  else if (pathname === '/privacy' || pathname === '/privacy/') file = 'privacy.html';
+  else if (pathname === '/terms' || pathname === '/terms/') file = 'terms.html';
   else if (/^\/c\/[A-Za-z0-9_-]+\/?$/.test(pathname)) file = 'contributor.html';
   else file = pathname.replace(/^\/+/, '');
 
@@ -660,7 +666,7 @@ function createApp(db, options = {}) {
   }), { auth: 'public' });
 
   // Usernames are the venue's login and its staff link (/v/<username>).
-  const RESERVED = new Set(['admin', 'login', 'app', 'setup', 'guide', 'api', 'health', 'riderly', 'owner', 'venue']);
+  const RESERVED = new Set(['admin', 'login', 'app', 'setup', 'guide', 'api', 'health', 'riderly', 'owner', 'venue', 'privacy', 'terms']);
   function usernameFrom(v, { required = true } = {}) {
     const raw = str(v, 'Username', { required, max: 40 });
     if (!raw) return '';
