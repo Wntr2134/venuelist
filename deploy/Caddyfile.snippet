@@ -2,6 +2,10 @@
 # Only add this once `dig @ns1.nameserver.net.au +short guestlist.riderly.com.au A`
 # prints 134.199.157.198.
 guestlist.riderly.com.au {
+	# Every site on this droplet binds to the public IP only: Tailscale owns
+	# :443 on the tailnet IP, so a wildcard :443 bind fails with
+	# "address already in use" on reload.
+	bind 134.199.157.198
 	reverse_proxy 127.0.0.1:5070 {
 		transport http {
 			read_timeout 60s

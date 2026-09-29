@@ -74,6 +74,8 @@ cat /srv/guestlist/deploy/Caddyfile.snippet | sudo tee -a /etc/caddy/Caddyfile >
 sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
 ```
 
+The block includes `bind 134.199.157.198` like every other site on this droplet. Tailscale holds `:443` on the tailnet IP, so a block without `bind` makes the reload fail with `address already in use`.
+
 About `read_timeout 60s`: live door sync holds a connection open, but the app sends a keep-alive every 25 seconds, so it stays inside the timeout. Caddy passes the live stream through without buffering by default.
 
 ## 6. Check the new app and that the others still answer
