@@ -4,109 +4,177 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0d0d12">
-  <meta name="description" content="Guest lists and door check-in for live music venues. Artists and promoters add their own guests with a link; door staff check people in and out on any phone.">
+  <meta name="description" content="Riderly Guest List — guest lists and door check-in for live music venues. Artists and promoters add their own guests with a link; door staff check people in and out on any phone, live.">
+  <meta property="og:title" content="Riderly Guest List — the guest list, sorted before doors">
+  <meta property="og:description" content="Contributor links, live door check-in and VIP alerts for live music venues. No app, no staff accounts.">
+  <meta property="og:image" content="/img/app-guestlist.jpg">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="preload" as="image" href="/img/app-guestlist.jpg">
   <link rel="stylesheet" href="/css/styles.css">
-  <title>Riderly Guest List</title>
+  <title>Riderly Guest List — guest lists &amp; door check-in for live music venues</title>
 </head>
-<body class="landing">
-  <header class="landing-nav">
-    <a class="brand" href="/"><span class="logo">★</span><strong>Riderly Guest List</strong></a>
-    <nav class="nav-links">
-      <a href="#how" class="hide-sm">How it works</a>
-      <a href="/guide" class="hide-sm">Guide</a>
-      <a class="btn btn-small" href="/login" id="nav-login">Log in</a>
-      <a class="btn btn-small btn-primary" href="#signup">Sign up</a>
-    </nav>
+<body class="landing lp">
+  <div class="glow glow-a" aria-hidden="true"></div>
+  <div class="glow glow-b" aria-hidden="true"></div>
+
+  <header class="lp-nav">
+    <div class="lp-nav-inner">
+      <a class="brand" href="/"><span class="logo">★</span><strong>Riderly <span class="muted-strong">Guest List</span></strong></a>
+      <nav class="nav-links">
+        <a href="#features" class="hide-sm">Features</a>
+        <a href="#how" class="hide-sm">How it works</a>
+        <a href="/guide" class="hide-sm">Guide</a>
+        <a class="btn btn-small" href="/login" id="nav-login">Log in</a>
+        <a class="btn btn-small btn-primary" href="#signup">Sign up</a>
+      </nav>
+    </div>
   </header>
 
   <main>
-    <!-- ============ HERO ============ -->
-    <section class="hero-grid">
-      <div class="hero">
-        <p class="eyebrow">For live music venues</p>
+    <!-- ================= HERO ================= -->
+    <section class="lp-hero">
+      <div class="lp-hero-copy reveal">
+        <a class="pill" href="#how"><span class="pill-dot"></span> Built in Melbourne for live music venues</a>
         <h1>The guest list, sorted <span class="grad">before doors.</span></h1>
-        <p class="lede">Artists, tour managers and promoters add their own guests with a link. Door staff check people in and out on any phone. Everyone works off the same list, live.</p>
+        <p class="lede">Artists, tour managers and promoters add their own guests with a link. Your door checks people in and out on any phone. Everyone works off one live list — with a name on every change.</p>
         <div class="hero-actions">
           <a class="btn btn-primary btn-lg" href="#signup">Sign up your venue</a>
-          <a class="btn btn-lg" href="#how">See how it works</a>
+          <a class="btn btn-lg btn-ghost" href="#demo-section">See it in action ↓</a>
         </div>
         <ul class="ticks small">
           <li>No app to install</li>
           <li>No staff accounts</li>
-          <li>Works on any phone</li>
+          <li>Set up in a minute</li>
         </ul>
       </div>
 
-      <div class="hero-visual" aria-hidden="true">
-        <!-- Door mode phone -->
-        <div class="phone phone-back">
-          <div class="ph-top"><span>Door · Fri 19:30</span><i class="dot"></i></div>
+      <div class="lp-stage reveal" data-delay="120">
+        <figure class="browser">
+          <div class="browser-bar"><i></i><i></i><i></i><span>guestlist.riderly.com.au/app</span></div>
+          <img src="/img/app-guestlist.jpg" width="1280" height="800" alt="The guest list for a show: guests, which list they’re on, who added them and whether they’ve arrived." fetchpriority="high">
+        </figure>
+
+        <!-- Live, animated door demo (driven by landing.js) -->
+        <div class="phone demo-phone" id="demo" aria-label="Animated demo of door mode" role="img">
+          <div class="ph-top"><span>Door · Tonight 19:30</span><i class="dot"></i></div>
           <div class="ph-counters">
-            <div><b class="c-in">142</b><span>inside</span></div>
-            <div><b>156/210</b><span>arrived</span></div>
-            <div><b class="c-vip">3/4</b><span>VIP in</span></div>
+            <div><b class="c-in" id="d-inside">142</b><span>inside</span></div>
+            <div><b><span id="d-arrived">156</span>/210</b><span>arrived</span></div>
+            <div><b class="c-vip"><span id="d-vip">2</span>/4</b><span>VIP in</span></div>
           </div>
-          <div class="ph-search">jane</div>
-          <div class="ph-row is-in">
-            <div><strong>Jane Smith <em>+2</em></strong><small><i class="tag t-artist">Artist</i> Headliner TM · <b class="c-in">2/3 in</b></small></div>
-            <div class="ph-btns"><span class="b-out">OUT</span><span class="b-in">IN</span></div>
-          </div>
-          <div class="ph-row vip">
-            <div><strong><i class="tag t-vipb">★ VIP</i> Janelle Ortiz</strong><small><i class="tag t-media">Media</i> Venue</small></div>
-            <div class="ph-btns"><span class="b-out off">OUT</span><span class="b-in">IN</span></div>
-          </div>
-          <div class="ph-row">
-            <div><strong>Janik Brooks <em>+1</em></strong><small><i class="tag">Guest</i> Promoter — Jess</small></div>
-            <div class="ph-btns"><span class="b-out off">OUT</span><span class="b-in">IN</span></div>
-          </div>
+          <div class="ph-search" id="d-search"></div>
+          <div class="demo-list" id="d-list"></div>
+          <div class="demo-toast" id="d-toast">★ VIP arrived: Janelle Ortiz<small>checked in by Sam (Door 1)</small></div>
         </div>
-
-        <!-- Contributor link phone -->
-        <div class="phone phone-front">
-          <div class="ph-top"><span>Guest list · Headliner TM</span></div>
-          <div class="ph-card">
-            <small class="muted">Fri 3 Oct · Doors 19:30</small>
-            <strong class="ph-title">The Headliners</strong>
-            <div class="ph-alloc"><div><b>6</b><span>on your list</span></div><div><b class="c-in">14</b><span>left of 20</span></div></div>
-          </div>
-          <div class="ph-card">
-            <span class="ph-label">Full name</span>
-            <div class="ph-input">Priya Patel</div>
-            <span class="ph-label">Plus ones</span>
-            <div class="ph-input short">1</div>
-            <div class="ph-cta">Add to list</div>
-          </div>
-        </div>
-
-        <div class="float-toast">★ VIP arrived: Janelle Ortiz <small>checked in by Sam (Door 1)</small></div>
       </div>
     </section>
 
-    <!-- ============ HOW IT WORKS ============ -->
-    <section class="how-steps" id="how">
-      <p class="eyebrow center-text">How it works</p>
-      <h2 class="section-title">Three steps from announce to doors</h2>
+    <!-- ================= MARQUEE ================= -->
+    <div class="marquee" aria-hidden="true">
+      <div class="marquee-track">
+        <span>Artist lists</span><span>Tour managers</span><span>Promoters</span><span>Industry</span><span>Media</span><span>Crew</span><span>Walk-ups</span><span>★ VIP alerts</span><span>Plus-ones</span><span>Re-entry</span><span>Cutoffs</span><span>Allocations</span><span>CSV export</span><span>Live sync</span>
+        <span>Artist lists</span><span>Tour managers</span><span>Promoters</span><span>Industry</span><span>Media</span><span>Crew</span><span>Walk-ups</span><span>★ VIP alerts</span><span>Plus-ones</span><span>Re-entry</span><span>Cutoffs</span><span>Allocations</span><span>CSV export</span><span>Live sync</span>
+      </div>
+    </div>
 
+    <!-- ================= STATS ================= -->
+    <section class="stats-row">
+      <div class="stat-big reveal"><b><span class="count" data-to="60">60</span>s</b><span>to set up a venue</span></div>
+      <div class="stat-big reveal" data-delay="80"><b><span class="count" data-to="0">0</span></b><span>apps to install</span></div>
+      <div class="stat-big reveal" data-delay="160"><b><span class="count" data-to="1">1</span></b><span>login for the whole venue</span></div>
+      <div class="stat-big reveal" data-delay="240"><b>∞</b><span>door phones, all in sync</span></div>
+    </section>
+
+    <!-- ================= SHOWCASE: CONTRIBUTORS ================= -->
+    <section class="showcase" id="features">
+      <div class="showcase-copy reveal">
+        <p class="eyebrow">Contributor links</p>
+        <h2>Let the band do the typing.</h2>
+        <p class="lede-sm">Give the headliner’s tour manager, the support act and the promoter each a private link. They add their own guests, see exactly how many spots are left, and it locks itself at your cutoff.</p>
+        <ul class="check-list">
+          <li>Allocations counted in heads — “Jane +2” uses 3</li>
+          <li>No login or app for contributors — just the link</li>
+          <li>They only ever see their own list</li>
+          <li>Switch a link off, or replace it, in one tap</li>
+        </ul>
+      </div>
+      <div class="showcase-media reveal" data-delay="100">
+        <figure class="browser tilt-l">
+          <div class="browser-bar"><i></i><i></i><i></i><span>Contributors</span></div>
+          <img src="/img/app-contributors.jpg" width="1280" height="800" loading="lazy" alt="Contributor cards showing each act’s allocation, heads used and private link.">
+        </figure>
+        <figure class="device device-float">
+          <img src="/img/phone-contributor.jpg" width="390" height="844" loading="lazy" alt="What a tour manager sees: the show, spots left and a form to add guests.">
+        </figure>
+      </div>
+    </section>
+
+    <!-- ================= SHOWCASE: DOOR ================= -->
+    <section class="showcase reverse" id="demo-section">
+      <div class="showcase-copy reveal">
+        <p class="eyebrow">Door mode</p>
+        <h2>A door that keeps up with the queue.</h2>
+        <p class="lede-sm">Big search, big buttons. Type two letters, tap IN. Parties arrive in bits, people step out and come back, and every phone on the door updates the moment anyone taps.</p>
+        <ul class="check-list">
+          <li>Partial plus-ones — “2 of 3 in”</li>
+          <li>Check out and back in, without double counting</li>
+          <li>Walk-ups added straight from the search</li>
+          <li>Door notes pinned for the whole shift</li>
+          <li>Gold highlight and an alert on every door for VIPs</li>
+        </ul>
+      </div>
+      <div class="showcase-media duo reveal" data-delay="100">
+        <figure class="device">
+          <img src="/img/phone-door.jpg" width="390" height="844" loading="lazy" alt="Door mode on a phone: counters for inside, arrived and VIPs, and each guest with IN and OUT buttons.">
+        </figure>
+        <figure class="device device-offset">
+          <img src="/img/phone-door-search.jpg" width="390" height="844" loading="lazy" alt="Searching two letters narrows the door list instantly.">
+        </figure>
+      </div>
+    </section>
+
+    <!-- ================= SHOWCASE: ACTIVITY ================= -->
+    <section class="showcase">
+      <div class="showcase-copy reveal">
+        <p class="eyebrow">Accountability built in</p>
+        <h2>Every tap has a name on it.</h2>
+        <p class="lede-sm">There are no staff accounts to manage. Each phone asks for a name once — so the activity log shows exactly who added whom, who let them in, and when. Export the whole night to CSV for settlement.</p>
+        <ul class="check-list">
+          <li>One venue login, shared by staff</li>
+          <li>Full history of adds, edits, check-ins and check-outs</li>
+          <li>Paste lists straight from Excel, Sheets or an email</li>
+        </ul>
+      </div>
+      <div class="showcase-media reveal" data-delay="100">
+        <figure class="browser tilt-r">
+          <div class="browser-bar"><i></i><i></i><i></i><span>Activity</span></div>
+          <img src="/img/app-activity.jpg" width="1280" height="800" loading="lazy" alt="The activity log: every add and check-in with who did it and when.">
+        </figure>
+      </div>
+    </section>
+
+    <!-- ================= HOW IT WORKS ================= -->
+    <section class="how-steps" id="how">
+      <p class="eyebrow center-text reveal">How it works</p>
+      <h2 class="section-title reveal">From announce to doors in three steps</h2>
       <div class="steps">
-        <article class="step">
+        <article class="step reveal">
           <div class="step-num">1</div>
           <h3>Create the show, send links</h3>
-          <p>Add the event, then a contributor for each act or promoter. Each gets a private link with their own allocation and a cutoff time.</p>
+          <p>Add the event, then a contributor for each act or promoter — each with an allocation and a cutoff.</p>
           <div class="mini">
             <div class="mini-row"><strong>Headliner — TM</strong><span class="tag t-artist">Artist</span></div>
-            <div class="mini-bar"><i class="w60"></i></div>
+            <div class="mini-bar"><i class="w60 grow-bar"></i></div>
             <div class="mini-row small muted"><span>12 / 20 heads used</span><span class="mini-link">Copy link</span></div>
             <div class="mini-row"><strong>Promoter — Jess</strong><span class="tag">Guest</span></div>
-            <div class="mini-bar"><i class="w30"></i></div>
+            <div class="mini-bar"><i class="w30 grow-bar"></i></div>
             <div class="mini-row small muted"><span>3 / 10 heads used</span><span class="mini-link">Copy link</span></div>
           </div>
         </article>
-
-        <article class="step">
+        <article class="step reveal" data-delay="120">
           <div class="step-num">2</div>
           <h3>They add their own guests</h3>
-          <p>No login, no app. They open the link, add names and plus-ones, and can see what’s left. It locks automatically at the cutoff.</p>
+          <p>No login, no app. Names and plus-ones go straight onto your list, with a name against every entry.</p>
           <div class="mini">
             <div class="mini-row"><strong>Jane Smith <em>+2</em></strong><span class="small muted">Tom (TM)</span></div>
             <div class="mini-row"><strong>Alex Nguyen</strong><span class="small muted">Tom (TM)</span></div>
@@ -114,11 +182,10 @@
             <div class="mini-lock small">🔒 List closes Fri 5:00 pm</div>
           </div>
         </article>
-
-        <article class="step">
+        <article class="step reveal" data-delay="240">
           <div class="step-num">3</div>
-          <h3>Door checks them in</h3>
-          <p>Search a name, tap IN. Parties with plus-ones can arrive in bits (“2 of 3 in”), step out and come back. Every door phone updates instantly.</p>
+          <h3>Your door checks them in</h3>
+          <p>Search, tap IN, pick how many. Every phone on the door updates instantly.</p>
           <div class="mini">
             <div class="mini-row"><strong>Jane Smith <em>+2</em></strong><span class="c-in small"><b>2/3 in</b></span></div>
             <div class="mini-picks"><span>1</span><span>2</span><span class="pick-all">All 3</span></div>
@@ -128,77 +195,54 @@
       </div>
     </section>
 
-    <!-- ============ FEATURES ============ -->
+    <!-- ================= FEATURE GRID ================= -->
     <section class="feature-grid">
-      <div class="feature">
+      <div class="feature reveal">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0"/></svg>
-        <h3>One login, names on every change</h3>
-        <p>The whole venue shares one password. Each phone asks for a name once, so you always know who added, edited or let someone in.</p>
+        <h3>One login per venue</h3>
+        <p>Staff share the venue’s username and password. Each phone asks for a name once — no accounts to create or delete.</p>
       </div>
-      <div class="feature">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
-        <h3>Contributor links</h3>
-        <p>Allocations counted in heads including plus-ones, automatic cutoffs, and links you can switch off or replace in one tap.</p>
+      <div class="feature reveal" data-delay="80">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+        <h3>Live across every door</h3>
+        <p>Front door, side door, box office — every screen updates the second anyone taps.</p>
       </div>
-      <div class="feature">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h10M10 6l6 6-6 6M20 4v16"/></svg>
-        <h3>Check in <em>and</em> out</h3>
-        <p>Partial plus-ones, re-entry and walk-ups. Live counts for who’s inside, who’s arrived and who hasn’t shown.</p>
-      </div>
-      <div class="feature">
+      <div class="feature reveal" data-delay="160">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/></svg>
         <h3>VIPs never wait</h3>
-        <p>VIPs are highlighted gold on every door screen, and everyone gets an alert the moment one arrives.</p>
+        <p>Flag a guest as VIP and they’re gold on every door screen — with an alert the moment they arrive.</p>
       </div>
-      <div class="feature">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
-        <h3>Paste in any list</h3>
-        <p>Copy a column straight out of Excel, Sheets or an email. “Jane Smith +2” just works. Export to CSV for settlement.</p>
+      <div class="feature reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V3h8v4M5 7h14v14H5zM9 12h6M9 16h6"/></svg>
+        <h3>Paste any list</h3>
+        <p>“Jane Smith +2” from Excel, Sheets or an email just works. Export the night to CSV.</p>
       </div>
-      <div class="feature">
+      <div class="feature reveal" data-delay="80">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z"/></svg>
+        <h3>Cutoffs &amp; allocations</h3>
+        <p>Contributor links lock at your cutoff and can’t go over their allocation. You can still override.</p>
+      </div>
+      <div class="feature reveal" data-delay="160">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>
         <h3>Private by design</h3>
-        <p>Each venue only ever sees its own lists. Nothing is public, nothing is indexed by search engines, and there’s no tracking.</p>
+        <p>Each venue only sees its own lists. Nothing public, nothing indexed, no tracking, nightly backups.</p>
       </div>
     </section>
 
-    <!-- ============ DOOR CLOSE-UP ============ -->
-    <section class="door-band">
-      <div>
-        <p class="eyebrow">Built for a busy door</p>
-        <h2 class="section-title left">Big buttons. Fast search. Every door in sync.</h2>
-        <ul class="bullets">
-          <li><b>Type two letters</b> and the right name is on top.</li>
-          <li><b>Not on the list?</b> Add them as a walk-up straight from the search.</li>
-          <li><b>Door notes</b> — “artist entry via side door” — pinned for every shift.</li>
-          <li><b>Full activity log</b> of every add, edit, check-in and check-out, with names and times.</li>
-        </ul>
-      </div>
-      <div class="door-demo" aria-hidden="true">
-        <div class="ph-counters wide">
-          <div><b class="c-in">142</b><span>inside</span></div>
-          <div><b>156/210</b><span>arrived</span></div>
-          <div><b class="c-vip">3/4</b><span>VIP in</span></div>
-        </div>
-        <div class="ph-row is-in"><div><strong>Chris Lee <em>+1</em></strong><small><i class="tag">Guest</i> Venue · <b class="c-in">2/2 in</b></small></div><div class="ph-btns"><span class="b-out">OUT</span><span class="b-in done">✓ IN</span></div></div>
-        <div class="ph-row has-left"><div><strong>Morgan Hart</strong><small><i class="tag">Guest</i> Venue · <b class="c-out">Left 9:14 pm</b></small></div><div class="ph-btns"><span class="b-out off">OUT</span><span class="b-in">IN</span></div></div>
-        <div class="ph-row"><div><strong>Taylor Brooks <em>+3</em></strong><small><i class="tag t-industry">Industry</i> Promoter — Jess</small><small class="note">Bring ID — under-18 +1</small></div><div class="ph-btns"><span class="b-out off">OUT</span><span class="b-in">IN</span></div></div>
-      </div>
-    </section>
-
-    <!-- ============ SIGN UP ============ -->
-    <section class="request-band" id="signup">
-      <div class="request-copy">
+    <!-- ================= SIGN UP ================= -->
+    <section class="request-band signup-band" id="signup">
+      <div class="request-copy reveal">
         <p class="eyebrow">Get your venue on</p>
         <h2 class="section-title left">Sign up your venue</h2>
         <p class="muted">Pick a username and password for your venue. Once we’ve approved it — usually the same day — you and your staff log in with those details.</p>
-        <ul class="bullets small">
-          <li><b>One login for the venue.</b> Staff share the username and password; each phone asks for their name once.</li>
-          <li><b>Your staff link</b> is <code>guestlist.riderly.com.au/v/<span id="slug-echo">your-username</span></code> — it fills in the username for them.</li>
+        <ul class="check-list">
+          <li>One login for the venue — staff share it</li>
+          <li>Your staff link: <code>guestlist.riderly.com.au/v/<span id="slug-echo">your-username</span></code></li>
+          <li>Onboarding help from people who run venues</li>
         </ul>
         <p class="muted small">Already signed up? <a href="/login">Log in here</a> · New to it? <a href="/guide">Read the guide</a></p>
       </div>
-      <form class="card stack request-form" id="signup-form" novalidate>
+      <form class="card stack request-form reveal" data-delay="100" id="signup-form" novalidate>
         <label class="field"><span>Venue name</span><input name="venueName" required maxlength="120" autocomplete="organization" placeholder="e.g. The Corner Hotel"></label>
         <label class="field"><span>Username</span><input name="username" required maxlength="40" autocapitalize="none" autocomplete="username" spellcheck="false" placeholder="e.g. corner-hotel"><small class="muted">Letters, numbers and dashes. This is what your staff log in with.</small></label>
         <div class="grid-2">
@@ -212,24 +256,35 @@
         <label class="field"><span>Email</span><input name="email" type="email" required maxlength="120" autocomplete="email"><small class="muted">We’ll let you know here when your venue is live.</small></label>
         <label class="field"><span>Anything we should know? <small class="muted">(optional)</small></span><textarea name="message" rows="2" maxlength="1000" placeholder="Capacity, shows a week, how you run the list now…"></textarea></label>
         <label class="hp" aria-hidden="true">Website <input name="website" tabindex="-1" autocomplete="off"></label>
-        <button class="btn btn-primary btn-block" type="submit">Sign up</button>
+        <button class="btn btn-primary btn-block btn-lg" type="submit">Sign up</button>
         <p class="small muted form-status" id="signup-status" role="status"></p>
       </form>
     </section>
 
-    <!-- ============ FAQ ============ -->
+    <!-- ================= FAQ ================= -->
     <section class="faq">
-      <h2 class="section-title">Questions</h2>
-      <details><summary>Do our staff need accounts?</summary><p>No. Your venue has one password. Staff open your venue’s link, type the password, and put their name on the phone once.</p></details>
+      <h2 class="section-title reveal">Questions</h2>
+      <details><summary>Do our staff need accounts?</summary><p>No. Your venue has one username and password. Staff open your venue’s link, type the password, and put their name on the phone once.</p></details>
       <details><summary>Do artists and promoters need to sign up?</summary><p>No. They get a private link for that show. They can add, edit and remove their own guests until your cutoff — and they only ever see their own list.</p></details>
-      <details><summary>Does it replace our ticketing?</summary><p>No — it runs alongside it. This is just for the guest list: comps, artist and crew, industry, media and walk-ups.</p></details>
-      <details><summary>Does it work without internet?</summary><p>Not yet. Door phones need Wi-Fi or mobile data. If one phone drops out, the others keep working and it catches up when it reconnects.</p></details>
+      <details><summary>Does it replace our ticketing?</summary><p>No — it runs alongside it. It’s for the guest list: comps, artist and crew, industry, media and walk-ups.</p></details>
+      <details><summary>What do door staff need?</summary><p>Any phone or tablet with a browser. Add it to the home screen and it opens like an app.</p></details>
+      <details><summary>Does it work without internet?</summary><p>Not yet — door phones need Wi-Fi or mobile data. If one phone drops out, the others keep working and it catches up when it reconnects.</p></details>
       <details><summary>Can we bring in our existing list?</summary><p>Yes. Paste straight from Excel, Google Sheets or an email — one name per line, with “+2” for plus-ones.</p></details>
+    </section>
+
+    <!-- ================= FINAL CTA ================= -->
+    <section class="cta-band reveal">
+      <h2>Your next show’s guest list, sorted.</h2>
+      <p class="muted">Sign up in a minute. We’ll have you live the same day.</p>
+      <div class="hero-actions center">
+        <a class="btn btn-primary btn-lg" href="#signup">Sign up your venue</a>
+        <a class="btn btn-lg btn-ghost" href="/guide">Read the guide</a>
+      </div>
     </section>
   </main>
 
   <footer class="landing-foot small muted">
-    <span>Riderly · Melbourne</span>
+    <span>© Riderly · Melbourne</span>
     <span class="foot-links"><a href="/guide">Guide</a><a href="/login">Log in</a><a href="#signup">Sign up</a></span>
   </footer>
 

@@ -286,6 +286,9 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.ico': 'image/x-icon',
   '.json': 'application/json',
   '.webmanifest': 'application/manifest+json',
@@ -323,6 +326,13 @@ function serveStatic(req, res, pathname) {
     res.end(data);
   });
 }
+
+// CSV times are shown in the venue's local time (Melbourne for now; DISPLAY_TZ overrides).
+const localTime = new Intl.DateTimeFormat('en-AU', {
+  timeZone: process.env.DISPLAY_TZ || 'Australia/Melbourne',
+  day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+});
+const csvTime = (iso) => (iso ? localTime.format(new Date(iso)).replace(',', '') : '');
 
 function csvCell(v) {
   let s = v === null || v === undefined ? '' : String(v);
@@ -883,14 +893,14 @@ function createApp(db, options = {}) {
     const guests = listGuests(db, e.id);
     const header = [
       'Name', 'Plus ones', 'Party', 'List', 'VIP', 'Contributor', 'Notes',
-      'Admitted', 'Inside', 'First in', 'Added by', 'Added via', 'Added at',
+      'Admitted', 'Inside', 'First in (Melbourne)', 'Added by', 'Added via', 'Added at (Melbourne)',
     ];
     const lines = [header.join(',')];
     for (const g of guests) {
       lines.push(
         [
           g.name, g.plusOnes, g.party, g.listType, g.vip ? 'Yes' : '', g.contributorName || 'Venue', g.notes,
-          g.admitted, g.inside, g.firstInAt, g.addedBy, g.addedVia, g.createdAt,
+          g.admitted, g.inside, csvTime(g.firstInAt), g.addedBy, g.addedVia, csvTime(g.createdAt),
         ].map(csvCell).join(',')
       );
     }
