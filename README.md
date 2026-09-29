@@ -23,6 +23,8 @@ npm test             # API tests
 
 On first start the server prints an **owner setup code** to its log. Open `/admin`, enter the code, and set the owner password. Then add venues from there. `GET /health` returns `{"ok": true}`.
 
+Forgot the owner password? Run `node scripts/reset-owner-password.js` on the server (see deploy/README.md).
+
 Upgrading from the single-venue version is automatic: the old venue becomes the first venue, with the same password and all its events.
 
 ### Environment variables

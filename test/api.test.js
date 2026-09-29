@@ -295,9 +295,12 @@ test('venue password change logs out its other devices only', async () => {
   await other.call('POST', '/api/login', { venue: 'password-hall', password: 'firstpass1' });
   const b = await onboard('Bystander Hall');
 
-  let r = await a.c.call('PUT', '/api/settings', { currentPassword: 'wrongwrong', newPassword: 'secondpass1' });
+  let r = await a.c.call('PUT', '/api/settings', { currentPassword: 'firstpass1', newPassword: 'secondpass1' });
+  assert.equal(r.data.code, 'override', 'staff password change needs a manager');
+  assert.equal((await a.c.call('PUT', '/api/settings', { venueName: 'Renamed by staff' })).data.code, 'override', 'renaming needs a manager');
+  r = await a.c.call('PUT', '/api/settings', { currentPassword: 'wrongwrong', newPassword: 'secondpass1', overridePin: '2468' });
   assert.equal(r.status, 401);
-  r = await a.c.call('PUT', '/api/settings', { currentPassword: 'firstpass1', newPassword: 'secondpass1', venueName: 'Password Hall 2' });
+  r = await a.c.call('PUT', '/api/settings', { currentPassword: 'firstpass1', newPassword: 'secondpass1', venueName: 'Password Hall 2', overridePin: '2468' });
   assert.equal(r.status, 200);
   assert.equal(r.data.venue.name, 'Password Hall 2');
   assert.equal((await a.c.call('GET', '/api/events')).status, 200, 'this device stays in');
@@ -564,6 +567,85 @@ test('creating an event needs the manager PIN once the venue has one', async () 
   // A venue that hasn't set a PIN yet can still create events.
   appDb.prepare('UPDATE venues SET manager_pin_hash = NULL WHERE id = ?').run(venue.id);
   assert.equal((await c.call('POST', '/api/events', { name: 'No PIN yet', date: '2026-11-06' })).status, 200);
+});
+
+test('removing a guest who has already arrived needs a manager', async () => {
+  const { c } = await onboard('Remove Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-11-10', overridePin: '2468' })).data;
+  const waiting = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Not Here Yet' })).data;
+  const arrived = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Already In' })).data;
+  await c.call('POST', `/api/guests/${arrived.id}/checkin`, {});
+  assert.equal((await c.call('DELETE', `/api/guests/${waiting.id}`)).status, 200, 'not arrived: no PIN needed');
+  assert.equal((await c.call('DELETE', `/api/guests/${arrived.id}`)).data.code, 'override');
+  assert.equal((await c.call('DELETE', `/api/guests/${arrived.id}`, { overridePin: '2468' }, { actor: 'Sam' })).status, 200);
+  const act = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  assert.ok(act.some((a) => a.action === 'override' && a.actor === 'Sam' && /already checked in/.test(a.detail)));
+});
+
+test('wrong attempts lock out one phone, not the whole venue Wi-Fi', async () => {
+  const app = createApp(openDb(':memory:'), { trustProxy: true });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const login = (device, ip = '9.9.9.9') => fetch(url + '/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip, 'X-Device': device },
+    body: JSON.stringify({ username: 'nobody', password: 'wrong' }),
+  });
+  try {
+    for (let i = 0; i < 10; i++) await login('phone-aaaaaaaa');
+    assert.equal((await login('phone-aaaaaaaa')).status, 429, 'the guessing phone is locked out');
+    assert.equal((await login('phone-bbbbbbbb')).status, 401, 'another phone on the same Wi-Fi still gets to try');
+    // A per-network ceiling still stops someone rotating device ids.
+    let last;
+    for (let i = 0; i < 60; i++) last = await login(`rotating-${String(i).padStart(4, '0')}`);
+    assert.equal(last.status, 429);
+    assert.equal((await login('phone-cccccccc', '8.8.8.8')).status, 401, 'other networks unaffected');
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});
+
+test('only the public pages are indexable; robots.txt and sitemap', async () => {
+  const home = await fetch(`${base}/`);
+  assert.equal(home.headers.get('x-robots-tag'), null);
+  assert.equal((await fetch(`${base}/guide`)).headers.get('x-robots-tag'), null);
+  for (const p of ['/app', '/admin', '/login', '/c/x', '/setup/x', '/pin/x', '/v/x']) {
+    assert.match((await fetch(base + p)).headers.get('x-robots-tag') || '', /noindex/, p);
+  }
+  const robots = await (await fetch(`${base}/robots.txt`)).text();
+  assert.match(robots, /Disallow: \//);
+  assert.match(robots, /Sitemap: https:\/\/guestlist\.riderly\.com\.au\/sitemap\.xml/);
+  const sitemap = await (await fetch(`${base}/sitemap.xml`)).text();
+  assert.match(sitemap, /<loc>https:\/\/guestlist\.riderly\.com\.au\/guide<\/loc>/);
+});
+
+test('owner password can be recovered from the server', async () => {
+  const { execFileSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-owner-'));
+  const file = path.join(dir, 'v.db');
+  const db = openDb(file);
+  const app = createApp(db);
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  try {
+    const o = client(() => url);
+    await o.call('POST', '/api/owner/setup', { password: 'forgotten-one' });
+    assert.equal((await o.call('GET', '/api/owner/venues')).status, 200);
+    const out = execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(__dirname, '..', 'scripts', 'reset-owner-password.js')], {
+      env: { ...process.env, DB_FILE: file },
+    }).toString();
+    const pw = out.match(/New owner password:\s+(\S+)/)[1];
+    assert.match(pw, /^[a-z2-9]{4}(-[a-z2-9]{4}){3}$/);
+    assert.equal((await o.call('GET', '/api/owner/venues')).status, 401, 'old sessions logged out');
+    assert.equal((await client(() => url).call('POST', '/api/owner/login', { password: 'forgotten-one' })).status, 401);
+    assert.equal((await client(() => url).call('POST', '/api/owner/login', { password: pw })).status, 200);
+  } finally {
+    app.closeAllConnections();
+    app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('/health answers ok without login and leaks nothing', async () => {

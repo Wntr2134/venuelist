@@ -142,7 +142,7 @@ function toLogin() {
 async function renderEvents(archived) {
   const events = await api('GET', `/api/events${archived ? '?archived=1' : ''}`).catch(handleError);
   if (!events) return;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate();
 
   const list = events.length
     ? h('div', { class: 'event-grid' }, events.map((e) => eventCard(e, today)))
@@ -194,7 +194,7 @@ function eventForm(existing) {
   const form = h('form', { class: 'stack' },
     field('Event name', h('input', { name: 'name', required: true, maxlength: '120', value: e.name || '', placeholder: 'Artist / show name' })),
     h('div', { class: 'grid-2' },
-      field('Date', h('input', { name: 'date', type: 'date', required: true, value: e.date || new Date().toISOString().slice(0, 10) })),
+      field('Date', h('input', { name: 'date', type: 'date', required: true, value: e.date || localDate() })),
       field('Doors', h('input', { name: 'doorsTime', type: 'time', value: e.doorsTime || '' }))
     ),
     h('div', { class: 'grid-2' },
@@ -626,11 +626,12 @@ function importForm(data, onDone) {
 }
 
 async function removeGuest(g, onDone) {
-  const warn = g.admitted ? ` ${g.admitted} of this party already checked in — their door history stays in the activity log.` : '';
+  const warn = g.admitted ? ` ${g.admitted} of this party already checked in, so a manager will need to approve it. Their door history stays in the activity log.` : '';
   const ok = await confirmDialog('Remove guest?', `Remove ${g.name}${g.plusOnes ? ` +${g.plusOnes}` : ''} from the list?${warn}`, { confirmText: 'Remove', danger: true });
   if (!ok) return;
   try {
-    await api('DELETE', `/api/guests/${g.id}`);
+    const r = await withOverride((extra) => api('DELETE', `/api/guests/${g.id}`, extra));
+    if (!r) return;
     toast('Removed', 'ok');
     onDone();
   } catch (err) {
@@ -1104,7 +1105,8 @@ function renderSettings() {
   nameForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      const r = await api('PUT', '/api/settings', formData(nameForm));
+      const r = await withOverride((extra) => api('PUT', '/api/settings', { ...formData(nameForm), ...extra }));
+      if (!r) return;
       state.venueName = r.venue.name;
       toast('Saved', 'ok');
       route();
@@ -1114,8 +1116,8 @@ function renderSettings() {
   });
 
   const pwForm = h('form', { class: 'card stack' },
-    h('h3', null, 'Change venue password'),
-    h('p', { class: 'muted' }, 'Every other device will be logged out and need the new password.'),
+    h('h3', null, 'Change staff password'),
+    h('p', { class: 'muted' }, 'Needs the manager override PIN. Every other device will be logged out and need the new password.'),
     field('Current password', h('input', { name: 'currentPassword', type: 'password', required: true, autocomplete: 'current-password' })),
     field('New password', h('input', { name: 'newPassword', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' })),
     h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, 'Change password'))
@@ -1123,7 +1125,8 @@ function renderSettings() {
   pwForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await api('PUT', '/api/settings', formData(pwForm));
+      const r = await withOverride((extra) => api('PUT', '/api/settings', { ...formData(pwForm), ...extra }));
+      if (!r) return;
       pwForm.reset();
       toast('Password changed', 'ok');
     } catch (err) {

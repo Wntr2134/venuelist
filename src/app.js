@@ -328,12 +328,36 @@ const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
-  'X-Robots-Tag': 'noindex, nofollow',
   'Content-Security-Policy':
     "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
 };
 
+// Public marketing pages search engines may index; everything else stays out of Google.
+const INDEXABLE = new Set(['index.html', 'guide.html']);
+const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://guestlist.riderly.com.au').replace(/\/+$/, '');
+
 function serveStatic(req, res, pathname) {
+  if (pathname === '/robots.txt') {
+    return send(res, 200, [
+      'User-agent: *',
+      'Allow: /$',
+      'Allow: /guide',
+      'Allow: /img/',
+      'Allow: /css/',
+      'Disallow: /',
+      `Sitemap: ${PUBLIC_URL}/sitemap.xml`,
+      '',
+    ].join('\n'), { 'Cache-Control': 'public, max-age=3600' });
+  }
+  if (pathname === '/sitemap.xml') {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>${PUBLIC_URL}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>${PUBLIC_URL}/guide</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+</urlset>
+`;
+    return send(res, 200, xml, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
+  }
   let file;
   if (pathname === '/' || pathname === '/index.html') file = 'index.html'; // public landing page
   else if (pathname === '/app' || pathname === '/app/') file = 'app.html'; // venue app
@@ -353,6 +377,7 @@ function serveStatic(req, res, pathname) {
       'Content-Type': MIME[path.extname(full)] || 'application/octet-stream',
       'Cache-Control': file.endsWith('.html') ? 'no-cache' : 'public, max-age=300',
       ...SECURITY_HEADERS,
+      ...(file.endsWith('.html') && !INDEXABLE.has(file) ? { 'X-Robots-Tag': 'noindex, nofollow' } : {}),
     });
     res.end(data);
   });
@@ -413,13 +438,9 @@ function createApp(db, options = {}) {
     return req.socket.remoteAddress || 'unknown';
   }
   const hub = createHub();
-  const loginLimiter = createLimiter();
   const routes = [];
   const route = (method, pattern, handler, opts = {}) => routes.push({ method, pattern, handler, ...opts });
 
-  function createLimiter() {
-    return auth.createLimiter({ max: 10, windowMs: 10 * 60 * 1000 });
-  }
 
   const SETUP_LINK_DAYS = 7;
   const DUMMY_HASH = auth.hashPassword(crypto.randomBytes(8).toString('hex'));
@@ -445,12 +466,38 @@ function createApp(db, options = {}) {
     return p;
   }
 
+  // Wrong-attempt limits are per phone (10 per 10 min) with a generous ceiling per network
+  // (60 per 10 min), so one person's typos can't lock out a whole venue sharing one Wi-Fi.
+  const deviceLimiter = auth.createLimiter({ max: 10, windowMs: 10 * 60 * 1000 });
+  const networkLimiter = auth.createLimiter({ max: 60, windowMs: 10 * 60 * 1000 });
+
+  function deviceId(req) {
+    const d = String(req.headers['x-device'] || '');
+    return /^[A-Za-z0-9_-]{8,64}$/.test(d) ? d : 'none';
+  }
+
+  function attemptKeys(req, scope) {
+    const ip = clientIp(req);
+    return [`${scope}|${ip}|${deviceId(req)}`, `${scope}|${ip}`];
+  }
+
+  function tooMany(req, scope) {
+    const [dev, net] = attemptKeys(req, scope);
+    return deviceLimiter.blocked(dev) || networkLimiter.blocked(net);
+  }
+
+  function recordFail(req, scope) {
+    const [dev, net] = attemptKeys(req, scope);
+    deviceLimiter.fail(dev);
+    networkLimiter.fail(net);
+  }
+
   function limit(req) {
-    if (loginLimiter.blocked(clientIp(req))) throw new HttpError(429, 'Too many wrong attempts. Try again in a few minutes.');
+    if (tooMany(req, 'login')) throw new HttpError(429, 'Too many wrong attempts on this phone. Try again in a few minutes.');
   }
 
   function failed(req) {
-    loginLimiter.fail(clientIp(req));
+    recordFail(req, 'login');
   }
 
   // The venue for a request's session cookie, or null. Sessions die when the venue's
@@ -633,6 +680,10 @@ function createApp(db, options = {}) {
   // ----- venue settings -----
 
   route('PUT', /^\/api\/settings$/, ({ venue, req, body, res }) => {
+    // Everyone knows the staff password, so it can't be the thing that protects itself.
+    if (body.venueName !== undefined || body.newPassword) {
+      override(venue, req, body, 'Changing the venue name or staff password needs a manager.', { soft: true });
+    }
     if (body.venueName !== undefined) {
       db.prepare('UPDATE venues SET name = ? WHERE id = ?').run(str(body.venueName, 'Venue name', { max: 80, required: true }), venue.id);
     }
@@ -646,10 +697,9 @@ function createApp(db, options = {}) {
     }
     if (body.newPin !== undefined) {
       if (venue.manager_pin_hash) {
-        const key = `pin:${venue.id}:${clientIp(req)}`;
-        if (loginLimiter.blocked(key)) throw new HttpError(429, 'Too many wrong PINs. Try again in a few minutes.');
+        if (tooMany(req, `pin:${venue.id}`)) throw new HttpError(429, 'Too many wrong PINs on this phone. Try again in a few minutes.');
         if (!auth.verifyPassword(str(body.currentPin, 'Current PIN', { max: 100 }), venue.manager_pin_hash)) {
-          loginLimiter.fail(key);
+          recordFail(req, `pin:${venue.id}`);
           throw new HttpError(401, 'Current manager PIN is wrong. Riderly can reset it if it’s forgotten.');
         }
       }
@@ -900,10 +950,9 @@ function createApp(db, options = {}) {
     }
     const given = body.overridePin === undefined || body.overridePin === null ? '' : String(body.overridePin);
     if (!given) throw new HttpError(403, reason, 'override');
-    const key = `pin:${venue.id}:${clientIp(req)}`;
-    if (loginLimiter.blocked(key)) throw new HttpError(429, 'Too many wrong PINs. Try again in a few minutes.');
+    if (tooMany(req, `pin:${venue.id}`)) throw new HttpError(429, 'Too many wrong PINs on this phone. Try again in a few minutes.');
     if (!auth.verifyPassword(given.slice(0, 100), venue.manager_pin_hash)) {
-      loginLimiter.fail(key);
+      recordFail(req, `pin:${venue.id}`);
       throw new HttpError(403, `Wrong manager PIN. ${reason}`, 'override');
     }
     if (eventId) log(db, { eventId, action: 'override', detail: reason, actor, via: 'manager PIN' });
@@ -1312,9 +1361,12 @@ function createApp(db, options = {}) {
     return guestOut(getGuest(db, g.id));
   });
 
-  route('DELETE', /^\/api\/guests\/(\d+)$/, ({ venue, req, params }) => {
+  route('DELETE', /^\/api\/guests\/(\d+)$/, ({ venue, req, params, body }) => {
     const actor = actorFrom(req);
     const g = gst(venue, params[0]);
+    if (g.admitted > 0) {
+      override(venue, req, body, `${g.name} has already checked in — removing them needs a manager.`, { eventId: g.event_id, actor });
+    }
     tx(db, () => {
       db.prepare('DELETE FROM guests WHERE id = ?').run(g.id);
       log(db, { eventId: g.event_id, guest: g, action: 'guest.remove', actor, via: 'venue' });

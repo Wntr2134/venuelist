@@ -115,6 +115,16 @@ venue ALL=(root) NOPASSWD: /bin/systemctl restart ballroom, ..., /bin/systemctl 
 
 If the other repos use different secret names, rename them in `deploy.yml` to match.
 
+## Forgot the owner (/admin) password?
+
+On the droplet:
+
+```bash
+sudo -u venue node --disable-warning=ExperimentalWarning /srv/guestlist/scripts/reset-owner-password.js
+```
+
+This prints a new random owner password and logs out every other /admin session. Log in with it, then change it under **Owner password**. Venues and their data aren't touched.
+
 ## Personal data
 
 - Guest names and notes stay in the SQLite file on the droplet and nowhere else. Every page and API route needs the venue login, except `/health` (reveals nothing) and each contributor's private link, which shows only that contributor's own guests.

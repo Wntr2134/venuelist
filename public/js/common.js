@@ -68,8 +68,31 @@ class ApiError extends Error {
   }
 }
 
+// A random id per phone, so wrong-password lockouts hit only the phone that got it wrong.
+function deviceKey() {
+  let id = '';
+  try {
+    id = localStorage.getItem('vl.deviceId') || '';
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+      const bytes = new Uint8Array(12);
+      crypto.getRandomValues(bytes);
+      id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      localStorage.setItem('vl.deviceId', id);
+    }
+  } catch {
+    id = window.__deviceKey || (window.__deviceKey = `tmp${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`);
+  }
+  return id;
+}
+
+// Today's date on this phone (not UTC), as YYYY-MM-DD.
+function localDate(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 async function api(method, url, body) {
-  const headers = { 'X-Actor': encodeURIComponent(currentName()) };
+  const headers = { 'X-Actor': encodeURIComponent(currentName()), 'X-Device': deviceKey() };
   if (body !== undefined || method !== 'GET') headers['Content-Type'] = 'application/json';
   const res = await fetch(url, {
     method,
