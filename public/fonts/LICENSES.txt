@@ -1,0 +1,15 @@
+Fonts self-hosted for the public pitch page (/guide/pitch). All three are
+licensed under the SIL Open Font License 1.1 (https://openfontlicense.org),
+which permits bundling and serving them with this software. Each font's
+copyright notice and the full licence text travel with it, as the licence
+requires: OFL-BigShouldersDisplay.txt, OFL-InstrumentSans.txt,
+OFL-JetBrainsMono.txt in this folder.
+
+  bigshoulders-var.woff2    Big Shoulders Display — Patric King / The Chicago Design System
+  instrumentsans-var.woff2  Instrument Sans — Instrument
+  jetbrainsmono-500.woff2   JetBrains Mono — JetBrains
+
+Latin subsets, fetched from Google Fonts 2026-09-29. Self-hosted rather than
+loaded from Google at view time: the app's content-security policy allows fonts
+from its own origin only, and a visitor reading a sales page should not be
+reporting that visit to a third party.

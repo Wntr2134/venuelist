@@ -3,8 +3,8 @@
   "short_name": "Guest List",
   "start_url": "/app",
   "display": "standalone",
-  "background_color": "#0d0d12",
-  "theme_color": "#0d0d12",
+  "background_color": "#0d0b09",
+  "theme_color": "#0d0b09",
   "icons": [
     {
       "src": "/icon-192.png",
