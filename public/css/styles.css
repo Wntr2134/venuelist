@@ -869,3 +869,16 @@ small { font-size: max(0.8em, 12px); }
 /* "Added by" label: the table header says it on desktop; guest cards need it spelled out. */
 .cell-label { display: none; color: var(--muted); }
 .checked-by { margin-top: 2px; }
+
+/* Settings: guide shortcuts */
+.help-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.help-item { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; min-height: 44px; color: var(--text); border-bottom: 1px solid var(--line); position: relative; padding-right: 36px; }
+.help-item:last-child { border-bottom: none; }
+.help-item::after { content: '›'; position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--accent); font-size: 1.4rem; }
+.help-item span { color: var(--muted); font-size: 0.85rem; }
+.help-item:hover, .help-item:active { background: var(--card-2); }
+.staff-login-row + .row .btn { flex: 1 1 0; }
+
+/* Guide: header stays on screen so "Back to guest list" is always one tap away */
+.guide-page .landing-nav { position: sticky; top: 0; z-index: 10; background: rgba(13, 11, 9, 0.92); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.guide-body section { scroll-margin-top: 80px; }

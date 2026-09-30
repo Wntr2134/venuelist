@@ -1396,15 +1396,39 @@ async function renderDoor(id) {
 // ---------- venue settings ----------
 
 function renderSettings() {
+  // The manual, first: the thing people look for when they open this screen mid-shift.
+  const topics = [
+    ['Door cheat sheet', 'cheat', 'The door routine on one screen'],
+    ['Door mode', 'door', 'Checking people in and out, +1s, walk-ups'],
+    ['Door counter', 'counter', 'The shared +/− clicker and capacity'],
+    ['Manager codes', 'override', 'Going over a limit, who can approve'],
+    ['Contributor links', 'contributors', 'Letting artists add their own guests'],
+    ['Troubleshooting', 'faq', 'Wi-Fi drops, logged out, “allocation exceeded”'],
+  ];
+  const guide = h('div', { class: 'card stack' },
+    h('h3', null, '📖 How to use it'),
+    h('a', { class: 'btn btn-primary btn-block', href: '/guide' }, 'Open the full guide'),
+    h('div', { class: 'help-list' }, topics.map(([title, id, sub]) =>
+      h('a', { class: 'help-item', href: `/guide#${id}` }, h('strong', null, title), h('span', null, sub))
+    ))
+  );
+
   const staffLink = `${location.origin}/v/${state.venueSlug}`;
+  const canShare = typeof navigator.share === 'function';
   const access = h('div', { class: 'card stack' },
     h('h3', null, 'Staff login'),
-    h('p', { class: 'muted' }, 'Staff log in with your username and password. This link fills in the username, so they only type the password.'),
-    h('div', { class: 'linkbox' },
-      h('input', { readonly: true, value: staffLink, onclick: (e) => e.target.select() }),
-      h('button', { class: 'btn btn-small btn-primary', onclick: () => copy(staffLink) }, 'Copy')
+    h('div', { class: 'staff-login-row' },
+      h('div', null, h('span', { class: 'small muted' }, 'Username'), h('strong', null, state.venueSlug)),
+      h('div', null, h('span', { class: 'small muted' }, 'Password'), h('strong', null, 'the staff password'))
     ),
-    h('p', { class: 'small muted' }, 'Username: ', h('strong', null, state.venueSlug))
+    h('div', { class: 'row' },
+      canShare ? h('button', {
+        class: 'btn btn-primary',
+        onclick: () => navigator.share({ title: 'Guest list login', text: 'Log in to our guest list here. Ask your manager for the staff password.', url: staffLink }).catch(() => {}),
+      }, 'Share staff link') : null,
+      h('button', { class: canShare ? 'btn' : 'btn btn-primary', onclick: () => copy(staffLink) }, 'Copy staff link')
+    ),
+    h('p', { class: 'small muted' }, 'The link opens the login with your username filled in, so staff only type the password.')
   );
 
   const device = h('div', { class: 'card stack' },
@@ -1438,7 +1462,7 @@ function renderSettings() {
 
   put(app,
     topbar({ back: '#/', title: 'Settings' }),
-    h('main', { class: 'page narrow-block stack' }, access, device, vadmin)
+    h('main', { class: 'page narrow-block stack' }, guide, access, device, vadmin)
   );
 }
 

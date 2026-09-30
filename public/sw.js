@@ -3,8 +3,8 @@
 // Service worker: keeps the door app usable when the venue Wi-Fi drops.
 // Network first (so updates always win), falling back to the last copy saved on this phone.
 
-const CACHE = 'vl-door-v2';
-const SHELL = ['/app', '/css/styles.css', '/js/common.js', '/js/app.js', '/icon.svg', '/apple-touch-icon.png', '/manifest.webmanifest',
+const CACHE = 'vl-door-v3';
+const SHELL = ['/app', '/guide', '/js/guide.js', '/css/styles.css', '/js/common.js', '/js/app.js', '/icon.svg', '/apple-touch-icon.png', '/manifest.webmanifest',
   '/fonts/bigshoulders-var.woff2', '/fonts/instrumentsans-var.woff2', '/fonts/jetbrainsmono-500.woff2'];
 
 self.addEventListener('install', (event) => {
@@ -25,7 +25,7 @@ self.addEventListener('activate', (event) => {
 function cacheable(url) {
   if (url.origin !== self.location.origin) return false;
   const p = url.pathname;
-  if (p === '/app' || p === '/app/') return true;
+  if (p === '/app' || p === '/app/' || p === '/guide') return true; // the guide works offline too
   if (/^\/(css|js|fonts)\//.test(p) || /\.(svg|png|webmanifest|woff2)$/.test(p)) return true;
   if (p === '/api/session' || p === '/api/events' || /^\/api\/events\/\d+$/.test(p)) return true;
   return false;
