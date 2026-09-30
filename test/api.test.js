@@ -372,63 +372,77 @@ test('owner list shows counts but never guest names', async () => {
   assert.ok(flow.guestCount >= 3 && flow.eventCount === 1);
 });
 
-test('sign-up: waits for approval, one-tap approve makes it live with the chosen login', async () => {
+test('applications: approving sends a setup link where the venue picks its username and passwords', async () => {
   const pub = client();
-  const form = { venueName: 'The Corner', username: 'Corner Hotel', name: 'Alex Rivers', email: 'alex@corner.com', password: 'cornerpass1', adminPassword: 'corner-admin-1', message: '800 cap' };
-  assert.equal((await pub.call('POST', '/api/signup', { ...form, adminPassword: '' })).status, 400, 'admin password required at sign-up');
-  assert.equal((await pub.call('POST', '/api/signup', { ...form, adminPassword: 'cornerpass1' })).status, 400, 'must differ from staff password');
-  assert.equal((await pub.call('POST', '/api/signup', { ...form, email: 'nope' })).status, 400);
-  assert.equal((await pub.call('POST', '/api/signup', { ...form, password: 'short' })).status, 400);
-  assert.equal((await pub.call('POST', '/api/signup', { ...form, username: 'admin' })).status, 409, 'reserved');
-  assert.equal((await pub.call('POST', '/api/signup', { ...form, username: 'brunswick-ballroom' })).status, 409, 'taken');
-  assert.equal((await pub.call('POST', '/api/signup', { ...form, venueName: 'Bot Bar', username: 'bot-bar', website: 'http://spam' })).status, 200);
-
-  const r = await pub.call('POST', '/api/signup', form);
+  const form = { venueName: 'The Corner', suburb: 'Richmond', name: 'Alex Rivers', email: 'alex@corner.com', phone: '0400 000 000', showsPerMonth: '11–20', capacity: 800, ticketing: 'Moshtix', message: 'Start in March' };
+  assert.equal((await pub.call('POST', '/api/apply', { ...form, email: 'nope' })).status, 400);
+  assert.equal((await pub.call('POST', '/api/apply', { ...form, name: '' })).status, 400);
+  assert.equal((await pub.call('POST', '/api/apply', { ...form, venueName: 'Bot Bar', website: 'http://spam' })).status, 200);
+  const r = await pub.call('POST', '/api/apply', form);
   assert.equal(r.status, 200);
-  assert.equal(r.data.status, 'pending');
-  assert.equal(r.data.username, 'corner-hotel');
-  assert.equal((await client().call('POST', '/api/signup', { ...form, venueName: 'Other' })).status, 409, 'pending username is reserved');
-
-  // Logging in before approval explains why.
-  const early = await client().call('POST', '/api/login', { username: 'corner-hotel', password: 'cornerpass1' });
-  assert.equal(early.status, 403);
-  assert.match(early.data.error, /waiting for approval/);
-  assert.equal((await client().call('POST', '/api/login', { username: 'corner-hotel', password: 'wrongpass1' })).status, 401);
+  assert.deepEqual(r.data, { status: 'pending' });
+  assert.equal((await client().call('POST', '/api/signup', { venueName: 'Old Form Bar', name: 'Old', email: 'old@form.com', password: 'ignored1', username: 'ignored' })).status, 200, 'the old address still works; logins are ignored');
 
   let list = await owner.call('GET', '/api/owner/venues');
-  const req = list.data.requests.find((x) => x.username === 'corner-hotel');
-  assert.ok(req && req.hasPassword && req.status === 'new');
+  const req = list.data.requests.find((x) => x.venueName === 'The Corner');
+  assert.equal(req.suburb, 'Richmond');
+  assert.equal(req.showsPerMonth, '11–20');
+  assert.equal(req.capacity, 800);
+  assert.equal(req.ticketing, 'Moshtix');
+  assert.equal(req.username, null);
   assert.ok(!list.data.requests.some((x) => x.venueName === 'Bot Bar'), 'honeypot submission not stored');
-  assert.ok(!JSON.stringify(list.data).includes('scrypt$'), 'password hash never sent to the browser');
 
   const { c } = await onboard('Nosy Venue');
   assert.equal((await c.call('POST', `/api/owner/requests/${req.id}/approve`)).status, 401, 'venues cannot approve');
 
   const ok = await owner.call('POST', `/api/owner/requests/${req.id}/approve`);
   assert.equal(ok.status, 200);
-  assert.equal(ok.data.live, true);
-  assert.equal(ok.data.venue.slug, 'corner-hotel');
+  assert.equal(ok.data.live, false);
+  assert.equal(ok.data.venue.slug, 'the-corner', 'suggested from the venue name');
+  assert.equal(ok.data.emailed, false, 'no email set up in these tests');
   assert.equal((await owner.call('POST', `/api/owner/requests/${req.id}/approve`)).status, 409, 'only once');
+  const token = ok.data.setupPath.split('/').pop();
 
   const v = client();
-  assert.equal((await v.call('POST', '/api/login', { username: 'corner-hotel', password: 'cornerpass1' })).status, 200);
-  assert.equal((await v.call('GET', '/api/session')).data.venue.name, 'The Corner');
-  assert.equal((await v.call('GET', '/api/session')).data.venue.hasAdmin, true, 'admin password from sign-up carried over');
+  const info = (await v.call('GET', `/api/setup/${token}`)).data;
+  assert.equal(info.canChooseUsername, true);
+  assert.equal(info.needsAdmin, true);
+  const setup = { username: 'Corner Hotel', password: 'cornerpass1', adminPassword: 'corner-admin-1' };
+  assert.equal((await v.call('POST', `/api/setup/${token}`, { ...setup, username: 'admin' })).status, 409, 'reserved');
+  assert.equal((await v.call('POST', `/api/setup/${token}`, { ...setup, username: 'nosy-venue' })).status, 409, 'taken');
+  assert.equal((await v.call('POST', `/api/setup/${token}`, { ...setup, adminPassword: 'cornerpass1' })).status, 400, 'passwords must differ');
+  const done = await v.call('POST', `/api/setup/${token}`, setup);
+  assert.equal(done.status, 200);
+  assert.equal(done.data.venue.slug, 'corner-hotel');
+  assert.equal((await v.call('GET', '/api/session')).data.venue.name, 'The Corner', 'logged in straight away');
+
+  const staff = client();
+  assert.equal((await staff.call('POST', '/api/login', { username: 'corner-hotel', password: 'cornerpass1' })).status, 200);
+  assert.equal((await client().call('POST', '/api/vadmin/login/corner-hotel', { password: 'corner-admin-1' })).status, 200);
   const adm = client();
-  assert.equal((await adm.call('POST', '/api/vadmin/login/corner-hotel', { password: 'corner-admin-1' })).status, 200);
+  await adm.call('POST', '/api/vadmin/login/corner-hotel', { password: 'corner-admin-1' });
+  assert.equal((await adm.call('GET', '/api/vadmin/overview')).data.venue.defaultCapacity, 800, 'capacity from the application');
+  assert.equal((await client().call('POST', `/api/setup/${token}`, setup)).status, 404, 'setup link works once');
   list = await owner.call('GET', '/api/owner/venues');
   assert.equal(list.data.venues.find((x) => x.slug === 'corner-hotel').status, 'active');
 });
 
-test('auto-approve: sign-ups go live and log in immediately', async () => {
+test('auto-approve: every application is sent a setup link straight away', async () => {
   await owner.call('PUT', '/api/owner/settings', { autoApprove: true });
-  const pub = client();
-  const r = await pub.call('POST', '/api/signup', { venueName: 'Instant Bar', username: 'instant-bar', name: 'Kim', email: 'kim@instant.com', password: 'instantpw1', adminPassword: 'instant-admin-1' });
-  assert.equal(r.data.status, 'active');
-  assert.equal((await pub.call('GET', '/api/events')).status, 200, 'logged in straight away');
+  const r = await client().call('POST', '/api/apply', { venueName: 'Instant Bar', name: 'Kim', email: 'kim@instant.com' });
+  assert.equal(r.data.status, 'pending', 'nobody is logged in from the home page');
+  let venue;
+  for (let i = 0; i < 20 && !venue; i++) {
+    await new Promise((res) => setTimeout(res, 20));
+    venue = (await owner.call('GET', '/api/owner/venues')).data.venues.find((x) => x.name === 'Instant Bar');
+  }
+  assert.ok(venue, 'venue created');
+  assert.equal(venue.status, 'pending', 'waiting for them to open the setup link');
+  assert.equal(venue.setupLinkActive, true);
   await owner.call('PUT', '/api/owner/settings', { autoApprove: false });
-  const later = await client().call('POST', '/api/signup', { venueName: 'Later Bar', username: 'later-bar', name: 'Lee', email: 'lee@later.com', password: 'laterpass1', adminPassword: 'later-admin-1' });
-  assert.equal(later.data.status, 'pending');
+  await client().call('POST', '/api/apply', { venueName: 'Later Bar', name: 'Lee', email: 'lee@later.com' });
+  const later = (await owner.call('GET', '/api/owner/venues')).data.requests.find((x) => x.venueName === 'Later Bar');
+  assert.equal(later.status, 'new');
 });
 
 test('owner can choose a username when adding a venue', async () => {
@@ -836,17 +850,20 @@ test('email: sign-up alert, approval email, forgot password links, test email', 
     assert.equal(smtp.sent[0].user, 'me@gmail.com');
     assert.equal(smtp.sent[0].pass, 'goodpass', 'spaces in Gmail app passwords are removed');
 
-    await client(() => url).call('POST', '/api/signup', { venueName: 'Mail Bar', username: 'mail-bar', name: 'Alex Rivers', email: 'alex@mailbar.com', password: 'staffpass1', adminPassword: 'adminpass1' });
+    await client(() => url).call('POST', '/api/apply', { venueName: 'Mail Bar', name: 'Alex Rivers', email: 'alex@mailbar.com', showsPerMonth: '5–10', ticketing: 'Oztix' });
     await waitFor(2);
     assert.equal(smtp.sent[1].to, 'will@example.com');
-    assert.match(smtp.sent[1].subject, /New sign-up: Mail Bar/);
+    assert.match(smtp.sent[1].subject, /New application: Mail Bar/);
     assert.match(smtp.sent[1].text, /alex@mailbar\.com/);
+    assert.match(smtp.sent[1].text, /5–10 a month/);
 
     const req = (await o.call('GET', '/api/owner/venues')).data.requests[0];
     const ap = await o.call('POST', `/api/owner/requests/${req.id}/approve`);
     assert.equal(ap.data.emailed, true);
     assert.equal(smtp.sent[2].to, 'alex@mailbar.com');
-    assert.match(smtp.sent[2].text, /\/v\/mail-bar\/admin/);
+    assert.match(smtp.sent[2].subject, /Set up Mail Bar/);
+    const setupToken = smtp.sent[2].text.match(/\/setup\/([A-Za-z0-9_-]+)/)[1];
+    assert.equal((await client(() => url).call('POST', `/api/setup/${setupToken}`, { username: 'mail-bar', password: 'staffpass1', adminPassword: 'adminpass1' })).status, 200);
 
     // Forgot password: same answer for real and made-up venues; link goes to the venue's email.
     const pub = client(() => url);
@@ -863,7 +880,7 @@ test('email: sign-up alert, approval email, forgot password links, test email', 
 
     // A broken mail setup never breaks the app: it just logs.
     fs.writeFileSync(cfgFile, JSON.stringify({ host: '127.0.0.1', port: smtp.srv.address().port, secure: false, user: 'me@gmail.com', pass: 'wrong' }));
-    const r = await client(() => url).call('POST', '/api/signup', { venueName: 'Broken Mail', username: 'broken-mail', name: 'B', email: 'b@b.com', password: 'staffpass1', adminPassword: 'adminpass1' });
+    const r = await client(() => url).call('POST', '/api/apply', { venueName: 'Broken Mail', name: 'B', email: 'b@b.com' });
     assert.equal(r.status, 200);
     for (let i = 0; i < 50 && !errors.length; i++) await new Promise((res) => setTimeout(res, 40));
     assert.match(errors[0], /bad credentials/);

@@ -32,7 +32,7 @@
         <a href="#how" class="hide-sm">How it works</a>
         <a href="/guide" class="hide-sm">Guide</a>
         <a class="btn btn-small" href="/login" id="nav-login">Log in</a>
-        <a class="btn btn-small btn-primary" href="#signup">Sign up</a>
+        <a class="btn btn-small btn-primary" href="#apply">Apply</a>
       </nav>
     </div>
   </header>
@@ -45,13 +45,13 @@
         <h1>The guest list, sorted <span class="grad">before doors.</span></h1>
         <p class="lede">Artists, tour managers and promoters add their own guests with a link. Your door checks people in and out on any phone. Everyone works off one live list — with a name on every change.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary btn-lg" href="#signup">Sign up your venue</a>
+          <a class="btn btn-primary btn-lg" href="#apply">Apply for access</a>
           <a class="btn btn-lg btn-ghost" href="#demo-section">See it in action ↓</a>
         </div>
         <ul class="ticks small">
           <li>No app to install</li>
           <li>No staff accounts</li>
-          <li>Set up in a minute</li>
+          <li>Set up with you</li>
         </ul>
       </div>
 
@@ -238,42 +238,40 @@
       </div>
     </section>
 
-    <!-- ================= SIGN UP ================= -->
-    <section class="request-band signup-band" id="signup">
+    <!-- ================= APPLY ================= -->
+    <section class="request-band signup-band" id="apply">
       <div class="request-copy reveal">
-        <p class="eyebrow">Get your venue on</p>
-        <h2 class="section-title left">Sign up your venue</h2>
-        <p class="muted">Pick a username and password for your venue. Once we’ve approved it — usually the same day — you and your staff log in with those details.</p>
-        <ul class="check-list">
-          <li>One login for the venue — staff share it</li>
-          <li>Your staff link: <code>guestlist.riderly.com.au/v/<span id="slug-echo">your-username</span></code></li>
-          <li>Onboarding help from people who run venues</li>
-        </ul>
-        <p class="muted small">Already signed up? <a href="/login">Log in here</a> · New to it? <a href="/guide">Read the guide</a></p>
+        <p class="eyebrow">Now taking venues</p>
+        <h2 class="section-title left">Apply for your venue</h2>
+        <p class="muted">Tell us a little about your venue. We’ll get back to you within one business day with pricing and a quick walkthrough, then send your setup link.</p>
+        <ol class="apply-steps">
+          <li><b>Apply</b><span>Two minutes, no card needed.</span></li>
+          <li><b>We talk it through</b><span>Pricing, how your door runs, anything you need.</span></li>
+          <li><b>You’re live</b><span>Set your logins and run your next show on it.</span></li>
+        </ol>
+        <p class="muted small">Already a venue? <a href="/login">Log in</a> · Want the details first? <a href="/guide">Read the guide</a></p>
       </div>
       <form class="card stack request-form reveal" data-delay="100" id="signup-form" novalidate>
-        <label class="field"><span>Venue name</span><input name="venueName" required maxlength="120" autocomplete="organization" placeholder="e.g. The Corner Hotel"></label>
-        <label class="field"><span>Username</span><input name="username" required maxlength="40" autocapitalize="none" autocomplete="username" spellcheck="false" placeholder="e.g. corner-hotel"><small class="muted">Letters, numbers and dashes. This is what your staff log in with.</small></label>
         <div class="grid-2">
-          <label class="field"><span>Staff password</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
-          <label class="field"><span>Type it again</span><input name="confirm" type="password" required minlength="8" autocomplete="new-password"></label>
-        </div>
-        <div class="pin-box">
-          <div class="small"><strong>👤 Venue admin password</strong> <span class="muted">— for the GM or owner, not staff. Opens your venue admin page (manager codes, staff password, settings) and works as a manager override.</span></div>
-          <div class="grid-2">
-            <label class="field"><span>Venue admin password</span><input name="adminPassword" type="password" required minlength="8" autocomplete="new-password"></label>
-            <label class="field"><span>Type it again</span><input name="adminConfirm" type="password" required minlength="8" autocomplete="new-password"></label>
-          </div>
+          <label class="field"><span>Venue name</span><input name="venueName" required maxlength="120" autocomplete="organization" placeholder="e.g. The Corner Hotel"></label>
+          <label class="field"><span>Suburb <small class="muted">(optional)</small></span><input name="suburb" maxlength="80" autocomplete="address-level2" placeholder="e.g. Richmond"></label>
         </div>
         <div class="grid-2">
           <label class="field"><span>Your name</span><input name="name" required maxlength="80" autocomplete="name"></label>
           <label class="field"><span>Phone <small class="muted">(optional)</small></span><input name="phone" maxlength="40" autocomplete="tel" inputmode="tel"></label>
         </div>
-        <label class="field"><span>Email</span><input name="email" type="email" required maxlength="120" autocomplete="email"><small class="muted">We’ll let you know here when your venue is live.</small></label>
-        <label class="field"><span>Anything we should know? <small class="muted">(optional)</small></span><textarea name="message" rows="2" maxlength="1000" placeholder="Capacity, shows a week, how you run the list now…"></textarea></label>
+        <label class="field"><span>Email</span><input name="email" type="email" required maxlength="120" autocomplete="email"></label>
+        <div class="grid-2">
+          <label class="field"><span>Shows a month</span>
+            <select name="showsPerMonth"><option value="">Choose…</option><option>1–4</option><option>5–10</option><option>11–20</option><option>20+</option></select></label>
+          <label class="field"><span>Capacity <small class="muted">(optional)</small></span><input name="capacity" type="number" min="1" max="100000" inputmode="numeric" placeholder="e.g. 450"></label>
+        </div>
+        <label class="field"><span>Ticketing</span>
+          <select name="ticketing"><option value="">Choose…</option><option>Moshtix</option><option>Oztix</option><option>Humanitix</option><option>Eventbrite</option><option>Ticketek</option><option>Other</option><option>Door sales only</option></select></label>
+        <label class="field"><span>Anything else? <small class="muted">(optional)</small></span><textarea name="message" rows="2" maxlength="1000" placeholder="How you run the list now, when you’d like to start…"></textarea></label>
         <label class="hp" aria-hidden="true">Website <input name="website" tabindex="-1" autocomplete="off"></label>
-        <button class="btn btn-primary btn-block btn-lg" type="submit">Sign up</button>
-        <p class="small muted">By signing up you agree to the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.</p>
+        <button class="btn btn-primary btn-block btn-lg" type="submit">Apply</button>
+        <p class="small muted">We’ll only use these details to get in touch about your venue. See our <a href="/privacy">privacy policy</a>.</p>
         <p class="small muted form-status" id="signup-status" role="status"></p>
       </form>
     </section>
@@ -281,6 +279,7 @@
     <!-- ================= FAQ ================= -->
     <section class="faq">
       <h2 class="section-title reveal">Questions</h2>
+      <details><summary>How much does it cost?</summary><p>Pricing depends on your venue. Apply and we’ll send you pricing within one business day. No card needed to apply.</p></details>
       <details><summary>Do our staff need accounts?</summary><p>No. Your venue has one username and password. Staff open your venue’s link, type the password, and put their name on the phone once.</p></details>
       <details><summary>Do artists and promoters need to sign up?</summary><p>No. They get a private link for that show. They can add, edit and remove their own guests until your cutoff — and they only ever see their own list.</p></details>
       <details><summary>Does it replace our ticketing?</summary><p>No — it runs alongside it. It’s for the guest list: comps, artist and crew, industry, media and walk-ups.</p></details>
@@ -293,9 +292,9 @@
     <!-- ================= FINAL CTA ================= -->
     <section class="cta-band reveal">
       <h2>Your next show’s guest list, sorted.</h2>
-      <p class="muted">Sign up in a minute. We’ll have you live the same day.</p>
+      <p class="muted">Apply in two minutes. We’ll be in touch within one business day.</p>
       <div class="hero-actions center">
-        <a class="btn btn-primary btn-lg" href="#signup">Sign up your venue</a>
+        <a class="btn btn-primary btn-lg" href="#apply">Apply for access</a>
         <a class="btn btn-lg btn-ghost" href="/guide">Read the guide</a>
       </div>
     </section>
@@ -303,7 +302,7 @@
 
   <footer class="landing-foot small muted">
     <span>© Riderly · Melbourne</span>
-    <span class="foot-links"><a href="/guide">Guide</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/login">Log in</a><a href="#signup">Sign up</a></span>
+    <span class="foot-links"><a href="/guide">Guide</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/login">Log in</a><a href="#apply">Sign up</a></span>
   </footer>
 
   <script src="/js/landing.js"></script>

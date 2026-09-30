@@ -37,6 +37,7 @@ function pages(demo) {
     { id: 'guide', url: '/guide' },
     { id: 'privacy', url: '/privacy' },
     { id: 'login', url: '/login' },
+    { id: 'setup', url: demo.setupPath },
     { id: 'contributor', url: `/c/${demo.tm.token}` },
     { id: 'events', url: '/app#/', as: 'staff' },
     { id: 'guests', url: `/app#/event/${e}/guests`, as: 'staff' },
@@ -111,6 +112,11 @@ function inspect(touch) {
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   const demo = await startDemo();
+  // A venue that's been approved but not set up yet, for the setup (onboarding) page.
+  const added = await (await fetch(`${demo.base}/api/owner/venues`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: demo.ownerCookie }, body: JSON.stringify({ name: 'The Corner Hotel' }),
+  })).json();
+  demo.setupPath = added.setupPath;
   const browser = await chromium.launch();
   const cookies = {
     staff: { name: 'vl_session', value: demo.cookie.split('=')[1] },

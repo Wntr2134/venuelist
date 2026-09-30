@@ -191,6 +191,12 @@ function migrate(db) {
   }
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external ON events(venue_id, external_id) WHERE external_id IS NOT NULL');
 
+  // Applications (the home page form): a bit more about the venue, no logins.
+  const arCols = db.prepare('PRAGMA table_info(access_requests)').all().map((c) => c.name);
+  for (const [col, def] of [['suburb', 'TEXT'], ['shows_per_month', 'TEXT'], ['capacity', 'INTEGER'], ['ticketing', 'TEXT']]) {
+    if (!arCols.includes(col)) db.exec(`ALTER TABLE access_requests ADD COLUMN ${col} ${def}`);
+  }
+
   // Riderly connection: one API key per venue, stored as a SHA-256 hash (the key itself is shown once).
   const vCols = db.prepare('PRAGMA table_info(venues)').all().map((c) => c.name);
   for (const [col, def] of [

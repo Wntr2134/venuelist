@@ -198,7 +198,7 @@ function requestsCard(requests) {
   const open = requests.filter((r) => r.status === 'new');
   if (!requests.length) return null;
   return h('div', { class: 'card stack requests' },
-    h('h2', null, 'Sign-ups ', open.length ? h('span', { class: 'badge badge-vip' }, `${open.length} new`) : null),
+    h('h2', null, 'Applications ', open.length ? h('span', { class: 'badge badge-vip' }, `${open.length} new`) : null),
     requests.map((r) =>
       h('div', { class: `request${r.status === 'done' ? ' done' : ''}` },
         h('div', { class: 'request-head' },
@@ -206,10 +206,12 @@ function requestsCard(requests) {
           h('span', { class: 'small muted' }, fmtDateTime(r.createdAt))
         ),
         h('div', { class: 'small' }, r.name, ' · ', h('a', { href: `mailto:${r.email}` }, r.email), r.phone ? ` · ${r.phone}` : ''),
+        [r.suburb, r.showsPerMonth ? `${r.showsPerMonth} shows a month` : null, r.capacity ? `${r.capacity} capacity` : null, r.ticketing]
+          .some(Boolean) ? h('div', { class: 'small muted' }, [r.suburb, r.showsPerMonth ? `${r.showsPerMonth} shows a month` : null, r.capacity ? `${r.capacity} capacity` : null, r.ticketing].filter(Boolean).join(' · ')) : null,
         r.username ? h('div', { class: 'small muted' }, 'Username: ', h('strong', null, r.username), r.hasPassword ? ' · password chosen' : '') : null,
         r.message ? h('p', { class: 'small muted request-msg' }, r.message) : null,
         h('div', { class: 'row wrap' },
-          r.status === 'new' ? h('button', { class: 'btn btn-small btn-primary', onclick: () => approve(r) }, 'Approve') : null,
+          r.status === 'new' ? h('button', { class: 'btn btn-small btn-primary', onclick: () => approve(r) }, 'Approve & send setup link') : null,
           h('button', { class: 'btn btn-small', onclick: () => markRequest(r, r.status === 'new' ? 'done' : 'new') }, r.status === 'new' ? 'Mark done' : 'Reopen'),
           h('button', { class: 'btn btn-small btn-ghost-danger', onclick: () => deleteRequest(r) }, 'Delete')
         )
@@ -222,7 +224,7 @@ async function approve(req) {
   try {
     const r = await api('POST', `/api/owner/requests/${req.id}/approve`);
     if (r.live) showLive(r, req);
-    else showSetupLink(r, false, req);
+    else showSetupLink(r, false, req, r.emailed);
     renderDashboard();
   } catch (err) {
     toast(err.message, 'error', 5000);
@@ -268,7 +270,7 @@ function setupMessage(r) {
     : `Hi! Here’s your link to set up ${r.venue.name} on Riderly Guest List: ${url}\n\nOpen it, choose a password, and you’re in (about 30 seconds). It works once and expires in 7 days.`;
 }
 
-function showSetupLink(r, reset, request) {
+function showSetupLink(r, reset, request, emailed) {
   const url = `${location.origin}${r.setupPath}`;
   let msg = setupMessage({ ...r, reset });
   if (request) msg = msg.replace(/^Hi!/, `Hi ${request.name.split(' ')[0]}!`);
@@ -277,7 +279,8 @@ function showSetupLink(r, reset, request) {
     : null;
   const canShare = typeof navigator.share === 'function';
   modal(reset ? 'Staff password reset link' : `${r.venue.name} added`, h('div', { class: 'stack' },
-    h('p', null, 'Send this to the venue manager. It works once and expires in 7 days.'),
+    emailed ? h('div', { class: 'pin-box' }, `✉️ Setup link emailed to ${request.email}. Nothing else to do. The link is below in case they need it again.`) : null,
+    h('p', null, emailed ? 'It works once and expires in 7 days.' : 'Send this to the venue manager. It works once and expires in 7 days.'),
     h('div', { class: 'linkbox' },
       h('input', { readonly: true, value: url, onclick: (e) => e.target.select() }),
       h('button', { class: 'btn btn-small', onclick: () => copy(url) }, 'Copy link')
@@ -504,9 +507,9 @@ function signupCard(data) {
     }
   });
   return h('div', { class: 'card stack' },
-    h('h2', null, 'Sign-ups'),
-    h('label', { class: 'check' }, box, h('span', null, 'Approve new sign-ups automatically')),
-    h('p', { class: 'small muted' }, 'Off (recommended): sign-ups from the home page wait here until you tap Approve. On: they can log in the moment they sign up.')
+    h('h2', null, 'Applications'),
+    h('label', { class: 'check' }, box, h('span', null, 'Approve applications automatically')),
+    h('p', { class: 'small muted' }, 'Off (recommended for a paid product): applications wait here until you approve them. On: every application is sent a setup link straight away.')
   );
 }
 

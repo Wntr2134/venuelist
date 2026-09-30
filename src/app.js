@@ -698,54 +698,78 @@ function createApp(db, options = {}) {
   // Public sign-up on the landing page. Normally lands in the owner's /admin inbox for
   // one-tap approval; with auto-approve on, the venue is live immediately.
   const signupLimiter = auth.createLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
-  route('POST', /^\/api\/signup$/, ({ req, body, res }) => {
+  // Applications from the home page. Riderly is paid, so venues apply and Riderly approves;
+  // the approval email carries a setup link where the venue picks its username and passwords.
+  const SHOWS_PER_MONTH = ['1–4', '5–10', '11–20', '20+'];
+  const TICKETING = ['Moshtix', 'Oztix', 'Humanitix', 'Eventbrite', 'Ticketek', 'Other', 'Door sales only'];
+
+  async function sendSetupEmail(v, contactName, setupPath) {
+    return mail({
+      to: v.email,
+      subject: `Set up ${v.name} on Riderly Guest List`,
+      text: [
+        `Hi ${String(contactName || '').split(' ')[0] || 'there'},`,
+        '',
+        `${v.name} is approved for Riderly Guest List. Finish setting up here (about two minutes):`,
+        '',
+        `${PUBLIC_URL}${setupPath}`,
+        '',
+        'You’ll choose your venue’s username, a staff password your team shares, and a venue admin password just for you.',
+        `The link works once and expires in ${SETUP_LINK_DAYS} days.`,
+        '',
+        `How it all works: ${PUBLIC_URL}/guide`,
+        '',
+        '— Riderly',
+      ].join('\n'),
+    });
+  }
+
+  function apply({ req, body }) {
     const ip = clientIp(req);
-    if (signupLimiter.blocked(ip)) throw new HttpError(429, 'Too many sign-ups from here. Try again in an hour.');
+    if (signupLimiter.blocked(ip)) throw new HttpError(429, 'Too many applications from here. Try again in an hour.');
     if (body.website) return { status: 'pending' }; // honeypot field: bots fill it, people never see it
     const venueName = str(body.venueName, 'Venue name', { required: true, max: 120 });
-    const username = usernameFrom(body.username);
+    const contact = str(body.name, 'Your name', { required: true, max: 80 });
     const email = str(body.email, 'Email', { required: true, max: 120 });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
-    const staffPw = password(body.password);
-    const adminPw = password(body.adminPassword, 'Venue admin password');
-    if (adminPw === staffPw) throw new HttpError(400, 'The venue admin password must be different from the staff password.');
-    const hash = auth.hashPassword(staffPw);
-    const adminHash = auth.hashPassword(adminPw);
-    if (usernameTaken(username)) throw new HttpError(409, `Username "${username}" is taken — try another.`);
+    const phone = str(body.phone, 'Phone', { max: 40 }) || null;
+    const suburb = str(body.suburb, 'Suburb', { max: 80 }) || null;
+    const shows = SHOWS_PER_MONTH.includes(body.showsPerMonth) ? body.showsPerMonth : null;
+    const capacity = int(body.capacity, 'Capacity', { min: 1, max: 100000, nullable: true });
+    const ticketing = TICKETING.includes(body.ticketing) ? body.ticketing : null;
+    const message = str(body.message, 'Message', { max: 1000 }) || null;
     const pending = db.prepare("SELECT COUNT(*) AS n FROM access_requests WHERE status = 'new'").get().n;
-    if (pending >= 200) throw new HttpError(503, 'We’re catching up on sign-ups — please try again later.');
+    if (pending >= 200) throw new HttpError(503, 'We’re catching up on applications. Please try again later.');
     signupLimiter.fail(ip); // counts every successful submission
 
-    const contact = str(body.name, 'Your name', { required: true, max: 80 });
-    const phone = str(body.phone, 'Phone', { max: 40 }) || null;
-    const message = str(body.message, 'Message', { max: 1000 }) || null;
     const autoApprove = getSetting(db, 'auto_approve') === '1';
-    db.prepare(
-      `INSERT INTO access_requests (venue_name, contact_name, email, phone, message, slug, password_hash, admin_hash, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(venueName, contact, email, phone, message, username, autoApprove ? null : hash, autoApprove ? null : adminHash,
-      autoApprove ? 'done' : 'new', now());
+    const info = db.prepare(
+      `INSERT INTO access_requests (venue_name, contact_name, email, phone, message, suburb, shows_per_month, capacity, ticketing, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)`
+    ).run(venueName, contact, email, phone, message, suburb, shows, capacity, ticketing, now());
     mail({
       to: 'owner',
       replyTo: email,
-      subject: `${autoApprove ? 'New venue (auto-approved)' : 'New sign-up'}: ${venueName}`,
+      subject: `New application: ${venueName}`,
       text: [
-        `${venueName} ${autoApprove ? 'signed up and is live' : 'wants to join Riderly Guest List'}.`,
+        `${venueName}${suburb ? ` (${suburb})` : ''} applied for Riderly Guest List.`,
         '',
-        `Contact:  ${contact}`,
-        `Email:    ${email}`,
-        phone ? `Phone:    ${phone}` : null,
-        `Username: ${username}`,
+        `Contact:    ${contact}`,
+        `Email:      ${email}`,
+        phone ? `Phone:      ${phone}` : null,
+        shows ? `Shows:      ${shows} a month` : null,
+        capacity ? `Capacity:   ${capacity}` : null,
+        ticketing ? `Ticketing:  ${ticketing}` : null,
         message ? `\nMessage:\n${message}` : null,
         '',
-        autoApprove ? `Manage it: ${PUBLIC_URL}/admin` : `Approve it: ${PUBLIC_URL}/admin`,
+        autoApprove ? `Auto-approve is on, so they've been sent a setup link: ${PUBLIC_URL}/admin` : `Review it: ${PUBLIC_URL}/admin`,
       ].filter((x) => x !== null).join('\n'),
     });
-    if (!autoApprove) return { status: 'pending', username };
-    const v = createVenue({ name: venueName, slug: username, passwordHash: hash, adminHash, email });
-    res.setHeader('Set-Cookie', auth.venueCookie(db, v, secureCookies));
-    return { status: 'active', venue: venueOut(v) };
-  }, { auth: 'public' });
+    if (autoApprove) approveRequest(Number(info.lastInsertRowid)).catch((err) => mailLog.error(`Auto-approve failed: ${err.message}`));
+    return { status: 'pending' };
+  }
+  route('POST', /^\/api\/apply$/, apply, { auth: 'public' });
+  route('POST', /^\/api\/signup$/, apply, { auth: 'public' }); // older pages still post here
 
   // "Forgot password?" — emails a reset link to the venue's contact email (the GM/owner).
   // Always answers the same way so it can't be used to find out which venues exist.
@@ -816,7 +840,7 @@ function createApp(db, options = {}) {
 
   route('GET', /^\/api\/setup\/([A-Za-z0-9_-]+)$/, ({ params }) => {
     const v = venueBySetupToken(params[0]);
-    return { venue: venueOut(v), reset: !!v.password_hash, needsAdmin: !v.admin_password_hash };
+    return { venue: venueOut(v), reset: !!v.password_hash, needsAdmin: !v.admin_password_hash, canChooseUsername: !v.password_hash };
   }, { auth: 'public' });
 
   route('POST', /^\/api\/setup\/([A-Za-z0-9_-]+)$/, ({ req, params, body, res }) => {
@@ -830,8 +854,15 @@ function createApp(db, options = {}) {
       if (adminPw === staffPw) throw new HttpError(400, 'The venue admin password must be different from the staff password.');
       adminHash = auth.hashPassword(adminPw);
     }
+    // A brand-new venue picks its own username (Riderly suggested one from the venue name).
+    let slug = v.slug;
+    if (!v.password_hash && body.username !== undefined) {
+      slug = usernameFrom(body.username);
+      if (slug !== v.slug && usernameTaken(slug)) throw new HttpError(409, `Username "${slug}" is taken. Try another.`);
+    }
     const version = v.password_hash ? v.password_version + 1 : v.password_version; // a reset logs out old devices
     const t = now();
+    if (slug !== v.slug) db.prepare('UPDATE venues SET slug = ? WHERE id = ?').run(slug, v.id);
     db.prepare(
       `UPDATE venues SET password_hash = ?, password_version = ?, admin_password_hash = ?, setup_token_hash = NULL,
          setup_expires_at = NULL, setup_at = COALESCE(setup_at, ?), last_login_at = ? WHERE id = ?`
@@ -933,6 +964,10 @@ function createApp(db, options = {}) {
         message: r.message,
         username: r.slug,
         hasPassword: !!r.password_hash,
+        suburb: r.suburb,
+        showsPerMonth: r.shows_per_month,
+        capacity: r.capacity,
+        ticketing: r.ticketing,
         status: r.status,
         createdAt: r.created_at,
       }));
@@ -1038,10 +1073,10 @@ function createApp(db, options = {}) {
     return { ok: true };
   }, { auth: 'owner' });
 
-  // One tap: the venue goes live with the username and password it signed up with.
-  // Older requests without a password get a setup link instead.
-  route('POST', /^\/api\/owner\/requests\/(\d+)\/approve$/, async ({ params }) => {
-    const r = db.prepare('SELECT * FROM access_requests WHERE id = ?').get(params[0]);
+  // Approving creates the venue and sends its setup link. (Requests from the old sign-up form
+  // already carry a username and passwords, so those go live straight away.)
+  async function approveRequest(id) {
+    const r = db.prepare('SELECT * FROM access_requests WHERE id = ?').get(id);
     if (!r) throw new HttpError(404, 'Request not found');
     if (r.status !== 'new') throw new HttpError(409, 'This request has already been dealt with.');
     let slug = r.slug;
@@ -1049,28 +1084,25 @@ function createApp(db, options = {}) {
     const v = tx(db, () => {
       const created = createVenue({ name: r.venue_name, slug, passwordHash: r.password_hash, adminHash: r.admin_hash, email: r.email });
       if (r.pin_hash) {
-        // Sign-ups from before the admin portal carried a single manager PIN.
         db.prepare("INSERT INTO manager_codes (venue_id, name, code_hash, created_at) VALUES (?, 'Manager', ?, ?)").run(created.id, r.pin_hash, now());
       }
+      if (r.capacity) db.prepare('UPDATE venues SET default_capacity = ? WHERE id = ?').run(r.capacity, created.id);
       db.prepare("UPDATE access_requests SET status = 'done', password_hash = NULL, pin_hash = NULL, admin_hash = NULL WHERE id = ?").run(r.id);
       return created;
     });
     const out = { venue: venueOut(v), request: { name: r.contact_name, email: r.email }, live: !!r.password_hash };
-    if (!r.password_hash) return { ...out, ...newSetupLink(v.id) };
+    if (!r.password_hash) {
+      const link = newSetupLink(v.id);
+      return { ...out, ...link, emailed: await sendSetupEmail(v, r.contact_name, link.setupPath) };
+    }
     out.emailed = await mail({
       to: r.email,
       subject: `${v.name} is live on Riderly Guest List`,
       text: [
         `Hi ${r.contact_name.split(' ')[0]},`,
         '',
-        `${v.name} is now live on Riderly Guest List.`,
-        '',
-        `Staff log in here:   ${PUBLIC_URL}/v/${v.slug}`,
-        `Username:            ${v.slug}`,
-        'Password:            the staff password you chose when you signed up',
-        '',
-        `Venue admin (GM/owner only): ${PUBLIC_URL}/v/${v.slug}/admin`,
-        'Log in with your venue admin password and add a manager code for each duty manager.',
+        `${v.name} is now live on Riderly Guest List. Log in with the username and passwords you chose:`,
+        `${PUBLIC_URL}/v/${v.slug}`,
         '',
         `How it all works: ${PUBLIC_URL}/guide`,
         '',
@@ -1078,7 +1110,9 @@ function createApp(db, options = {}) {
       ].join('\n'),
     });
     return out;
-  }, { auth: 'owner' });
+  }
+
+  route('POST', /^\/api\/owner\/requests\/(\d+)\/approve$/, ({ params }) => approveRequest(Number(params[0])), { auth: 'owner' });
 
   route('DELETE', /^\/api\/owner\/requests\/(\d+)$/, ({ params }) => {
     db.prepare('DELETE FROM access_requests WHERE id = ?').run(params[0]);

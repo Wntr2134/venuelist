@@ -29,14 +29,15 @@ async function startDemo() {
   };
 
   // ----- demo venue (all names fictional) -----
-  await call('POST', '/api/signup', { venueName: 'The Velvet Room', username: 'velvet-room', name: 'Demo', email: 'demo@example.com', password: 'demo-password', adminPassword: 'demo-admin-pass' });
+  await call('POST', '/api/apply', { venueName: 'The Velvet Room', name: 'Demo', email: 'demo@example.com', showsPerMonth: '11–20', ticketing: 'Moshtix' });
   await call('POST', '/api/owner/setup', { password: 'owner-password' }).catch(() => {});
   // Approve via the owner session in a separate jar.
   let ownerCookie = '';
   const o = await fetch(base + '/api/owner/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'owner-password' }) });
   ownerCookie = o.headers.getSetCookie()[0].split(';')[0];
   const list = await (await fetch(base + '/api/owner/venues', { headers: { Cookie: ownerCookie } })).json();
-  await fetch(base + `/api/owner/requests/${list.requests[0].id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: ownerCookie }, body: '{}' });
+  const approved = await (await fetch(base + `/api/owner/requests/${list.requests[0].id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: ownerCookie }, body: '{}' })).json();
+  await call('POST', `/api/setup/${approved.setupPath.split('/').pop()}`, { username: 'velvet-room', password: 'demo-password', adminPassword: 'demo-admin-pass' });
   await call('POST', '/api/login', { username: 'velvet-room', password: 'demo-password' });
   // Demo manager code (the venue admin password also works as a code).
   const vadm = await fetch(base + '/api/vadmin/login/velvet-room', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'demo-admin-pass' }) });

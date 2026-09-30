@@ -55,7 +55,7 @@ function draw() {
     fromLink ? h('a', { class: 'small center-text', href: '/login' }, 'Not your venue?') : null,
     h('p', { class: 'small muted center-text' },
       h('button', { type: 'button', class: 'linklike', onclick: () => forgot(fromLink || venueInput.value) }, 'Forgot password?'),
-      ' · No account yet? ', h('a', { href: '/#signup' }, 'Sign up your venue'))
+      ' · New venue? ', h('a', { href: '/#apply' }, 'Apply for access'))
   );
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
