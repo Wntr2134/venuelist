@@ -323,7 +323,7 @@ async function renderEvent(id, tab) {
 
     const table = rows.length
       ? h('div', { class: 'table-wrap' },
-        h('table', { class: 'table' },
+        h('table', { class: 'table guest-table' },
           h('thead', null, h('tr', null, h('th', null, 'Guest'), h('th', null, 'List'), h('th', null, 'Added by'), h('th', null, 'Door'), h('th', null, ''))),
           h('tbody', null, rows.map((g) =>
             h('tr', { class: g.vip ? 'vip-row' : '' },

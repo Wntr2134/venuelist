@@ -342,7 +342,7 @@ function riderlyCard(data) {
   const body = h('div', { class: 'stack' });
   const render = (k, newKey) => {
     put(body,
-      h('p', { class: 'muted' }, 'Connect the Riderly venue manager so your shows appear here automatically, and door counts, guest list and ticket numbers go back to Riderly after the night. Riderly never sees guest names.'),
+      h('p', { class: 'muted' }, 'Connect the Riderly venue manager so your shows appear here automatically, and door counts, guest list and ticket numbers go back to Riderly after the night.'),
       newKey ? h('div', { class: 'callout stack' },
         h('strong', null, 'Your key — copy it now'),
         h('p', { class: 'small' }, 'Paste it into Riderly. It won’t be shown again. Treat it like a password.'),

@@ -54,7 +54,7 @@
           <li>To run venue accounts: logins, password resets and service emails (for example “your venue is live” or a night report the venue asks for).</li>
           <li>To keep the service secure: stopping password guessing and keeping backups.</li>
         </ul>
-        <p>We don’t sell personal information, use it for advertising, or share guest lists between venues. Each venue sees only its own data.</p>
+        <p>We don’t sell personal information or use it for advertising. It’s used only to run the service.</p>
       </section>
 
       <section>
@@ -68,27 +68,27 @@
       </section>
 
       <section>
-        <h2>Where it’s stored, and who else is involved</h2>
+        <h2>Where it’s stored</h2>
         <ul>
-          <li><b>Hosting:</b> the app and its database run on a private cloud server rented from DigitalOcean, LLC. Guest lists are only reachable through a venue login or that contributor’s own link. Nothing is published or listed publicly.</li>
-          <li><b>Backups:</b> a copy of the database is saved every night on the same server and kept for 30 days. An encrypted copy is also stored in a private DigitalOcean Spaces storage bucket in Sydney. It can’t be opened without a passphrase that only Riderly holds.</li>
-          <li><b>Email:</b> service emails are sent through Google’s Gmail. They go to venue contacts and Riderly only, never to guests. A night report contains totals, contributor names and staff names, not the full guest list.</li>
+          <li><b>Private and secure:</b> guest lists are only reachable with your venue’s login, or by a contributor through their own private link. Nothing is published or listed publicly, and everything is sent over an encrypted connection.</li>
+          <li><b>Backups:</b> encrypted backups are made every night.</li>
+          <li><b>Email:</b> service emails, like “your venue is live” or a night report you ask for, go to venue contacts only.</li>
         </ul>
-        <p>DigitalOcean and Google are US companies, so some information may be handled by their systems outside Australia. We use them because of their security practices, and we send them only what the service needs.</p>
+        <p>We use trusted providers for hosting and email (DigitalOcean and Google), so some information may be handled on their systems outside Australia.</p>
       </section>
 
       <section>
         <h2>How long we keep it</h2>
         <ul>
           <li><b>Guest details</b> stay until the venue deletes them, deletes the show, or its automatic clean-up runs. A venue can set “keep guest details for X days” in its venue admin page. After that, names and notes are removed and only totals remain (how many were on the list, how many came).</li>
-          <li><b>Backups</b> roll over. Copies on the server are deleted after 30 days. Off-site copies are overwritten each week (one per weekday) and each year (one per month). So a deleted name can remain in a backup for up to 12 months, encrypted and unused unless we need to restore after a failure.</li>
+          <li><b>Backups</b> roll over automatically, and every copy is deleted within 12 months.</li>
           <li><b>Venue accounts</b> are kept while the venue uses the service. When a venue is deleted, its shows, guests and activity are deleted with it, apart from the rolling backups above.</li>
         </ul>
       </section>
 
       <section>
         <h2>Security</h2>
-        <p>All traffic is encrypted (HTTPS). Passwords are hashed with scrypt. Repeated wrong passwords are locked out. Actions that matter (going over capacity, deleting shows, removing guests who have arrived) need a named manager code, and every use is logged. No system is perfect. If there is a data breach likely to cause serious harm, we will tell the affected venues and, where required, the Office of the Australian Information Commissioner (OAIC) and affected people.</p>
+        <p>Everything is encrypted in transit, passwords are stored securely, and logins are protected against guessing. Important actions, like going over capacity, need a manager’s code, and every use is logged. If a security incident ever affected your information, we’d let you know promptly, as Australian privacy law requires.</p>
       </section>
 
       <section>
