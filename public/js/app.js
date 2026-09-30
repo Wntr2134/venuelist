@@ -332,7 +332,7 @@ async function renderEvent(id, tab) {
                 g.notes ? h('div', { class: 'muted small' }, g.notes) : null
               ),
               h('td', null, h('span', { class: `badge badge-type t-${g.listType.toLowerCase()}` }, g.listType), h('div', { class: 'muted small' }, g.contributorName || 'Venue')),
-              h('td', { class: 'small' }, g.addedBy, h('div', { class: 'muted' }, fmtDateTime(g.createdAt))),
+              h('td', { class: 'small' }, h('span', { class: 'cell-label' }, 'Added by '), g.addedBy, h('div', { class: 'muted' }, fmtDateTime(g.createdAt))),
               h('td', null, doorStatus(g)),
               h('td', { class: 'actions' },
                 h('button', { class: 'btn btn-small', onclick: () => guestForm(data, g, load) }, 'Edit'),
@@ -501,8 +501,9 @@ function statTiles(s, e) {
 }
 
 function doorStatus(g) {
-  if (g.inside > 0) return h('span', { class: 'status status-in' }, `${g.inside}/${g.party} in`);
-  if (g.admitted > 0) return h('span', { class: 'status status-out' }, 'Left');
+  const by = g.admitted > 0 && g.lastInBy ? h('div', { class: 'small muted checked-by' }, `In by ${g.lastInBy}${g.lastInAt ? ` · ${fmtTime(g.lastInAt)}` : ''}`) : null;
+  if (g.inside > 0) return [h('span', { class: 'status status-in' }, `${g.inside}/${g.party} in`), by];
+  if (g.admitted > 0) return [h('span', { class: 'status status-out' }, 'Left'), by];
   return h('span', { class: 'status' }, 'Not arrived');
 }
 
@@ -1095,7 +1096,8 @@ async function renderDoor(id) {
         h('div', { class: 'door-meta' },
           h('span', { class: `badge badge-type t-${g.listType.toLowerCase()}` }, g.listType),
           h('span', null, g.contributorName || (g.addedVia === 'door' ? 'Door' : 'Venue')),
-          g.inside ? h('span', { class: 'status status-in' }, `${g.inside}/${g.party} in`) : g.admitted ? h('span', { class: 'status status-out' }, `Left ${fmtTime(g.lastMoveAt)}`) : null
+          g.inside ? h('span', { class: 'status status-in' }, `${g.inside}/${g.party} in`) : g.admitted ? h('span', { class: 'status status-out' }, `Left ${fmtTime(g.lastMoveAt)}`) : null,
+          g.admitted && g.lastInBy ? h('span', { class: 'small muted checked-by' }, ` · in by ${g.lastInBy}`) : null
         ),
         g.notes ? h('div', { class: 'door-note' }, g.notes) : null
       ),

@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS activity (
 );
 
 CREATE INDEX IF NOT EXISTS idx_activity_event ON activity(event_id, id);
+CREATE INDEX IF NOT EXISTS idx_activity_guest ON activity(guest_id, action, id);
 
 -- Door clicker: every tap of + / − (or a manual correction), for peak and history.
 CREATE TABLE IF NOT EXISTS headcount_log (

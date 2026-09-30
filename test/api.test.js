@@ -248,6 +248,11 @@ test('full flow: contributor link, allocations, door check in/out, attribution',
   assert.equal(r.data.admitted, 2);
   r = await c.call('POST', `/api/guests/${jane.id}/checkin`, {}, { actor: 'Alex (Door 2)' });
   assert.equal(r.data.inside, 3);
+  // The guest list shows who added each guest and who last checked them in.
+  const listed = (await c.call('GET', `/api/events/${eventId}`)).data.guests.find((g) => g.id === jane.id);
+  assert.equal(listed.lastInBy, 'Alex (Door 2)');
+  assert.ok(listed.lastInAt);
+  assert.ok(listed.addedBy);
   assert.equal((await c.call('POST', `/api/guests/${mayor.id}/checkout`, {}, { actor: 'Sam' })).status, 409);
 
   assert.equal((await pub.call('DELETE', `/api/c/${contributor.token}/guests/${jane.id}`, undefined, { actor: 'Tom' })).status, 409);

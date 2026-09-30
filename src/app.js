@@ -154,6 +154,8 @@ function guestOut(g) {
     lastMoveAt: g.last_move_at,
     addedBy: g.added_by,
     addedVia: g.added_via,
+    lastInBy: g.last_in_by || null, // who last checked them in at the door, and when
+    lastInAt: g.last_in_at || null,
     createdAt: g.created_at,
     updatedAt: g.updated_at,
     updatedBy: g.updated_by,
@@ -182,8 +184,11 @@ function getContributor(db, id) {
 
 function listGuests(db, eventId, contributorId) {
   const sql = `
-    SELECT g.*, c.name AS contributor_name
+    SELECT g.*, c.name AS contributor_name, li.actor AS last_in_by, li.at AS last_in_at
     FROM guests g LEFT JOIN contributors c ON c.id = g.contributor_id
+    LEFT JOIN activity li ON li.id = (
+      SELECT a.id FROM activity a WHERE a.guest_id = g.id AND a.action = 'guest.checkin' ORDER BY a.id DESC LIMIT 1
+    )
     WHERE g.event_id = ? ${contributorId ? 'AND g.contributor_id = ?' : ''}
     ORDER BY g.name COLLATE NOCASE`;
   const args = contributorId ? [eventId, contributorId] : [eventId];
