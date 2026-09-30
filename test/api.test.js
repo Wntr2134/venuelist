@@ -1234,6 +1234,11 @@ test('Riderly connection: API key, show sync and totals without guest names', as
   assert.equal((await call(key2, 'GET', '/api/v1/venue')).status, 200);
   await admin.call('DELETE', '/api/vadmin/api-key');
   assert.equal((await call(key2, 'GET', '/api/v1/venue')).status, 401);
+
+  // One venue's dead key being retried from the Riderly server never blocks another venue.
+  for (let i = 0; i < 25; i++) await call(key2, 'GET', '/api/v1/venue');
+  assert.equal((await call(key2, 'GET', '/api/v1/venue')).status, 429, 'the dead key itself is slowed down');
+  assert.equal((await call(otherKey, 'GET', '/api/v1/venue')).status, 200, 'other venues keep syncing');
   const owned = (await owner.call('GET', '/api/owner/venues')).data.venues.find((v) => v.slug === venue.slug);
   assert.equal(owned.riderlyConnected, false);
 });

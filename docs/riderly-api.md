@@ -12,7 +12,7 @@ Content-Type: application/json
 - One key per venue. It only reaches that venue's shows.
 - Keys are shown once. Making a new key or pressing Disconnect kills the old one straight away.
 - Call **server-to-server only**. Never put a key in browser JavaScript. Store keys encrypted or in secrets, never in git or logs.
-- Bad keys get `401 {"error":"Invalid API key"}`. Too many bad keys from one IP address get `429`.
+- Bad keys get `401 {"error":"Invalid API key"}`. **Don't retry a 401**: mark that venue disconnected. A key that keeps failing gets `429`, which only affects that key, not other venues.
 - The API **never returns guest names or notes**. You get totals only.
 
 ## Endpoints

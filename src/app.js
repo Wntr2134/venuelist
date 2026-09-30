@@ -2089,12 +2089,23 @@ function createApp(db, options = {}) {
 
   const hashKey = (k) => crypto.createHash('sha256').update(k).digest('hex');
 
+  // All venues' calls come from the one Riderly server, so a dead key must never block the others:
+  // bad attempts are counted per key, with only a high ceiling per address (keys are 192-bit random,
+  // so guessing isn't practical anyway).
+  const apiKeyLimiter = auth.createLimiter({ max: 20, windowMs: 10 * 60 * 1000 });
+  const apiNetLimiter = auth.createLimiter({ max: 1000, windowMs: 10 * 60 * 1000 });
+
   function apiVenue(req) {
-    if (tooMany(req, 'api')) throw new HttpError(429, 'Too many bad API keys from this address. Try again in a few minutes.');
     const m = String(req.headers.authorization || '').match(/^Bearer\s+(rgl_[A-Za-z0-9_-]{20,80})$/);
-    const v = m ? db.prepare('SELECT * FROM venues WHERE api_key_hash = ?').get(hashKey(m[1])) : null;
+    const hash = m ? hashKey(m[1]) : 'none';
+    const keyScope = `api|${clientIp(req)}|${hash.slice(0, 16)}`;
+    const netScope = `api|${clientIp(req)}`;
+    if (apiNetLimiter.blocked(netScope)) throw new HttpError(429, 'Too many bad API keys from this address. Try again in a few minutes.');
+    const v = m ? db.prepare('SELECT * FROM venues WHERE api_key_hash = ?').get(hash) : null;
     if (!v || !v.active || !v.password_hash) {
-      recordFail(req, 'api');
+      if (apiKeyLimiter.blocked(keyScope)) throw new HttpError(429, 'This API key keeps failing. Stop retrying it and reconnect the venue.');
+      apiKeyLimiter.fail(keyScope);
+      apiNetLimiter.fail(netScope);
       throw new HttpError(401, 'Invalid API key');
     }
     const last = Date.parse(v.api_key_last_used_at || '') || 0;
