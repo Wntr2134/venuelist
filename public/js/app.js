@@ -822,6 +822,7 @@ function reportView(id, r) {
       tile('Total out', door.totalOut),
       tile('At close', door.count)
     ),
+    ticketsSection(id, r),
     h('h3', null, 'Guest list'),
     h('div', { class: 'stats' },
       tile('On the list', r.guestlist.heads, `${r.guestlist.entries} entries`),
@@ -844,6 +845,53 @@ function reportView(id, r) {
       ? h('ul', { class: 'activity' }, r.overrides.map((o) => h('li', null, h('span', { class: 'time' }, fmtDateTime(o.at)), h('span', { class: 'who' }, o.actor), h('span', { class: 'what' }, o.detail))))
       : h('p', { class: 'muted' }, 'None — no rules were broken or changed.'),
   ];
+}
+
+// Moshtix (or any ticketing) totals, typed in after the night, compared with the door count.
+function ticketsSection(id, r) {
+  const t = r.tickets;
+  const num = (name, value, label) => field(label, h('input', { name, type: 'number', min: '0', max: '1000000', inputmode: 'numeric', value: value ?? '' }));
+  const form = h('form', { class: 'ticket-form no-print' },
+    num('ticketsSold', t.sold, 'Tickets sold'),
+    num('ticketsScanned', t.scanned, 'Tickets scanned'),
+    h('button', { class: 'btn', type: 'submit' }, 'Save')
+  );
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const d = formData(form);
+    const val = (v) => (v === '' || v == null ? null : Number(v));
+    try {
+      await api('PUT', `/api/events/${id}`, { ticketsSold: val(d.ticketsSold), ticketsScanned: val(d.ticketsScanned) });
+      const fresh = await api('GET', `/api/events/${id}/report`);
+      const box = form.closest('.report');
+      if (box) put(box, reportView(id, fresh));
+      toast('Ticket numbers saved', 'ok');
+    } catch (err) {
+      handleError(err);
+    }
+  });
+  const has = t.sold != null || t.scanned != null;
+  const tile = (label, value, sub) => h('div', { class: 'stat' }, h('div', { class: 'stat-value' }, value), h('div', { class: 'stat-label' }, label), sub ? h('div', { class: 'stat-sub' }, sub) : null);
+  let verdict = null;
+  if (t.difference != null) {
+    const d = t.difference;
+    verdict = h('p', { class: 'small ticket-verdict' }, d === 0
+      ? 'The door clicker matches scanned tickets plus guest list exactly.'
+      : d > 0
+        ? `The clicker counted ${d} more than scanned tickets plus guest list. Usually re-entries, door sales not scanned, or extra clicks. A big gap is worth asking the door team about.`
+        : `The clicker counted ${-d} fewer than scanned tickets plus guest list. Usually missed clicks at a busy door.`);
+  }
+  return h('div', { class: 'stack ticket-section' },
+    h('h3', null, 'Tickets'),
+    has ? h('div', { class: 'stats' },
+      tile('Sold', t.sold ?? '—'),
+      tile('Scanned', t.scanned ?? '—', t.noShow != null ? `${t.noShow} didn’t come` : ''),
+      t.expectedIn != null ? tile('Scanned + guest list', t.expectedIn, 'should have come in') : null,
+      t.difference != null ? tile('Door clicker in', t.doorIn, `${t.difference > 0 ? '+' : ''}${t.difference} vs expected`) : null
+    ) : h('p', { class: 'muted small' }, 'Type in the totals from Moshtix (or your ticketing) to compare them with the door count.'),
+    verdict,
+    form
+  );
 }
 
 async function toggleContributor(c, onDone) {

@@ -89,6 +89,9 @@ function eventOut(e) {
     venueCapacity: e.venue_capacity ?? null,
     countGuestlist: !!e.count_guestlist,
     headcount: headcountOut(e),
+    ticketsSold: e.tickets_sold ?? null,
+    ticketsScanned: e.tickets_scanned ?? null,
+    externalId: e.external_id ?? null,
   };
 }
 
@@ -942,6 +945,7 @@ function createApp(db, options = {}) {
         status: !v.active ? 'disabled' : v.password_hash ? 'active' : 'pending',
         hasManagerPin: canOverride(v),
         hasAdmin: !!v.admin_password_hash,
+        riderlyConnected: !!v.api_key_hash,
         email: v.email,
         setupLinkActive: !!v.setup_expires_at && Date.parse(v.setup_expires_at) > Date.now(),
         setupExpiresAt: v.setup_expires_at,
@@ -1275,20 +1279,24 @@ function createApp(db, options = {}) {
         ? int(body.venueCapacity, 'Venue capacity', { min: 1, max: 100000, nullable: true })
         : e.venue_capacity,
       count_guestlist: body.countGuestlist !== undefined ? (body.countGuestlist ? 1 : 0) : e.count_guestlist,
+      tickets_sold: body.ticketsSold !== undefined ? int(body.ticketsSold, 'Tickets sold', { min: 0, max: 1000000, nullable: true }) : e.tickets_sold,
+      tickets_scanned: body.ticketsScanned !== undefined ? int(body.ticketsScanned, 'Tickets scanned', { min: 0, max: 1000000, nullable: true }) : e.tickets_scanned,
     };
     if (next.venue_capacity !== e.venue_capacity || next.capacity !== e.capacity || next.count_guestlist !== e.count_guestlist) {
       override(venue, req, body, 'Changing capacity or guest list limits needs a manager.', { eventId: e.id, actor, soft: true });
     }
     db.prepare(
       `UPDATE events SET name = ?, date = ?, doors_time = ?, capacity = ?, cutoff_at = ?, notes = ?, archived = ?,
-         venue_capacity = ?, count_guestlist = ? WHERE id = ?`
+         venue_capacity = ?, count_guestlist = ?, tickets_sold = ?, tickets_scanned = ? WHERE id = ?`
     ).run(next.name, next.date, next.doors_time, next.capacity, next.cutoff_at, next.notes, next.archived,
-      next.venue_capacity, next.count_guestlist, e.id);
+      next.venue_capacity, next.count_guestlist, next.tickets_sold, next.tickets_scanned, e.id);
     if (next.venue_capacity !== e.venue_capacity) {
       publish(e.id, 'count', { headcount: headcountOut(getEvent(db, e.id)), actor });
     }
     const action = next.archived !== e.archived ? (next.archived ? 'event.archive' : 'event.unarchive') : 'event.update';
-    log(db, { eventId: e.id, action, actor, via: 'venue' });
+    const ticketNote = next.tickets_sold !== e.tickets_sold || next.tickets_scanned !== e.tickets_scanned
+      ? `tickets: ${next.tickets_sold ?? '—'} sold, ${next.tickets_scanned ?? '—'} scanned` : null;
+    log(db, { eventId: e.id, action, detail: ticketNote, actor, via: 'venue' });
     publish(e.id, 'event');
     return eventOut(getEvent(db, e.id));
   });
@@ -1457,6 +1465,7 @@ function createApp(db, options = {}) {
       event: eventOut(e),
       venueName: venue_name_of(e),
       door: headcountOut(e),
+      tickets: ticketsFor(e, st),
       guestlist: { entries: st.guests, heads: st.expected, arrived: st.admitted, noShow: st.noShow, vip: st.vip },
       byContributor,
       byList,
@@ -1464,6 +1473,23 @@ function createApp(db, options = {}) {
       firstIn: [checkins[0]?.at, doorIn[0]?.at].filter(Boolean).sort()[0] || null,
       overrides,
       purged: !!e.purged_at,
+    };
+  }
+
+  // Tickets vs door: scanned tickets + guest list arrivals is who should have come through the door.
+  // The clicker's "total in" also counts re-entries, so it normally runs a little higher.
+  function ticketsFor(e, st) {
+    const sold = e.tickets_sold ?? null;
+    const scanned = e.tickets_scanned ?? null;
+    const expected = scanned == null ? null : scanned + st.admitted;
+    const doorIn = e.head_in || 0;
+    return {
+      sold,
+      scanned,
+      noShow: sold != null && scanned != null ? Math.max(0, sold - scanned) : null,
+      expectedIn: expected,
+      doorIn,
+      difference: expected != null && doorIn > 0 ? doorIn - expected : null,
     };
   }
 
@@ -1492,6 +1518,12 @@ function createApp(db, options = {}) {
       'DOOR COUNT',
       `  Capacity: ${r.door.capacity ?? 'not set'}   Peak: ${r.door.peak}   In: ${r.door.totalIn}   Out: ${r.door.totalOut}   At close: ${r.door.count}`,
       '',
+      ...(r.tickets.sold != null || r.tickets.scanned != null ? [
+        'TICKETS',
+        `  Sold: ${r.tickets.sold ?? '—'}   Scanned: ${r.tickets.scanned ?? '—'}${r.tickets.noShow != null ? `   Ticket no-shows: ${r.tickets.noShow}` : ''}`,
+        ...(r.tickets.difference != null ? [`  Scanned + guest list arrived: ${r.tickets.expectedIn}   Door clicker in: ${r.tickets.doorIn}   Difference: ${r.tickets.difference > 0 ? '+' : ''}${r.tickets.difference}`] : []),
+        '',
+      ] : []),
       'GUEST LIST',
       `  ${r.guestlist.heads} on the list (${r.guestlist.entries} entries) · ${r.guestlist.arrived} arrived · ${r.guestlist.noShow} no-shows · ${r.guestlist.vip} VIP`,
       '',
@@ -1936,6 +1968,7 @@ function createApp(db, options = {}) {
       codes,
       overrides,
       counts,
+      apiKey: apiKeyOut(venue),
     };
   }, { auth: 'vadmin' });
 
@@ -2049,6 +2082,165 @@ function createApp(db, options = {}) {
     return purged;
   }
 
+  // ----- Riderly connection (API v1) -----
+  // The Riderly venue manager calls these server-to-server with the venue's API key:
+  //   Authorization: Bearer rgl_…   (made in the venue admin portal, shown once, revocable)
+  // It can push shows in and read counts back. It never sees guest names.
+
+  const hashKey = (k) => crypto.createHash('sha256').update(k).digest('hex');
+
+  function apiVenue(req) {
+    if (tooMany(req, 'api')) throw new HttpError(429, 'Too many bad API keys from this address. Try again in a few minutes.');
+    const m = String(req.headers.authorization || '').match(/^Bearer\s+(rgl_[A-Za-z0-9_-]{20,80})$/);
+    const v = m ? db.prepare('SELECT * FROM venues WHERE api_key_hash = ?').get(hashKey(m[1])) : null;
+    if (!v || !v.active || !v.password_hash) {
+      recordFail(req, 'api');
+      throw new HttpError(401, 'Invalid API key');
+    }
+    const last = Date.parse(v.api_key_last_used_at || '') || 0;
+    if (Date.now() - last > 60 * 1000) db.prepare('UPDATE venues SET api_key_last_used_at = ? WHERE id = ?').run(now(), v.id);
+    return v;
+  }
+
+  function externalId(v) {
+    const s = str(v, 'External ID', { required: true, max: 100 });
+    if (!/^[A-Za-z0-9_.:-]+$/.test(s)) throw new HttpError(400, 'External ID may only use letters, numbers and _ . : -');
+    return s;
+  }
+
+  function apiEvent(venue, ref) {
+    const e = /^\d+$/.test(ref)
+      ? db.prepare('SELECT * FROM events WHERE id = ? AND venue_id = ?').get(Number(ref), venue.id)
+      : db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(externalId(decodeURIComponent(ref.replace(/^ext:/, ''))), venue.id);
+    if (!e) throw new HttpError(404, 'Show not found');
+    return e;
+  }
+
+  function apiEventOut(e) {
+    const st = stats(listGuests(db, e.id));
+    const { headcount, ...rest } = eventOut(e);
+    return {
+      ...rest,
+      door: headcount,
+      guestlist: { entries: st.guests, heads: st.expected, arrived: st.admitted, inside: st.inside, noShow: st.noShow, vip: st.vip },
+      tickets: ticketsFor(e, st),
+      links: { app: `${PUBLIC_URL}/app#/event/${e.id}`, report: `${PUBLIC_URL}/app#/event/${e.id}/report` },
+    };
+  }
+
+  route('GET', /^\/api\/v1\/venue$/, ({ venue }) => ({
+    name: venue.name,
+    username: venue.slug,
+    links: {
+      staffLogin: `${PUBLIC_URL}/v/${venue.slug}`,
+      venueAdmin: `${PUBLIC_URL}/v/${venue.slug}/admin`,
+      app: `${PUBLIC_URL}/app`,
+      guide: `${PUBLIC_URL}/guide`,
+    },
+  }), { auth: 'api' });
+
+  route('GET', /^\/api\/v1\/events$/, ({ venue, query }) => {
+    const from = query.get('from') ? dateStr(query.get('from')) : '0000-01-01';
+    const to = query.get('to') ? dateStr(query.get('to')) : '9999-12-31';
+    const rows = db
+      .prepare(`SELECT * FROM events WHERE venue_id = ? AND date BETWEEN ? AND ? ${query.get('archived') === '1' ? '' : 'AND archived = 0'} ORDER BY date, id LIMIT 500`)
+      .all(venue.id, from, to);
+    return { events: rows.map(apiEventOut) };
+  }, { auth: 'api' });
+
+  route('GET', /^\/api\/v1\/events\/([^/]+)$/, ({ venue, params }) => apiEventOut(apiEvent(venue, params[0])), { auth: 'api' });
+
+  // Creates the show the first time, then keeps it in step. Only the fields sent are changed.
+  route('PUT', /^\/api\/v1\/events\/ext:([^/]+)$/, ({ venue, params, body }) => {
+    const ext = externalId(decodeURIComponent(params[0]));
+    const e = db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(ext, venue.id);
+    const has = (k) => body[k] !== undefined;
+    const fields = {
+      name: has('name') ? str(body.name, 'Event name', { required: true, max: 120 }) : undefined,
+      date: has('date') ? dateStr(body.date) : undefined,
+      doors_time: has('doorsTime') ? timeStr(body.doorsTime) : undefined,
+      notes: has('notes') ? str(body.notes, 'Notes', { max: 2000 }) || null : undefined,
+      capacity: has('guestListCap') ? int(body.guestListCap, 'Guest list cap', { min: 1, nullable: true }) : undefined,
+      venue_capacity: has('venueCapacity') ? int(body.venueCapacity, 'Venue capacity', { min: 1, max: 100000, nullable: true }) : undefined,
+      tickets_sold: has('ticketsSold') ? int(body.ticketsSold, 'Tickets sold', { min: 0, max: 1000000, nullable: true }) : undefined,
+      tickets_scanned: has('ticketsScanned') ? int(body.ticketsScanned, 'Tickets scanned', { min: 0, max: 1000000, nullable: true }) : undefined,
+      archived: has('archived') ? (body.archived ? 1 : 0) : undefined,
+    };
+    const set = Object.entries(fields).filter(([, v]) => v !== undefined);
+    if (!e) {
+      if (!fields.name || !fields.date) throw new HttpError(400, 'A new show needs a name and a date');
+      const info = db
+        .prepare(`INSERT INTO events (venue_id, name, date, created_at, created_by, venue_capacity, count_guestlist, external_id)
+                  VALUES (?, ?, ?, ?, 'Riderly', ?, ?, ?)`)
+        .run(venue.id, fields.name, fields.date, now(), venue.default_capacity ?? null, venue.default_count_guestlist ? 1 : 0, ext);
+      const id = Number(info.lastInsertRowid);
+      const rest = set.filter(([k]) => k !== 'name' && k !== 'date');
+      if (rest.length) db.prepare(`UPDATE events SET ${rest.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...rest.map(([, v]) => v), id);
+      log(db, { eventId: id, action: 'event.create', detail: 'from Riderly', actor: 'Riderly', via: 'venue' });
+      return { created: true, event: apiEventOut(getEvent(db, id)) };
+    }
+    const changed = set.filter(([k, v]) => e[k] !== v);
+    if (changed.length) {
+      db.prepare(`UPDATE events SET ${changed.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...changed.map(([, v]) => v), e.id);
+      log(db, { eventId: e.id, action: 'event.update', detail: `from Riderly: ${changed.map(([k]) => k.replace(/_/g, ' ')).join(', ')}`, actor: 'Riderly', via: 'venue' });
+      if (changed.some(([k]) => k === 'venue_capacity')) publish(e.id, 'count', { headcount: headcountOut(getEvent(db, e.id)), actor: 'Riderly' });
+      publish(e.id, 'event');
+    }
+    return { created: false, event: apiEventOut(getEvent(db, e.id)) };
+  }, { auth: 'api' });
+
+  // A cancelled show: deleted if nobody is on its list yet, otherwise archived so no names are lost.
+  route('DELETE', /^\/api\/v1\/events\/([^/]+)$/, ({ venue, params }) => {
+    const e = apiEvent(venue, params[0]);
+    const guests = db.prepare('SELECT COUNT(*) AS n FROM guests WHERE event_id = ?').get(e.id).n;
+    if (guests === 0 && !e.head_in) {
+      db.prepare('DELETE FROM events WHERE id = ?').run(e.id);
+      publish(e.id, 'deleted');
+      return { deleted: true, archived: false };
+    }
+    db.prepare('UPDATE events SET archived = 1 WHERE id = ?').run(e.id);
+    log(db, { eventId: e.id, action: 'event.archive', detail: 'from Riderly (show has guests, so kept)', actor: 'Riderly', via: 'venue' });
+    publish(e.id, 'event');
+    return { deleted: false, archived: true };
+  }, { auth: 'api' });
+
+  route('GET', /^\/api\/v1\/events\/([^/]+)\/report$/, ({ venue, params }) => {
+    const r = reportFor(apiEvent(venue, params[0]));
+    // Totals only: no staff names, override notes or guest details leave the app.
+    return {
+      event: apiEventOut(getEvent(db, r.event.id)),
+      door: r.door,
+      tickets: r.tickets,
+      guestlist: r.guestlist,
+      byContributor: r.byContributor,
+      byList: r.byList,
+      firstIn: r.firstIn,
+      overrideCount: r.overrides.length,
+    };
+  }, { auth: 'api' });
+
+  // Venue admin: make, see and revoke the key.
+  function apiKeyOut(venue) {
+    return {
+      connected: !!venue.api_key_hash,
+      hint: venue.api_key_hint || null,
+      createdAt: venue.api_key_created_at || null,
+      lastUsedAt: venue.api_key_last_used_at || null,
+    };
+  }
+
+  route('POST', /^\/api\/vadmin\/api-key$/, ({ venue }) => {
+    const key = `rgl_${crypto.randomBytes(24).toString('base64url')}`;
+    db.prepare('UPDATE venues SET api_key_hash = ?, api_key_hint = ?, api_key_created_at = ?, api_key_last_used_at = NULL WHERE id = ?')
+      .run(hashKey(key), key.slice(-4), now(), venue.id);
+    return { key, ...apiKeyOut(db.prepare('SELECT * FROM venues WHERE id = ?').get(venue.id)) };
+  }, { auth: 'vadmin' });
+
+  route('DELETE', /^\/api\/vadmin\/api-key$/, ({ venue }) => {
+    db.prepare('UPDATE venues SET api_key_hash = NULL, api_key_hint = NULL, api_key_created_at = NULL, api_key_last_used_at = NULL WHERE id = ?').run(venue.id);
+    return { connected: false };
+  }, { auth: 'vadmin' });
+
   // ----- dispatcher -----
 
   async function handle(req, res) {
@@ -2073,9 +2265,12 @@ function createApp(db, options = {}) {
       } else if (mode === 'vadmin') {
         venue = sessionVadmin(req);
         if (!venue) throw new HttpError(401, 'Please log in');
+      } else if (mode === 'api') {
+        venue = apiVenue(req);
       }
       // Mutations must be JSON: blocks cross-site form posts (CSRF) alongside SameSite cookies.
-      if (req.method !== 'GET' && !(req.headers['content-type'] || '').includes('application/json')) {
+      // (API-key calls carry no cookies, so they can't be forged cross-site.)
+      if (mode !== 'api' && req.method !== 'GET' && !(req.headers['content-type'] || '').includes('application/json')) {
         throw new HttpError(415, 'Expected application/json');
       }
       const params = pathname.match(r.pattern).slice(1);

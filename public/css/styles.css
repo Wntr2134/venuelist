@@ -739,3 +739,9 @@ pre.code { padding: 12px; white-space: pre-wrap; margin: 8px 0; }
   .chart-bar { background: #6a4ee0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .stat-accent .stat-value, .stat-vip .stat-value { color: #111; }
 }
+
+/* ticket totals on the night report */
+.ticket-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.ticket-form .field { flex: 1 1 140px; margin: 0; }
+.ticket-verdict { color: var(--muted); }
+.key-box { display: block; padding: 10px; font-size: 0.95rem; user-select: all; }

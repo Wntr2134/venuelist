@@ -910,6 +910,15 @@ test('copy contributors from another show; night report', async () => {
   assert.equal(rep.arrivals.doorIn[0].count, 5);
   assert.equal(rep.canEmail, false, 'no email set up in tests');
   assert.equal((await other.c.call('GET', `/api/events/${tonight.id}/report`)).status, 404);
+  assert.equal(rep.tickets.scanned, null);
+
+  // Moshtix totals typed in after the night, compared with the door.
+  const put = await c.call('PUT', `/api/events/${tonight.id}`, { ticketsSold: 10, ticketsScanned: 2 });
+  assert.equal(put.status, 200, 'no manager code needed for ticket totals');
+  const rep2 = (await c.call('GET', `/api/events/${tonight.id}/report`)).data;
+  assert.deepEqual(rep2.tickets, { sold: 10, scanned: 2, noShow: 8, expectedIn: 4, doorIn: 5, difference: 1 });
+  assert.equal((await c.call('PUT', `/api/events/${tonight.id}`, { ticketsScanned: -1 })).status, 400);
+  assert.equal((await c.call('PUT', `/api/events/${tonight.id}`, { ticketsSold: null })).data.ticketsSold, null);
 });
 
 test('/health answers ok without login and leaks nothing', async () => {
@@ -1148,4 +1157,83 @@ test('the monthly copy is added on the 1st and rotates yearly', async () => {
     s3.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('Riderly connection: API key, show sync and totals without guest names', async () => {
+  const { c, admin, venue } = await onboard('Sync Hall');
+  const other = await onboard('Sync Other');
+  const call = (key, method, p, body) => client().call(method, p, body, { actor: null, headers: key ? { Authorization: `Bearer ${key}` } : {} });
+
+  assert.equal((await call(null, 'GET', '/api/v1/venue')).status, 401);
+  assert.equal((await call('rgl_notarealkeynotarealkey123', 'GET', '/api/v1/venue')).status, 401);
+  assert.equal((await client().call('POST', '/api/vadmin/api-key')).status, 401, 'only the venue admin makes keys');
+  assert.equal((await c.call('POST', '/api/vadmin/api-key')).status, 401, 'staff login is not enough');
+
+  const made = await admin.call('POST', '/api/vadmin/api-key');
+  assert.equal(made.status, 200);
+  const key = made.data.key;
+  assert.match(key, /^rgl_/);
+  assert.equal(made.data.hint, key.slice(-4));
+  assert.equal(appDb.prepare('SELECT api_key_hash FROM venues WHERE id = ?').get(venue.id).api_key_hash.includes(key), false, 'only a hash is stored');
+  const ov = (await admin.call('GET', '/api/vadmin/overview')).data.apiKey;
+  assert.equal(ov.connected, true);
+  assert.equal(ov.key, undefined, 'the key is never shown again');
+
+  const me = await call(key, 'GET', '/api/v1/venue');
+  assert.equal(me.data.username, venue.slug);
+  assert.match(me.data.links.venueAdmin, /\/v\/sync-hall\/admin$/);
+
+  // Push a show in, then update it; unknown shows need a name and date.
+  assert.equal((await call(key, 'PUT', '/api/v1/events/ext:show-1', { name: 'No date' })).status, 400);
+  let r = await call(key, 'PUT', '/api/v1/events/ext:show-1', { name: 'Riderly Night', date: '2026-11-06', doorsTime: '19:30', venueCapacity: 300 });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.created, true);
+  const id = r.data.event.id;
+  r = await call(key, 'PUT', '/api/v1/events/ext:show-1', { ticketsSold: 250, ticketsScanned: 3, name: 'Riderly Night (moved)' });
+  assert.equal(r.data.created, false);
+  assert.equal(r.data.event.id, id, 'same show updated, not duplicated');
+  assert.equal(r.data.event.name, 'Riderly Night (moved)');
+  assert.equal(r.data.event.doorsTime, '19:30', 'fields not sent stay as they were');
+  assert.equal(r.data.event.door.capacity, 300);
+
+  // Staff see it and run the night as normal.
+  const ev = (await c.call('GET', `/api/events/${id}`)).data;
+  assert.equal(ev.event.externalId, 'show-1');
+  const g = (await c.call('POST', `/api/events/${id}/guests`, { name: 'Secret Guestname', plusOnes: 1 })).data;
+  await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 2 });
+  await c.call('POST', `/api/events/${id}/count`, { delta: 6 });
+
+  // Totals come back; guest names never do.
+  const list = await call(key, 'GET', '/api/v1/events?from=2026-11-01&to=2026-11-30');
+  assert.equal(list.data.events.length, 1);
+  assert.equal(list.data.events[0].guestlist.arrived, 2);
+  const rep = await call(key, 'GET', '/api/v1/events/ext:show-1/report');
+  assert.equal(rep.status, 200);
+  assert.equal(rep.data.tickets.expectedIn, 5);
+  assert.equal(rep.data.tickets.difference, 1);
+  assert.equal(JSON.stringify(rep.data).includes('Secret Guestname'), false);
+  assert.equal(JSON.stringify(list.data).includes('Secret Guestname'), false);
+  assert.equal((await call(key, 'GET', `/api/v1/events/${id}/report`)).status, 200, 'numeric id works too');
+
+  // Another venue's key can't see or touch this show.
+  const otherKey = (await other.admin.call('POST', '/api/vadmin/api-key')).data.key;
+  assert.equal((await call(otherKey, 'GET', `/api/v1/events/${id}`)).status, 404);
+  assert.equal((await call(otherKey, 'GET', '/api/v1/events/ext:show-1')).status, 404);
+  assert.equal((await call(otherKey, 'DELETE', `/api/v1/events/${id}`)).status, 404);
+
+  // Cancelling: a show with guests is archived, an empty one is deleted.
+  r = await call(key, 'DELETE', '/api/v1/events/ext:show-1');
+  assert.deepEqual(r.data, { deleted: false, archived: true });
+  assert.equal((await c.call('GET', `/api/events/${id}`)).data.event.archived, true);
+  await call(key, 'PUT', '/api/v1/events/ext:show-2', { name: 'Empty', date: '2026-11-07' });
+  assert.deepEqual((await call(key, 'DELETE', '/api/v1/events/ext:show-2')).data, { deleted: true, archived: false });
+
+  // A new key replaces the old one; disconnecting stops it.
+  const key2 = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  assert.equal((await call(key, 'GET', '/api/v1/venue')).status, 401);
+  assert.equal((await call(key2, 'GET', '/api/v1/venue')).status, 200);
+  await admin.call('DELETE', '/api/vadmin/api-key');
+  assert.equal((await call(key2, 'GET', '/api/v1/venue')).status, 401);
+  const owned = (await owner.call('GET', '/api/owner/venues')).data.venues.find((v) => v.slug === venue.slug);
+  assert.equal(owned.riderlyConnected, false);
 });

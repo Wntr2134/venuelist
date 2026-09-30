@@ -181,9 +181,27 @@ function migrate(db) {
     ['head_out', 'INTEGER NOT NULL DEFAULT 0'],
     ['count_guestlist', 'INTEGER NOT NULL DEFAULT 0'],
     ['purged_at', 'TEXT'],
+    // Ticketing totals typed in after the night (or sent by Riderly): Moshtix or any other system.
+    ['tickets_sold', 'INTEGER'],
+    ['tickets_scanned', 'INTEGER'],
+    // The show's ID in the Riderly venue manager, so it can update the same show again.
+    ['external_id', 'TEXT'],
   ]) {
     if (!evCols.includes(col)) db.exec(`ALTER TABLE events ADD COLUMN ${col} ${def}`);
   }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external ON events(venue_id, external_id) WHERE external_id IS NOT NULL');
+
+  // Riderly connection: one API key per venue, stored as a SHA-256 hash (the key itself is shown once).
+  const vCols = db.prepare('PRAGMA table_info(venues)').all().map((c) => c.name);
+  for (const [col, def] of [
+    ['api_key_hash', 'TEXT'],
+    ['api_key_hint', 'TEXT'],
+    ['api_key_created_at', 'TEXT'],
+    ['api_key_last_used_at', 'TEXT'],
+  ]) {
+    if (!vCols.includes(col)) db.exec(`ALTER TABLE venues ADD COLUMN ${col} ${def}`);
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_venues_api_key ON venues(api_key_hash) WHERE api_key_hash IS NOT NULL');
 
   // Sign-ups carry the username and password the venue chose, so approving them is one tap.
   const reqCols = db.prepare('PRAGMA table_info(access_requests)').all().map((c) => c.name);

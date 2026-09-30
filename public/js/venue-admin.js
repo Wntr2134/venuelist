@@ -127,6 +127,7 @@ async function dashboard() {
     staffCard(data),
     venueCard(data),
     privacyCard(data),
+    riderlyCard(data),
     overridesCard(data),
     adminPasswordCard()
   );
@@ -333,6 +334,54 @@ function privacyCard(data) {
     h('p', { class: 'muted' }, 'Guest names and notes are personal information. Choose when they’re removed automatically — head counts, check-in numbers and reports are kept.'),
     field('Remove guest names and notes', sel)
   );
+}
+
+// ---------- Riderly connection ----------
+
+function riderlyCard(data) {
+  const body = h('div', { class: 'stack' });
+  const render = (k, newKey) => {
+    put(body,
+      h('p', { class: 'muted' }, 'Connect the Riderly venue manager so your shows appear here automatically, and door counts, guest list and ticket numbers go back to Riderly after the night. Riderly never sees guest names.'),
+      newKey ? h('div', { class: 'callout stack' },
+        h('strong', null, 'Your key — copy it now'),
+        h('p', { class: 'small' }, 'Paste it into Riderly. It won’t be shown again. Treat it like a password.'),
+        h('code', { class: 'key-box' }, newKey),
+        h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => copy(newKey) }, 'Copy key'))
+      ) : null,
+      k.connected
+        ? h('p', null, h('span', { class: 'badge s-active' }, 'Connected'), ` Key ending …${k.hint}, made ${fmtDateTime(k.createdAt)}. ${k.lastUsedAt ? `Last used ${fmtDateTime(k.lastUsedAt)}.` : 'Not used yet.'}`)
+        : h('p', null, h('span', { class: 'badge s-pending' }, 'Not connected')),
+      h('div', { class: 'row wrap' },
+        h('button', {
+          class: k.connected ? 'btn' : 'btn btn-primary',
+          onclick: async () => {
+            if (k.connected && !(await confirmDialog('Make a new key?', 'The current key stops working straight away. You’ll need to paste the new one into Riderly.', { confirmText: 'New key' }))) return;
+            try {
+              const r = await api('POST', '/api/vadmin/api-key');
+              render(r, r.key);
+            } catch (err) {
+              toast(err.message, 'error');
+            }
+          },
+        }, k.connected ? 'Make a new key' : 'Connect to Riderly'),
+        k.connected ? h('button', {
+          class: 'btn btn-danger',
+          onclick: async () => {
+            if (!(await confirmDialog('Disconnect Riderly?', 'Riderly will stop syncing shows and counts. Everything already here stays.', { confirmText: 'Disconnect', danger: true }))) return;
+            try {
+              render(await api('DELETE', '/api/vadmin/api-key'));
+              toast('Disconnected', 'ok');
+            } catch (err) {
+              toast(err.message, 'error');
+            }
+          },
+        }, 'Disconnect') : null
+      )
+    );
+  };
+  render(data.apiKey);
+  return h('div', { class: 'card stack' }, h('h2', null, '🔗 Riderly venue manager'), body);
 }
 
 // ---------- overrides log ----------
