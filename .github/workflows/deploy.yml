@@ -22,6 +22,9 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    # The deploy secrets live in the "production" environment, which only the main branch can
+    # use. So a collaborator's branch, or a workflow they write on it, can never read the SSH key.
+    environment: production
     steps:
       # Until the DEPLOY_* secrets are added, skip quietly instead of failing.
       - name: Check deploy secrets
