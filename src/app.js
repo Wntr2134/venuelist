@@ -1574,6 +1574,68 @@ function createApp(db, options = {}) {
     return db.prepare('SELECT name FROM venues WHERE id = ?').get(e.venue_id)?.name || '';
   }
 
+  // Comps across shows: for each contributor (matched by name across shows), how many heads
+  // they put on, how many came, and the no-show rate. Finished shows from `from` to `to`.
+  function compsReport(venue, from, to) {
+    // Finished shows only: tonight's "no-shows" are mostly people who haven't arrived yet.
+    const today = venueDay();
+    const lastDone = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    const hi = to < lastDone ? to : lastDone;
+    const rows = db.prepare(
+      `SELECT e.id AS event_id, e.date, c.name AS contributor, c.list_type AS c_type, c.allocation, g.list_type, g.plus_ones, g.admitted
+       FROM events e JOIN guests g ON g.event_id = e.id LEFT JOIN contributors c ON c.id = g.contributor_id
+       WHERE e.venue_id = ? AND e.date BETWEEN ? AND ?`
+    ).all(venue.id, from, hi);
+    const shows = db.prepare('SELECT COUNT(*) AS n FROM events WHERE venue_id = ? AND date BETWEEN ? AND ?').get(venue.id, from, hi).n;
+    const by = new Map();
+    const lists = new Map();
+    const total = { heads: 0, arrived: 0 };
+    for (const r of rows) {
+      const heads = 1 + r.plus_ones;
+      const arrived = Math.min(r.admitted, heads);
+      const name = r.contributor ? r.contributor.trim() : 'Venue / door (no contributor)';
+      const key = name.toLowerCase().replace(/\s+/g, ' ');
+      const b = by.get(key) || { name, listType: r.contributor ? r.c_type : '—', shows: new Set(), heads: 0, arrived: 0 };
+      b.shows.add(r.event_id);
+      b.heads += heads;
+      b.arrived += arrived;
+      by.set(key, b);
+      const l = lists.get(r.list_type) || { listType: r.list_type, heads: 0, arrived: 0 };
+      l.heads += heads;
+      l.arrived += arrived;
+      lists.set(r.list_type, l);
+      total.heads += heads;
+      total.arrived += arrived;
+    }
+    const finish = (x) => ({ ...x, noShow: x.heads - x.arrived, noShowRate: x.heads ? Math.round(((x.heads - x.arrived) / x.heads) * 100) : 0 });
+    return {
+      from, to: hi, shows,
+      total: finish(total),
+      contributors: [...by.values()].map((b) => finish({ ...b, shows: b.shows.size })).sort((a, b) => b.heads - a.heads || a.name.localeCompare(b.name)),
+      lists: [...lists.values()].map(finish).sort((a, b) => b.heads - a.heads),
+    };
+  }
+
+  route('GET', /^\/api\/comps$/, ({ venue, query }) => {
+    const today = venueDay();
+    const to = query.get('to') ? dateStr(query.get('to')) : today;
+    const from = query.get('from') ? dateStr(query.get('from')) : new Date(Date.parse(`${today}T00:00:00Z`) - 29 * 86400000).toISOString().slice(0, 10);
+    if (from > to) throw new HttpError(400, 'The start date is after the end date');
+    return compsReport(venue, from, to);
+  });
+
+  route('GET', /^\/api\/comps\.csv$/, ({ venue, query, res }) => {
+    const r = compsReport(venue, dateStr(query.get('from')), dateStr(query.get('to')));
+    const lines = [['Contributor', 'List', 'Shows', 'Heads on list', 'Arrived', 'No-shows', 'No-show %'].map(csvCell).join(',')]
+      .concat(r.contributors.map((c) => [c.name, c.listType, c.shows, c.heads, c.arrived, c.noShow, c.noShowRate].map(csvCell).join(',')));
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="comps-${r.from}-to-${r.to}.csv"`,
+      'Cache-Control': 'no-store',
+    });
+    res.end(`﻿${lines.join('\r\n')}\r\n`);
+  });
+
   route('GET', /^\/api\/events\/(\d+)\/report$/, ({ venue, params }) => {
     const r = reportFor(evt(venue, params[0]));
     r.canEmail = !!(venue.email && mailConfig());

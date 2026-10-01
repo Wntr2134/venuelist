@@ -1384,3 +1384,30 @@ test('one-click sign-in from Riderly: single use, a minute long, staff only, lan
   assert.equal(home.headers.get('location'), '/app#/', 'no show: the events list');
   assert.ok(c);
 });
+
+test('comps report: per contributor across shows, matched by name, with no-show rates', async () => {
+  const { c } = await onboard('Comps Hall');
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const a = (await c.call('POST', '/api/events', { name: 'Show A', date: day(-10), overridePin: '2468' })).data;
+  const b = (await c.call('POST', '/api/events', { name: 'Show B', date: day(-3), overridePin: '2468' })).data;
+  const later = (await c.call('POST', '/api/events', { name: 'Show C', date: day(20), overridePin: '2468' })).data;
+  const ca = (await c.call('POST', `/api/events/${a.id}/contributors`, { name: 'Promoter Jess', allocation: 20 })).data;
+  const cb = (await c.call('POST', `/api/events/${b.id}/contributors`, { name: 'promoter jess ' })).data;
+  const cl = (await c.call('POST', `/api/events/${later.id}/contributors`, { name: 'Promoter Jess' })).data;
+  const g1 = (await c.call('POST', `/api/events/${a.id}/guests`, { name: 'One', plusOnes: 3, contributorId: ca.id })).data;
+  await c.call('POST', `/api/events/${b.id}/guests`, { name: 'Two', plusOnes: 1, contributorId: cb.id });
+  await c.call('POST', `/api/events/${later.id}/guests`, { name: 'Future', contributorId: cl.id });
+  await c.call('POST', `/api/events/${b.id}/guests`, { name: 'Walk In' });
+  await c.call('POST', `/api/guests/${g1.id}/checkin`, { count: 1 });
+
+  const r = (await c.call('GET', `/api/comps?from=${day(-30)}&to=${day(30)}`)).data;
+  assert.equal(r.shows, 2, 'future shows are not counted yet');
+  const jess = r.contributors.find((x) => x.name.toLowerCase() === 'promoter jess');
+  assert.deepEqual([jess.shows, jess.heads, jess.arrived, jess.noShow, jess.noShowRate], [2, 6, 1, 5, 83]);
+  assert.ok(r.contributors.some((x) => x.name.startsWith('Venue')), 'guests added by the venue');
+  assert.equal(r.total.heads, 7);
+  const csv = await c.call('GET', `/api/comps.csv?from=${day(-30)}&to=${day(30)}`);
+  assert.match(csv.data, /Promoter Jess,—|Promoter Jess,Guest/);
+  assert.equal((await c.call('GET', `/api/comps?from=${day(5)}&to=${day(1)}`)).status, 400);
+  assert.equal((await client().call('GET', '/api/comps')).status, 401);
+});

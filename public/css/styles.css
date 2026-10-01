@@ -833,6 +833,17 @@ html:has(body.lp), body.lp { overflow-x: hidden; }
   .guest-table tr:last-child td { border: none; }
 
   .guide-table td:first-child { white-space: normal; }
+
+  /* Comps report: one card per contributor */
+  .table-wrap:has(.comps-table) { border: none; overflow: visible; }
+  .comps-table { display: block; width: 100%; min-width: 0; }
+  .comps-table thead { display: none; }
+  .comps-table tbody { display: grid; gap: 10px; }
+  .comps-table tr { display: flex; flex-wrap: wrap; gap: 4px 14px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+  .comps-table td { display: block; padding: 0; border: none; }
+  .comps-table td:first-child { flex: 1 1 100%; }
+  .comps-table td[data-label]::before { content: attr(data-label) " "; color: var(--muted); }
+  .comps-table td:last-child:empty { display: none; }
 }
 
 /* iPads in portrait have room for two guest cards side by side. */
@@ -889,3 +900,4 @@ small { font-size: max(0.8em, 12px); }
 /* Demo sandbox banner */
 .demo-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; padding: 8px 16px; background: rgba(242, 185, 92, 0.12); border-bottom: 1px solid rgba(242, 185, 92, 0.35); color: var(--text); font-size: 0.9rem; }
 .demo-bar a { font-weight: 700; }
+.badge-warn { background: rgba(255, 107, 87, 0.14); color: #ffb3a8; border-color: rgba(255, 107, 87, 0.45); white-space: nowrap; }

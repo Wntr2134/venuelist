@@ -40,6 +40,7 @@ function pages(demo) {
     { id: 'setup', url: demo.setupPath },
     { id: 'contributor', url: `/c/${demo.tm.token}` },
     { id: 'events', url: '/app#/', as: 'staff' },
+    { id: 'comps', url: '/app#/comps/year', as: 'staff' },
     { id: 'guests', url: `/app#/event/${e}/guests`, as: 'staff' },
     { id: 'add-guest', url: `/app#/event/${e}/guests`, as: 'staff', click: 'text=+ Add guest' },
     { id: 'contributors', url: `/app#/event/${e}/contributors`, as: 'staff' },

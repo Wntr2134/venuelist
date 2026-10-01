@@ -53,6 +53,7 @@ function route() {
     if (parts[0] === 'event' && parts[1]) return renderEvent(Number(parts[1]), parts[2] || 'guests');
     if (parts[0] === 'door' && parts[1]) return renderDoor(Number(parts[1]));
     if (parts[0] === 'settings') return renderSettings();
+    if (parts[0] === 'comps') return renderComps(parts[1] || '30');
     if (parts[0] === 'archive') return renderEvents('archived');
     if (parts[0] === 'past') return renderEvents('past');
     return renderEvents('upcoming');
@@ -182,7 +183,9 @@ async function renderEvents(view) {
         h('span', null, ' — until your venue admin adds them, staff can go over capacity and guest list limits with just a tap. Open venue admin →')),
       h('div', { class: 'page-head' },
         h('h1', null, 'Events'),
-        view === 'upcoming' ? h('button', { class: 'btn btn-primary', onclick: () => eventForm() }, '+ New event') : null
+        h('div', { class: 'row' },
+          h('a', { class: 'btn', href: '#/comps' }, 'Comps report'),
+          view === 'upcoming' ? h('button', { class: 'btn btn-primary', onclick: () => eventForm() }, '+ New event') : null)
       ),
       h('nav', { class: 'tabs' }, tab('upcoming', 'Upcoming', '#/'), tab('past', 'Past', '#/past'), tab('archived', 'Archived', '#/archive')),
       events.length ? h('div', { class: 'event-grid' }, events.map((e) => eventCard(e, today))) : h('div', { class: 'empty' }, empty)
@@ -1415,6 +1418,66 @@ async function renderDoor(id) {
   await load();
   search.focus();
   live(id, load, onMessage);
+}
+
+// ---------- comps report ----------
+// Who put guests on the list across shows, how many came, and who leaves comps unused.
+
+function compsRange(preset) {
+  const today = venueToday();
+  const d = new Date(`${today}T00:00:00`);
+  const fmt = (x) => localDate(x);
+  const back = (n) => fmt(new Date(d.getFullYear(), d.getMonth(), d.getDate() - n));
+  if (preset === '90') return { from: back(89), to: today };
+  if (preset === 'month') return { from: fmt(new Date(d.getFullYear(), d.getMonth(), 1)), to: today };
+  if (preset === 'lastmonth') return { from: fmt(new Date(d.getFullYear(), d.getMonth() - 1, 1)), to: fmt(new Date(d.getFullYear(), d.getMonth(), 0)) };
+  if (preset === 'year') return { from: fmt(new Date(d.getFullYear(), 0, 1)), to: today };
+  return { from: back(29), to: today };
+}
+
+async function renderComps(preset) {
+  const { from, to } = compsRange(preset);
+  const r = await api('GET', `/api/comps?from=${from}&to=${to}`).catch(handleError);
+  if (!r) return;
+  const pick = h('select', { onchange: (e) => { location.hash = `#/comps/${e.target.value}`; } },
+    [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['month', 'This month'], ['lastmonth', 'Last month'], ['year', 'This year']]
+      .map(([v, l]) => h('option', { value: v }, l)));
+  pick.value = preset;
+  const tile = (label, value, sub) => h('div', { class: 'stat' }, h('div', { class: 'stat-value' }, value), h('div', { class: 'stat-label' }, label), sub ? h('div', { class: 'stat-sub' }, sub) : null);
+  // Worth a word with them: a lot of unused spots, not just one unlucky night.
+  const high = (c) => c.heads >= 6 && c.noShowRate >= 40;
+  const table = (cols, rows) => h('div', { class: 'table-wrap' }, h('table', { class: 'table report-table' },
+    h('thead', null, h('tr', null, cols.map((c) => h('th', null, c)))), h('tbody', null, rows)));
+
+  put(app,
+    topbar({ back: '#/', title: 'Comps report', sub: `${fmtDate(r.from)} – ${fmtDate(r.to)}` }),
+    h('main', { class: 'page stack' },
+      h('div', { class: 'toolbar' },
+        pick,
+        h('a', { class: 'btn', href: `/api/comps.csv?from=${r.from}&to=${r.to}` }, 'Export CSV')
+      ),
+      h('div', { class: 'stats' },
+        tile('Shows', r.shows),
+        tile('Heads on lists', r.total.heads),
+        tile('Came', r.total.arrived, r.total.heads ? `${100 - r.total.noShowRate}%` : ''),
+        tile('No-shows', r.total.noShow, r.total.heads ? `${r.total.noShowRate}%` : '')
+      ),
+      h('h3', null, 'By contributor'),
+      h('p', { class: 'small muted' }, 'Finished shows only, matched by name across shows. “Worth a chat” = 6 or more heads and at least 40% didn’t come.'),
+      r.contributors.length
+        ? h('div', { class: 'table-wrap' }, h('table', { class: 'table report-table comps-table' },
+          h('thead', null, h('tr', null, ['Contributor', 'List', 'Shows', 'Heads', 'Came', 'No-shows', ''].map((x) => h('th', null, x)))),
+          h('tbody', null, r.contributors.map((c) => h('tr', null,
+            h('td', null, h('strong', null, c.name)), h('td', { 'data-label': 'List' }, c.listType), h('td', { 'data-label': 'Shows' }, c.shows),
+            h('td', { 'data-label': 'Heads' }, c.heads), h('td', { 'data-label': 'Came' }, c.arrived),
+            h('td', { 'data-label': 'No-shows' }, `${c.noShow} (${c.noShowRate}%)`),
+            h('td', null, high(c) ? h('span', { class: 'badge badge-warn' }, 'Worth a chat') : null))))))
+        : h('div', { class: 'empty' }, 'No finished shows with guest lists in this period.'),
+      r.lists.length ? h('h3', null, 'By list') : null,
+      r.lists.length ? table(['List', 'Heads', 'Came', 'No-shows'], r.lists.map((l) => h('tr', null,
+        h('td', null, l.listType), h('td', null, l.heads), h('td', null, l.arrived), h('td', null, `${l.noShow} (${l.noShowRate}%)`)))) : null
+    )
+  );
 }
 
 // ---------- venue settings ----------
