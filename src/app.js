@@ -11,6 +11,7 @@ const { backupNow, scheduleBackups } = require('./backup');
 const { loadOffsiteConfig, uploadBackup } = require('./offsite');
 const { seedDemo, deleteOldDemos, DEMO_CODE, DEMO_HOURS } = require('./demo');
 const { findMatch } = require('./banned');
+const push = require('./push');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Door'];
@@ -1914,6 +1915,7 @@ function createApp(db, options = {}) {
       return { g: getGuest(db, g.id), count };
     });
     const out = guestOut(result.g);
+    if (direction === 'in' && out.vip) vipAlert(venue, out, actor);
     publish(out.eventId, 'guests', {
       actor,
       guestId: out.id,
@@ -2088,6 +2090,50 @@ function createApp(db, options = {}) {
   function codeOut(c) {
     return { id: c.id, name: c.name, active: !!c.active, createdAt: c.created_at, lastUsedAt: c.last_used_at };
   }
+
+  // ----- VIP alerts to managers' phones (web push) -----
+
+  const pushSender = options.pushSend || push.sendPush;
+  let vapid = null;
+  const vapidKeys = () => vapid || (vapid = push.vapidKeys((k) => getSetting(db, k), (k, v) => setSetting(db, k, v)));
+
+  function vipAlert(venue, g, actor) {
+    const e = getEvent(db, g.eventId);
+    db.prepare('INSERT INTO push_alerts (venue_id, event_id, title, body, at) VALUES (?, ?, ?, ?, ?)')
+      .run(venue.id, e.id, `★ VIP arrived: ${g.name}`, `${e.name} · checked in by ${actor}`, now());
+    db.prepare('DELETE FROM push_alerts WHERE at < ?').run(new Date(Date.now() - 24 * 3600 * 1000).toISOString());
+    const subs = db.prepare('SELECT * FROM push_subs WHERE venue_id = ? AND (actor IS NULL OR actor != ?)').all(venue.id, actor);
+    for (const sub of subs) {
+      Promise.resolve(pushSender(sub.endpoint, vapidKeys(), PUBLIC_URL)).then((status) => {
+        if (status === 404 || status === 410) db.prepare('DELETE FROM push_subs WHERE id = ?').run(sub.id); // phone unsubscribed
+      }).catch(() => {});
+    }
+  }
+
+  route('GET', /^\/api\/push\/key$/, () => ({ publicKey: vapidKeys().publicKey }));
+
+  route('POST', /^\/api\/push\/subscribe$/, ({ venue, req, body }) => {
+    const endpoint = str(body.endpoint, 'Endpoint', { required: true, max: 1000 });
+    if (!push.allowedEndpoint(endpoint)) throw new HttpError(400, 'That isn’t a browser push address.');
+    const actor = actorFrom(req);
+    db.prepare(`INSERT INTO push_subs (venue_id, endpoint, actor, created_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(endpoint) DO UPDATE SET venue_id = excluded.venue_id, actor = excluded.actor`).run(venue.id, endpoint, actor, now());
+    return { ok: true };
+  });
+
+  route('POST', /^\/api\/push\/unsubscribe$/, ({ venue, body }) => {
+    db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND venue_id = ?').run(str(body.endpoint, 'Endpoint', { max: 1000 }), venue.id);
+    return { ok: true };
+  });
+
+  // The phone asks what woke it: this venue's alerts from the last few minutes.
+  // `after` = the last alert this phone showed, so nothing is shown twice.
+  route('GET', /^\/api\/push\/latest$/, ({ venue, query }) => {
+    const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const after = Number(query.get('after')) || 0;
+    return db.prepare('SELECT id, event_id, title, body, at FROM push_alerts WHERE venue_id = ? AND at > ? AND id > ? ORDER BY id DESC LIMIT 3')
+      .all(venue.id, since, after).map((a) => ({ id: a.id, title: a.title, body: a.body, url: a.event_id ? `/app#/door/${a.event_id}` : '/app' }));
+  });
 
   // ----- banned (refused entry) list -----
   // Only the venue admin sees the list. Staff only ever see a warning on a guest whose name

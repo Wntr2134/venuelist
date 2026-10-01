@@ -1605,6 +1605,65 @@ async function renderComps(preset) {
   );
 }
 
+// ---------- VIP alerts on this phone (web push) ----------
+
+function vipAlertsCard() {
+  const body = h('div', { class: 'stack' });
+  const card = h('div', { class: 'card stack' }, h('h3', null, '🔔 VIP alerts on this phone'), body);
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+  const toB = (b64) => {
+    const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64.length + 3) % 4));
+    return Uint8Array.from(s, (c) => c.charCodeAt(0));
+  };
+  async function current() {
+    if (!supported) return null;
+    const reg = await navigator.serviceWorker.ready;
+    return reg.pushManager.getSubscription();
+  }
+  async function turnOn() {
+    try {
+      if ((await Notification.requestPermission()) !== 'granted') return toast('Notifications are blocked for this site. Allow them in the phone’s settings.', 'error', 6000);
+      const { publicKey } = await api('GET', '/api/push/key');
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toB(publicKey) });
+      await api('POST', '/api/push/subscribe', { endpoint: sub.endpoint });
+      toast('VIP alerts on', 'ok');
+    } catch (err) {
+      toast(err.message || 'Couldn’t turn alerts on', 'error', 6000);
+    }
+    draw();
+  }
+  async function turnOff() {
+    const sub = await current();
+    if (sub) {
+      await api('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+      await sub.unsubscribe().catch(() => {});
+    }
+    toast('VIP alerts off', 'ok');
+    draw();
+  }
+  async function draw() {
+    if (ios && !standalone) {
+      return put(body, h('p', { class: 'muted' }, 'On iPhone and iPad, add the guest list to your home screen first: tap Share, then “Add to Home Screen”, and open it from there. Then turn alerts on here.'));
+    }
+    if (!supported) return put(body, h('p', { class: 'muted' }, 'This browser can’t show alerts when the app is closed.'));
+    const on = !!(await current().catch(() => null));
+    put(body,
+      h('p', { class: 'muted' }, on
+        ? 'This phone gets a notification when a VIP is checked in, even with the app closed (not for your own check-ins).'
+        : 'Get a notification when a VIP is checked in at the door, even with the app closed. For managers and hosts.'),
+      h('div', { class: 'row' }, on
+        ? h('button', { class: 'btn', onclick: turnOff }, 'Turn off')
+        : h('button', { class: 'btn btn-primary', onclick: turnOn }, 'Turn on VIP alerts'))
+    );
+  }
+  draw();
+  return card;
+}
+
 // ---------- venue settings ----------
 
 function renderSettings() {
@@ -1624,6 +1683,8 @@ function renderSettings() {
       h('a', { class: 'help-item', href: `/guide#${id}` }, h('strong', null, title), h('span', null, sub))
     ))
   );
+
+  const alerts = vipAlertsCard();
 
   const staffLink = `${location.origin}/v/${state.venueSlug}`;
   const canShare = typeof navigator.share === 'function';
@@ -1674,7 +1735,7 @@ function renderSettings() {
 
   put(app,
     topbar({ back: '#/', title: 'Settings' }),
-    h('main', { class: 'page narrow-block stack' }, guide, access, device, vadmin)
+    h('main', { class: 'page narrow-block stack' }, guide, alerts, access, device, vadmin)
   );
 }
 

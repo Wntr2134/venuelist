@@ -64,6 +64,7 @@
         <ul>
           <li><b>Login cookies</b> keep a venue, venue admin or Riderly admin signed in. They are signed, can’t be read by scripts on the page, and expire after 30 days.</li>
           <li><b>On the phone itself</b> (browser storage): the name typed on that device, a random device ID used to limit wrong password attempts, and door taps waiting to sync while offline. The door app also keeps a copy of the current show on the phone so it keeps working if the venue Wi-Fi drops. Logging out deletes that copy.</li>
+          <li><b>VIP alerts</b> (only if someone turns them on): the phone’s push address, kept so we can wake it. The alert itself is fetched from us over the phone’s own login, so no names pass through Apple’s or Google’s push services.</li>
           <li>Contributor links need no login or cookie. The private link itself is the key, so treat it like a password.</li>
         </ul>
       </section>

@@ -1471,3 +1471,50 @@ test('banned list: venue admin only, staff see a warning on matches, contributor
   assert.ok(after.log.some((l) => l.action === 'lapsed'));
   assert.equal((await c.call('GET', `/api/events/${ev.id}`)).data.guests.find((g) => g.name === 'Jake Smyth').banned, undefined);
 });
+
+test('VIP alerts: signed empty pushes to real push services only, not to the person who checked them in', async () => {
+  const push = require('../src/push');
+  const crypto = require('node:crypto');
+  // The VAPID signature checks out against the public key the browser is given.
+  const settings = {};
+  const keys = push.vapidKeys((k) => settings[k], (k, v) => { settings[k] = v; });
+  assert.equal(push.vapidKeys((k) => settings[k], () => assert.fail('made a second key')).publicKey, keys.publicKey, 'one key pair, kept');
+  const jwt = push.vapidJwt('https://fcm.googleapis.com', 'https://guestlist.riderly.com.au', keys.privateKey);
+  const [hd, cl, sig] = jwt.split('.');
+  const raw = Buffer.from(keys.publicKey, 'base64url');
+  const pub = crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: raw.subarray(1, 33).toString('base64url'), y: raw.subarray(33).toString('base64url') }, format: 'jwk' });
+  assert.ok(crypto.verify('sha256', Buffer.from(`${hd}.${cl}`), { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64url')));
+  assert.equal(JSON.parse(Buffer.from(cl, 'base64url')).aud, 'https://fcm.googleapis.com');
+  for (const bad of ['http://fcm.googleapis.com/x', 'https://evil.example.com/x', 'https://127.0.0.1/x', 'https://fcm.googleapis.com.evil.com/x']) {
+    assert.equal(push.allowedEndpoint(bad), false, bad);
+  }
+  assert.ok(push.allowedEndpoint('https://web.push.apple.com/abc'));
+
+  // In the app: the alert goes to other managers' phones, and a dead subscription is dropped.
+  const sent = [];
+  const db = openDb(':memory:');
+  const app = createApp(db, { purgeTimer: false, pushSend: async (endpoint) => { sent.push(endpoint); return endpoint.includes('gone') ? 410 : 201; } });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  try {
+    const visitor = client(() => url);
+    await visitor.call('POST', '/api/demo');
+    const tonight = (await visitor.call('GET', '/api/events')).data[0];
+    const g = (await visitor.call('GET', `/api/events/${tonight.id}`)).data.guests.find((x) => x.vip && !x.admitted);
+    assert.equal((await visitor.call('POST', '/api/push/subscribe', { endpoint: 'https://evil.example.com/x' }, { actor: 'Manager Mel' })).status, 400);
+    await visitor.call('POST', '/api/push/subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/mel' }, { actor: 'Manager Mel' });
+    await visitor.call('POST', '/api/push/subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/sam' }, { actor: 'Sam (Door 1)' });
+    await visitor.call('POST', '/api/push/subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/gone' }, { actor: 'Old Phone' });
+    await visitor.call('POST', `/api/guests/${g.id}/checkin`, { count: 1 }, { actor: 'Sam (Door 1)' });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(sent.sort(), ['https://fcm.googleapis.com/fcm/send/gone', 'https://fcm.googleapis.com/fcm/send/mel'], 'not Sam’s own phone');
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM push_subs WHERE endpoint LIKE '%gone'").get().n, 0, 'unsubscribed phone dropped');
+    const latest = (await visitor.call('GET', '/api/push/latest')).data;
+    assert.match(latest[0].title, new RegExp(`VIP arrived: ${g.name}`));
+    assert.equal(latest[0].url, `/app#/door/${tonight.id}`);
+    assert.equal((await client(() => url).call('GET', '/api/push/latest')).status, 401, 'only the venue can read its alerts');
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});

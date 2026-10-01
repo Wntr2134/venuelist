@@ -114,6 +114,24 @@ CREATE TABLE IF NOT EXISTS banned_log (
 );
 CREATE INDEX IF NOT EXISTS idx_banned_log_venue ON banned_log(venue_id, id);
 
+-- Phones that asked for VIP alerts, and the alerts themselves (fetched by the phone after an empty push).
+CREATE TABLE IF NOT EXISTS push_subs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  endpoint    TEXT NOT NULL UNIQUE,
+  actor       TEXT,
+  created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS push_alerts (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  event_id    INTEGER,
+  title       TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_alerts_venue ON push_alerts(venue_id, id);
+
 -- One-click sign-in links from the Riderly venue manager: single use, a minute long.
 CREATE TABLE IF NOT EXISTS sso_tokens (
   token_hash  TEXT PRIMARY KEY,
