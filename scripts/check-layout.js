@@ -48,6 +48,7 @@ function pages(demo) {
     { id: 'activity', url: `/app#/event/${e}/activity`, as: 'staff' },
     { id: 'event-settings', url: `/app#/event/${e}/settings`, as: 'staff' },
     { id: 'door', url: `/app#/door/${e}`, as: 'staff' },
+    { id: 'screen', url: `/app#/screen/${e}`, as: 'staff' },
     { id: 'clicker', url: `/app#/door/${e}`, as: 'staff', click: 'text=Full screen' },
     { id: 'owner-admin', url: '/admin', as: 'owner' },
     { id: 'venue-admin', url: '/v/velvet-room/admin', as: 'vadmin' },

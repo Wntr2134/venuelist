@@ -52,6 +52,7 @@ function route() {
   try {
     if (parts[0] === 'event' && parts[1]) return renderEvent(Number(parts[1]), parts[2] || 'guests');
     if (parts[0] === 'door' && parts[1]) return renderDoor(Number(parts[1]));
+    if (parts[0] === 'screen' && parts[1]) return renderScreen(Number(parts[1]));
     if (parts[0] === 'settings') return renderSettings();
     if (parts[0] === 'comps') return renderComps(parts[1] || '30');
     if (parts[0] === 'archive') return renderEvents('archived');
@@ -1239,7 +1240,8 @@ async function renderDoor(id) {
         h('span', null, `Peak ${cap.server ? cap.server.peak : 0} · In ${cap.server ? cap.server.totalIn : 0} · Out ${cap.server ? cap.server.totalOut : 0}`),
         h('span', { class: 'row' },
           h('button', { class: 'linklike', onclick: () => capSheet() }, '⚙ Settings'),
-          h('button', { class: 'linklike', onclick: () => openClicker() }, '⤢ Full screen')
+          h('button', { class: 'linklike', onclick: () => openClicker() }, '⤢ Full screen'),
+          h('a', { class: 'linklike', href: `#/screen/${id}`, title: 'A big read-only counter for a TV or iPad' }, '📺 Screen')
         )
       )
     );
@@ -1418,6 +1420,87 @@ async function renderDoor(id) {
   await load();
   search.focus();
   live(id, load, onMessage);
+}
+
+// ---------- capacity screen ----------
+// A big, read-only door count for a TV or iPad at the box office or production desk.
+// No buttons to bump; it follows the door phones live and keeps the screen awake.
+
+async function renderScreen(id) {
+  let data;
+  const root = h('main', { class: 'screen' });
+  put(app, root);
+  let wake = null;
+  const keepAwake = async () => {
+    try {
+      if (navigator.wakeLock && document.visibilityState === 'visible') wake = await navigator.wakeLock.request('screen');
+    } catch {
+      /* not supported, or refused: the screen may sleep */
+    }
+  };
+  keepAwake();
+  document.addEventListener('visibilitychange', keepAwake);
+  const clock = setInterval(() => draw(), 30000);
+  state.cleanup.push(() => {
+    document.removeEventListener('visibilitychange', keepAwake);
+    clearInterval(clock);
+    if (wake) wake.release().catch(() => {});
+  });
+
+  function level(count, capacity) {
+    if (!capacity) return 'none';
+    const pct = count / capacity;
+    return pct > 1 ? 'over' : pct >= 0.95 ? 'full' : pct >= 0.8 ? 'warn' : 'ok';
+  }
+
+  function draw() {
+    if (!data) return;
+    const e = data.event;
+    const hc = e.headcount;
+    const lv = level(hc.count, hc.capacity);
+    const pct = hc.capacity ? Math.min(100, Math.round((hc.count / hc.capacity) * 100)) : 0;
+    const label = !hc.capacity ? 'inside'
+      : lv === 'over' ? `OVER CAPACITY by ${hc.count - hc.capacity}`
+        : hc.count >= hc.capacity ? 'AT CAPACITY' : `${hc.capacity - hc.count} spaces left`;
+    const time = new Date().toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
+    root.className = `screen lvl-${lv}`;
+    put(root,
+      h('div', { class: 'screen-top' },
+        h('a', { class: 'screen-back', href: `#/door/${id}`, 'aria-label': 'Back to door mode' }, '←'),
+        h('div', { class: 'screen-title' }, h('strong', null, e.name), h('span', null, state.venueName)),
+        h('div', { class: 'screen-clock' }, h('span', { id: 'live-dot', class: 'live-dot' }), time)
+      ),
+      h('div', { class: 'screen-count' },
+        h('b', null, String(hc.count)),
+        hc.capacity ? h('span', null, ` / ${hc.capacity}`) : null
+      ),
+      hc.capacity ? h('div', { class: 'screen-track' }, h('div', { class: 'screen-fill', style: `width:${pct}%` })) : null,
+      h('div', { class: 'screen-label' }, label),
+      h('div', { class: 'screen-stats' },
+        h('div', null, h('b', null, String(hc.peak)), h('span', null, 'Peak')),
+        h('div', null, h('b', null, `${data.stats.admitted}/${data.stats.expected}`), h('span', null, 'Guest list in')),
+        h('div', null, h('b', null, `${data.stats.vipInside}/${data.stats.vip}`), h('span', null, '★ VIP in'))
+      )
+    );
+  }
+
+  async function load() {
+    try {
+      data = await api('GET', `/api/events/${id}`);
+      draw();
+    } catch (err) {
+      handleError(err);
+    }
+  }
+  await load();
+  live(id, load, (msg) => {
+    if (msg.type === 'count' && msg.headcount && data) {
+      data.event.headcount = msg.headcount;
+      draw();
+      return true;
+    }
+    return false;
+  });
 }
 
 // ---------- comps report ----------

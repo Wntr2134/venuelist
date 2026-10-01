@@ -901,3 +901,30 @@ small { font-size: max(0.8em, 12px); }
 .demo-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; padding: 8px 16px; background: rgba(242, 185, 92, 0.12); border-bottom: 1px solid rgba(242, 185, 92, 0.35); color: var(--text); font-size: 0.9rem; }
 .demo-bar a { font-weight: 700; }
 .badge-warn { background: rgba(255, 107, 87, 0.14); color: #ffb3a8; border-color: rgba(255, 107, 87, 0.45); white-space: nowrap; }
+
+/* Capacity screen (TV / iPad) */
+.screen { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2vh; padding: max(16px, env(safe-area-inset-top)) 4vw max(16px, env(safe-area-inset-bottom)); background: var(--bg); text-align: center; transition: background 0.4s; }
+.screen.lvl-warn { background: radial-gradient(circle at 50% 40%, rgba(255, 216, 77, 0.12), var(--bg) 70%); }
+.screen.lvl-full, .screen.lvl-over { background: radial-gradient(circle at 50% 40%, rgba(255, 107, 87, 0.2), var(--bg) 70%); }
+.screen-top { position: fixed; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: max(12px, env(safe-area-inset-top)) 20px 12px; }
+.screen-back { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); border: 1px solid var(--line); opacity: 0.6; }
+.screen-title { display: flex; flex-direction: column; min-width: 0; flex: 1; text-align: left; }
+.screen-title strong { font: 800 clamp(1.2rem, 2.6vw, 2rem)/1.1 var(--display); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.screen-title span { color: var(--muted); }
+.screen-clock { display: flex; align-items: center; gap: 10px; font: 700 clamp(1.1rem, 2.4vw, 1.8rem)/1 var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
+.screen-count { font-family: var(--display); font-weight: 900; line-height: 0.85; font-variant-numeric: tabular-nums; }
+.screen-count b { font-size: clamp(8rem, 34vw, 30rem); }
+.screen-count span { font-size: clamp(2.5rem, 9vw, 8rem); color: var(--muted); }
+.screen-track { width: min(80vw, 1100px); height: clamp(10px, 1.6vh, 22px); background: var(--card-2); border-radius: 99px; overflow: hidden; }
+.screen-fill { height: 100%; background: var(--in); border-radius: 99px; transition: width 0.4s; }
+.lvl-warn .screen-fill { background: var(--gold); }
+.lvl-full .screen-fill, .lvl-over .screen-fill { background: var(--out); }
+.screen-label { font: 800 clamp(1.4rem, 4.5vw, 3.6rem)/1 var(--display); text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.lvl-ok .screen-label { color: var(--in); }
+.lvl-warn .screen-label { color: var(--gold); }
+.lvl-full .screen-label, .lvl-over .screen-label { color: var(--out); }
+.screen-stats { display: flex; gap: clamp(16px, 5vw, 80px); margin-top: 2vh; }
+.screen-stats > div { display: flex; flex-direction: column; gap: 4px; }
+.screen-stats b { font: 800 clamp(1.6rem, 4.5vw, 3.6rem)/1 var(--display); font-variant-numeric: tabular-nums; }
+.screen-stats span { color: var(--muted); font-size: clamp(0.8rem, 1.6vw, 1.1rem); text-transform: uppercase; letter-spacing: 0.06em; }
+@media (orientation: landscape) and (max-height: 500px) { .screen-count b { font-size: 38vh; } .screen-stats { margin-top: 0; } }
