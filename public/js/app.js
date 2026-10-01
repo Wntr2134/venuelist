@@ -1,6 +1,6 @@
 'use strict';
 
-/* global h, clear, put, api, ApiError, toast, modal, confirmDialog, promptDeviceName, currentName,
+/* global guestScore, h, clear, put, api, ApiError, toast, modal, confirmDialog, promptDeviceName, currentName,
    fmtDate, fmtDateTime, fmtTime, toLocalInput, fromLocalInput, field, formData, norm */
 
 const app = document.getElementById('app');
@@ -301,12 +301,11 @@ async function renderEvent(id, tab) {
 
   // --- guests tab ---
   function guestsTab() {
-    const q = norm(ui.search);
+    const q = ui.search.trim();
     const rows = data.guests.filter((g) => {
       if (ui.contributor === 'venue' && g.contributorId) return false;
       if (ui.contributor !== 'all' && ui.contributor !== 'venue' && String(g.contributorId) !== ui.contributor) return false;
-      if (!q) return true;
-      return norm(`${g.name} ${g.notes || ''} ${g.contributorName || ''} ${g.listType}`).includes(q);
+      return !q || guestScore(q, g) > 0;
     });
 
     const search = h('input', {
@@ -1073,21 +1072,20 @@ async function renderDoor(id) {
 
   function drawList() {
     if (!data) return;
-    const q = norm(ui.search.trim());
-    const terms = q.split(/\s+/).filter(Boolean);
+    const q = ui.search.trim();
+    const score = new Map();
     let rows = data.guests.filter((g) => {
       if (ui.filter === 'waiting' && g.admitted > 0) return false;
       if (ui.filter === 'inside' && g.inside === 0) return false;
       if (ui.filter === 'left' && !(g.admitted > 0 && g.inside === 0)) return false;
       if (ui.filter === 'vip' && !g.vip) return false;
-      if (!terms.length) return true;
-      const hay = norm(`${g.name} ${g.notes || ''} ${g.contributorName || ''} ${g.listType}`);
-      return terms.every((t) => hay.includes(t));
+      if (!q) return true;
+      const s = guestScore(q, g); // forgiving: surnames, nicknames, O'Brien, small typos
+      if (s) score.set(g.id, s);
+      return s > 0;
     });
-    // Names starting with the search go first, VIPs next, then alphabetical.
-    if (terms.length) {
-      rows = rows.sort((a, b) => Number(norm(b.name).startsWith(terms[0])) - Number(norm(a.name).startsWith(terms[0])) || a.name.localeCompare(b.name));
-    }
+    // Best matches first (a name starting with the search), then alphabetical.
+    if (q) rows = rows.sort((a, b) => score.get(b.id) - score.get(a.id) || a.name.localeCompare(b.name));
     put(list, 
       rows.length
         ? rows.slice(0, 300).map(doorRow)

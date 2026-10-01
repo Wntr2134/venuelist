@@ -426,3 +426,86 @@ window.addEventListener('online', () => queueFlush());
 setInterval(() => {
   if (queueList().length) queueFlush();
 }, 10000);
+
+// ---------- forgiving name search ----------
+// At a busy door a missed search turns a guest away, so the search forgives the usual slips:
+// any word (surnames too), O'Brien / Ann-Marie typed without punctuation, common nicknames
+// (Jon → Jonathan, Kate → Katherine, Lachie → Lachlan), and a typo or two in longer words.
+
+const NICKNAMES = [
+  ['john', 'jon', 'johnny', 'jonny', 'jack'], ['jonathan', 'jon', 'jonny', 'johnny'], ['michael', 'mike', 'mick', 'mikey', 'micky'],
+  ['christopher', 'chris', 'kit'], ['christine', 'christina', 'chris', 'chrissy', 'tina'], ['william', 'will', 'bill', 'billy', 'liam', 'willy'],
+  ['robert', 'rob', 'bob', 'robbie', 'bobby'], ['richard', 'rich', 'rick', 'richie', 'dick'], ['james', 'jim', 'jimmy', 'jamie'],
+  ['joseph', 'joe', 'joey'], ['thomas', 'tom', 'tommy'], ['daniel', 'dan', 'danny'], ['david', 'dave', 'davey'], ['matthew', 'matt'],
+  ['nicholas', 'nick', 'nicky'], ['anthony', 'tony', 'ant'], ['andrew', 'andy', 'drew'], ['alexander', 'alexandra', 'alex', 'xander', 'lex', 'sasha'],
+  ['benjamin', 'ben', 'benny'], ['samuel', 'samantha', 'sam', 'sammy'], ['edward', 'ed', 'eddie', 'ted', 'ned'],
+  ['elizabeth', 'liz', 'lizzie', 'beth', 'eliza', 'betty'], ['katherine', 'catherine', 'kathryn', 'kate', 'katie', 'kat', 'cathy', 'kathy'],
+  ['margaret', 'maggie', 'meg', 'peggy'], ['jennifer', 'jen', 'jenny'], ['rebecca', 'becky', 'bec', 'becca'], ['jessica', 'jess', 'jessie'],
+  ['victoria', 'vic', 'vicky', 'tori'], ['patrick', 'patricia', 'pat', 'paddy', 'patty'], ['stephen', 'steven', 'steve', 'stevie'],
+  ['timothy', 'tim', 'timmy'], ['zachary', 'zac', 'zach', 'zack'], ['nathan', 'nathaniel', 'nate', 'nat'], ['joshua', 'josh'],
+  ['gregory', 'greg'], ['jacob', 'jake'], ['charles', 'charlotte', 'charlie', 'chuck', 'chaz', 'lottie'], ['frederick', 'fred', 'freddie'],
+  ['henry', 'harry', 'hal'], ['lachlan', 'lachie', 'lachy'], ['isabella', 'isabelle', 'bella', 'izzy', 'issy'], ['abigail', 'abby', 'abbie'],
+  ['natalie', 'nat', 'tali'], ['olivia', 'liv', 'livvy'], ['madeleine', 'madeline', 'maddie', 'maddy'], ['emily', 'em', 'emmy'],
+  ['gabriel', 'gabrielle', 'gabe', 'gabby'], ['nicole', 'nikki', 'nic'], ['dominic', 'dom'], ['cameron', 'cam'], ['sebastian', 'seb'],
+];
+const NICK = new Map();
+NICKNAMES.forEach((group, i) => group.forEach((n) => NICK.set(n, [...(NICK.get(n) || []), i])));
+
+// Lower case, no accents; apostrophes, full stops and hyphens joined up (O'Brien → obrien).
+function searchKey(s) {
+  return norm(s).replace(/['’`.\-]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Edit distance, giving up past `max` (a swapped pair of letters counts as one).
+function within(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return false;
+  let prev2 = null;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) cur[j] = Math.min(cur[j], prev2[j - 2] + 1);
+      best = Math.min(best, cur[j]);
+    }
+    if (best > max) return false;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[b.length] <= max;
+}
+
+function termScore(t, words, joined, extra) {
+  let best = 0;
+  words.forEach((w, i) => {
+    if (w.startsWith(t)) best = Math.max(best, i === 0 ? 5 : 4); // a first name or surname starting with it
+    const groups = NICK.get(t);
+    if (groups && (NICK.get(w) || []).some((g) => groups.includes(g))) best = Math.max(best, 3);
+    // Typos: only in longer words, and never the first letter (people rarely miss that one),
+    // so "kate" can't wander off to "Patel".
+    if (t.length >= 5 && t[0] === w[0]) {
+      const max = t.length >= 8 ? 2 : 1;
+      if (within(t, w.slice(0, t.length), max) || within(t, w, max)) best = Math.max(best, 1);
+    }
+  });
+  if (!best && joined.includes(t)) best = 2; // inside a name, or typed without spaces
+  if (!best && extra.includes(t)) best = 1; // the note, contributor or list
+  return best;
+}
+
+// 0 = not a match; higher = better. Every word typed has to match something.
+function guestScore(query, g) {
+  const terms = searchKey(query).split(' ').filter(Boolean);
+  if (!terms.length) return 1;
+  const words = searchKey(g.name).split(' ').filter(Boolean);
+  const joined = words.join('');
+  const extra = searchKey(`${g.notes || ''} ${g.contributorName || ''} ${g.listType || ''}`);
+  let total = 0;
+  for (const t of terms) {
+    const s = termScore(t, words, joined, extra);
+    if (!s) return 0;
+    total += s;
+  }
+  return total;
+}
