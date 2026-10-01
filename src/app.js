@@ -1018,6 +1018,7 @@ function createApp(db, options = {}) {
         hasManagerPin: canOverride(v),
         hasAdmin: !!v.admin_password_hash,
         riderlyConnected: !!v.api_key_hash,
+        billing: { plan: v.plan, priceAud: v.price_aud, paidUntil: v.paid_until, notes: v.billing_notes, overdue: !!v.paid_until && v.paid_until < venueDay() },
         email: v.email,
         setupLinkActive: !!v.setup_expires_at && Date.parse(v.setup_expires_at) > Date.now(),
         setupExpiresAt: v.setup_expires_at,
@@ -1087,7 +1088,14 @@ function createApp(db, options = {}) {
     const v = ownerVenue(params[0]);
     const name = body.name !== undefined ? str(body.name, 'Venue name', { required: true, max: 80 }) : v.name;
     const active = body.active !== undefined ? (body.active ? 1 : 0) : v.active;
-    db.prepare('UPDATE venues SET name = ?, active = ? WHERE id = ?').run(name, active, v.id);
+    const billing = {
+      plan: body.plan !== undefined ? str(body.plan, 'Plan', { max: 60 }) || null : v.plan,
+      price_aud: body.priceAud !== undefined ? int(body.priceAud, 'Monthly price', { min: 0, max: 100000, nullable: true }) : v.price_aud,
+      paid_until: body.paidUntil !== undefined ? (body.paidUntil ? dateStr(body.paidUntil) : null) : v.paid_until,
+      billing_notes: body.billingNotes !== undefined ? str(body.billingNotes, 'Billing notes', { max: 500 }) || null : v.billing_notes,
+    };
+    db.prepare('UPDATE venues SET name = ?, active = ?, plan = ?, price_aud = ?, paid_until = ?, billing_notes = ? WHERE id = ?')
+      .run(name, active, billing.plan, billing.price_aud, billing.paid_until, billing.billing_notes, v.id);
     return venueOut(ownerVenue(v.id));
   }, { auth: 'owner' });
 
@@ -2202,7 +2210,26 @@ function createApp(db, options = {}) {
 
   // ----- privacy: remove guest details N days after a show (per venue setting) -----
 
+  // Once a day: tell the owner which active venues are past their "paid until" date, or due within 3 days.
+  function billingReminder(at = Date.now()) {
+    const today = venueDay(at);
+    const hour = Number(new Intl.DateTimeFormat('en-AU', { timeZone: VENUE_TZ, hour: 'numeric', hourCycle: 'h23' }).format(new Date(at)));
+    if (hour < 8 || getSetting(db, 'billing_reminder_day') === today) return null; // mornings, once a day
+    const soon = new Date(Date.parse(`${today}T00:00:00Z`) + 3 * 86400000).toISOString().slice(0, 10);
+    const due = db.prepare("SELECT name, plan, price_aud, paid_until FROM venues WHERE demo = 0 AND active = 1 AND paid_until IS NOT NULL AND paid_until <= ? ORDER BY paid_until").all(soon);
+    setSetting(db, 'billing_reminder_day', today);
+    if (!due.length) return null;
+    const line = (v) => `  ${v.paid_until < today ? 'OVERDUE' : 'due soon'}  ${v.name} — paid until ${v.paid_until}${v.price_aud ? ` · $${v.price_aud}/month` : ''}${v.plan ? ` · ${v.plan}` : ''}`;
+    mail({
+      to: 'owner',
+      subject: `Billing: ${due.filter((v) => v.paid_until < today).length} overdue, ${due.filter((v) => v.paid_until >= today).length} due soon`,
+      text: ['Venues to invoice or chase:', '', ...due.map(line), '', `Update "paid until" in ${PUBLIC_URL}/admin once they've paid.`].join('\n'),
+    });
+    return due.length;
+  }
+
   function purgeExpired(at = new Date()) {
+    billingReminder(at.getTime());
     let purged = 0;
     db.prepare('DELETE FROM applied_ops WHERE created_at < ?').run(new Date(at.getTime() - 7 * 86400000).toISOString());
     const venues = db.prepare('SELECT id, retention_days FROM venues WHERE retention_days IS NOT NULL').all();
@@ -2501,6 +2528,7 @@ function createApp(db, options = {}) {
   });
   server.on('close', () => hub.closeAll());
   server.purgeExpired = purgeExpired;
+  server.billingReminder = billingReminder;
   server.runBackup = runBackup;
   if (backupOpts && backupOpts.schedule !== false) {
     server.on('close', scheduleBackups(runBackup, backupDue, { log: mailLog }));
@@ -2508,7 +2536,10 @@ function createApp(db, options = {}) {
   if (options.purgeTimer !== false) {
     const first = setTimeout(() => purgeExpired(), 30 * 1000);
     const daily = setInterval(() => purgeExpired(), 24 * 3600 * 1000);
-    const demos = setInterval(() => deleteOldDemos(db), 3600 * 1000);
+    const demos = setInterval(() => {
+      deleteOldDemos(db);
+      billingReminder();
+    }, 3600 * 1000);
     first.unref();
     daily.unref();
     demos.unref();

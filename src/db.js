@@ -217,6 +217,11 @@ function migrate(db) {
     ['api_key_created_at', 'TEXT'],
     ['api_key_last_used_at', 'TEXT'],
     ['demo', 'INTEGER NOT NULL DEFAULT 0'], // a "Try the demo" sandbox, deleted after a few hours
+    // Billing, kept by Riderly (invoices go out from Xero; this just tracks who's paid up).
+    ['plan', 'TEXT'],
+    ['price_aud', 'INTEGER'],
+    ['paid_until', 'TEXT'],
+    ['billing_notes', 'TEXT'],
   ]) {
     if (!vCols.includes(col)) db.exec(`ALTER TABLE venues ADD COLUMN ${col} ${def}`);
   }

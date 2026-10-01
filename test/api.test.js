@@ -1411,3 +1411,26 @@ test('comps report: per contributor across shows, matched by name, with no-show 
   assert.equal((await c.call('GET', `/api/comps?from=${day(5)}&to=${day(1)}`)).status, 400);
   assert.equal((await client().call('GET', '/api/comps')).status, 401);
 });
+
+test('billing: plan, price and paid-until per venue; overdue flagged; one morning reminder a day', async () => {
+  const { venue } = await onboard('Billing Bar');
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const id = (await owner.call('GET', '/api/owner/venues')).data.venues.find((v) => v.slug === venue.slug).id;
+  let r = await owner.call('PUT', `/api/owner/venues/${id}`, { plan: 'Standard', priceAud: 149, paidUntil: day(-2), billingNotes: 'INV-0042' });
+  assert.equal(r.status, 200);
+  let v = (await owner.call('GET', '/api/owner/venues')).data.venues.find((x) => x.id === id);
+  assert.deepEqual(v.billing, { plan: 'Standard', priceAud: 149, paidUntil: day(-2), notes: 'INV-0042', overdue: true });
+  assert.equal((await owner.call('PUT', `/api/owner/venues/${id}`, { paidUntil: 'soon' })).status, 400);
+  assert.equal((await client().call('PUT', `/api/owner/venues/${id}`, { paidUntil: day(30) })).status, 401);
+
+  // Reminder: mornings only (10am Melbourne here), at most once a day.
+  const morning = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate(), 0, 30);
+  appDb.prepare("DELETE FROM settings WHERE key = 'billing_reminder_day'").run();
+  assert.equal(server.billingReminder(morning - 6 * 3600 * 1000), null, 'not before 8am');
+  assert.ok(server.billingReminder(morning) >= 1);
+  assert.equal(server.billingReminder(morning + 3600 * 1000), null, 'once a day');
+
+  await owner.call('PUT', `/api/owner/venues/${id}`, { paidUntil: day(30) });
+  v = (await owner.call('GET', '/api/owner/venues')).data.venues.find((x) => x.id === id);
+  assert.equal(v.billing.overdue, false);
+});

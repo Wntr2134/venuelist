@@ -1,6 +1,6 @@
 'use strict';
 
-/* global h, put, api, toast, modal, confirmDialog, field, formData, fmtDateTime, slugPreview */
+/* global localDate, h, put, api, toast, modal, confirmDialog, field, formData, fmtDateTime, slugPreview */
 
 const root = document.getElementById('app');
 
@@ -184,6 +184,7 @@ function venueCard(v) {
           )
         )
       ),
+    billingBox(v),
     h('div', { class: 'row wrap' },
       h('button', { class: 'btn btn-small', onclick: () => rename(v) }, 'Rename'),
       h('button', { class: 'btn btn-small', onclick: () => toggle(v) }, v.status === 'disabled' ? 'Enable' : 'Disable'),
@@ -363,6 +364,72 @@ async function newLink(v) {
   } catch (err) {
     toast(err.message, 'error');
   }
+}
+
+// ----- billing: who's paid up (invoices go out from Xero; this is the tracker) -----
+
+function billingBox(v) {
+  const b = v.billing || {};
+  const bits = [b.plan, b.priceAud != null ? `$${b.priceAud}/month` : null].filter(Boolean).join(' · ');
+  return h('div', { class: `reset-box billing-box${b.overdue ? ' overdue' : ''}` },
+    h('div', { class: 'reset-title' }, '💳 Billing ',
+      b.overdue ? h('span', { class: 'badge badge-warn' }, 'Overdue') : b.paidUntil ? h('span', { class: 'badge s-active' }, 'Paid') : h('span', { class: 'badge' }, 'Not set')),
+    h('div', { class: 'small' }, bits || h('span', { class: 'muted' }, 'No plan set'),
+      b.paidUntil ? h('span', { class: 'muted' }, ` · paid until ${fmtDate(b.paidUntil)}`) : null),
+    b.notes ? h('div', { class: 'small muted' }, b.notes) : null,
+    h('div', { class: 'row wrap' },
+      h('button', { class: 'btn btn-small', onclick: () => editBilling(v) }, 'Edit'),
+      h('button', { class: 'btn btn-small btn-primary', onclick: () => extendPaid(v, 1), title: 'They paid: move "paid until" on a month' }, '+1 month paid')
+    )
+  );
+}
+
+// One month on from whichever is later: the current "paid until", or today.
+function addMonth(from) {
+  const today = localDate();
+  const base = from && from > today ? from : today;
+  const [y, m, d] = base.split('-').map(Number);
+  const next = new Date(y, m, Math.min(d, new Date(y, m + 1, 0).getDate()));
+  return localDate(next);
+}
+
+async function extendPaid(v, months) {
+  let until = v.billing && v.billing.paidUntil;
+  for (let i = 0; i < months; i++) until = addMonth(until);
+  try {
+    await api('PUT', `/api/owner/venues/${v.id}`, { paidUntil: until });
+    toast(`${v.name}: paid until ${fmtDate(until)}`, 'ok');
+    renderDashboard();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+function editBilling(v) {
+  const b = v.billing || {};
+  const form = h('form', { class: 'stack' },
+    h('div', { class: 'grid-2' },
+      field('Plan', h('input', { name: 'plan', maxlength: '60', value: b.plan || '', placeholder: 'e.g. Standard' })),
+      field('Monthly price (AUD)', h('input', { name: 'priceAud', type: 'number', min: '0', inputmode: 'numeric', value: b.priceAud ?? '' }))
+    ),
+    field('Paid until', h('input', { name: 'paidUntil', type: 'date', value: b.paidUntil || '' }), 'You get a morning email when it’s 3 days away and when it’s overdue.'),
+    field('Notes', h('textarea', { name: 'billingNotes', rows: '2', maxlength: '500' }, b.notes || ''), 'e.g. invoice number, trial until, who to chase.')
+  );
+  const submit = async (e) => {
+    if (e) e.preventDefault();
+    const d = formData(form);
+    try {
+      await api('PUT', `/api/owner/venues/${v.id}`, { plan: d.plan, priceAud: d.priceAud === '' ? null : Number(d.priceAud), paidUntil: d.paidUntil || null, billingNotes: d.billingNotes });
+      m.close();
+      renderDashboard();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+  form.addEventListener('submit', submit);
+  const m = modal(`Billing — ${v.name}`, form, {
+    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, 'Save')],
+  });
 }
 
 function rename(v) {

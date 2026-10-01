@@ -928,3 +928,4 @@ small { font-size: max(0.8em, 12px); }
 .screen-stats b { font: 800 clamp(1.6rem, 4.5vw, 3.6rem)/1 var(--display); font-variant-numeric: tabular-nums; }
 .screen-stats span { color: var(--muted); font-size: clamp(0.8rem, 1.6vw, 1.1rem); text-transform: uppercase; letter-spacing: 0.06em; }
 @media (orientation: landscape) and (max-height: 500px) { .screen-count b { font-size: 38vh; } .screen-stats { margin-top: 0; } }
+.billing-box.overdue { border-color: rgba(255, 107, 87, 0.5); }
