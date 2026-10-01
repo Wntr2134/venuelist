@@ -885,3 +885,7 @@ small { font-size: max(0.8em, 12px); }
 
 /* Event page: finished / removed-by-Riderly notice */
 .show-notice { margin-bottom: 12px; padding: 10px 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--muted); }
+
+/* Demo sandbox banner */
+.demo-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; padding: 8px 16px; background: rgba(242, 185, 92, 0.12); border-bottom: 1px solid rgba(242, 185, 92, 0.35); color: var(--text); font-size: 0.9rem; }
+.demo-bar a { font-weight: 700; }

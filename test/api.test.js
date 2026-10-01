@@ -1320,3 +1320,38 @@ test('past shows move to Past and close their contributor links; Riderly removal
   assert.equal((await api('PUT', '/api/v1/events/ext:vmt-2', { ticketsSold: 5 })).status, 400);
   assert.equal((await api('GET', '/api/v1/events/ext:vmt-2')).status, 404, 'reading a deleted show is 404');
 });
+
+test('try the demo: a private sandbox venue, logged in, hidden from the owner, deleted after a few hours', async () => {
+  const { deleteOldDemos } = require('../src/demo');
+  const visitor = client();
+  const r = await visitor.call('POST', '/api/demo');
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const session = (await visitor.call('GET', '/api/session')).data;
+  assert.equal(session.venue.name, 'The Velvet Room');
+  assert.equal(session.venue.demo.managerCode, '1234');
+  const events = (await visitor.call('GET', '/api/events')).data;
+  assert.ok(events.length >= 4, 'tonight and upcoming shows');
+  const tonight = (await visitor.call('GET', `/api/events/${events[0].id}`)).data;
+  assert.ok(tonight.guests.length >= 15);
+  assert.ok(tonight.guests.some((g) => g.lastInBy), 'some guests already checked in');
+  assert.ok(tonight.event.headcount.count > 0, 'door counter running');
+  assert.ok((await visitor.call('GET', '/api/events?view=past')).data.length >= 1, 'a past show with a report');
+
+  // Each visitor gets their own.
+  const other = client();
+  await other.call('POST', '/api/demo');
+  assert.notEqual((await other.call('GET', '/api/session')).data.venue.slug, session.venue.slug);
+  assert.equal((await other.call('GET', `/api/events/${events[0].id}`)).status, 404, 'cannot see another visitor’s demo');
+
+  // Manager code works; venue admin and emailing are off; the owner never sees demos.
+  assert.equal((await visitor.call('POST', '/api/events', { name: 'My test show', date: events[0].date, overridePin: '1234' })).status, 200);
+  assert.equal((await client().call('POST', `/api/vadmin/login/${session.venue.slug}`, { managerCode: '1234', newPassword: 'takeover1' })).status, 403);
+  assert.equal((await visitor.call('POST', `/api/events/${events[0].id}/report/email`)).status, 400);
+  const owned = (await owner.call('GET', '/api/owner/venues')).data.venues;
+  assert.ok(!owned.some((v) => v.slug === session.venue.slug));
+
+  // Cleaned up after the demo window.
+  assert.equal(deleteOldDemos(appDb, Date.now() + 4 * 3600 * 1000), 2);
+  assert.equal((await visitor.call('GET', '/api/events')).status, 401, 'demo gone');
+  assert.equal(appDb.prepare('SELECT COUNT(*) AS n FROM guests g LEFT JOIN events e ON e.id = g.event_id WHERE e.id IS NULL').get().n, 0, 'nothing left behind');
+});

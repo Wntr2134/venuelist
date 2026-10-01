@@ -207,6 +207,7 @@ function migrate(db) {
     ['api_key_hint', 'TEXT'],
     ['api_key_created_at', 'TEXT'],
     ['api_key_last_used_at', 'TEXT'],
+    ['demo', 'INTEGER NOT NULL DEFAULT 0'], // a "Try the demo" sandbox, deleted after a few hours
   ]) {
     if (!vCols.includes(col)) db.exec(`ALTER TABLE venues ADD COLUMN ${col} ${def}`);
   }

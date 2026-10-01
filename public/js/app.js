@@ -21,6 +21,7 @@ async function boot() {
   state.venueSlug = session.venue.slug;
   state.hasManagerPin = session.venue.hasManagerPin;
   state.defaults = session.venue.defaults || {};
+  state.demo = session.venue.demo || null;
   document.title = `${session.venue.name} · Guest List`;
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   await promptDeviceName();
@@ -103,7 +104,15 @@ function setLiveStatus(ok) {
 
 // ---------- chrome ----------
 
-function topbar({ back, title, sub, right } = {}) {
+function topbar(opts = {}) {
+  const bar = topbarOnly(opts);
+  if (!state.demo) return bar;
+  return [bar, h('div', { class: 'demo-bar' },
+    h('span', null, h('b', null, 'Demo'), ' · manager code ', h('b', null, state.demo.managerCode), ` · resets after ${state.demo.hours} hours`),
+    h('a', { href: '/#apply' }, 'Apply for your venue →'))];
+}
+
+function topbarOnly({ back, title, sub, right } = {}) {
   return h('header', { class: 'topbar' },
     h('div', { class: 'topbar-left' },
       back ? h('a', { class: 'icon-btn', href: back, 'aria-label': 'Back' }, '←') : h('span', { class: 'logo' }, '★'),

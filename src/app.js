@@ -9,6 +9,7 @@ const auth = require('./auth');
 const { loadMailConfig, sendMail } = require('./mail');
 const { backupNow, scheduleBackups } = require('./backup');
 const { loadOffsiteConfig, uploadBackup } = require('./offsite');
+const { seedDemo, deleteOldDemos, DEMO_CODE, DEMO_HOURS } = require('./demo');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Door'];
@@ -495,6 +496,7 @@ function createApp(db, options = {}) {
       hasManagerPin: canOverride(v),
       hasAdmin: !!v.admin_password_hash,
       defaults: { capacity: v.default_capacity ?? null, countGuestlist: !!v.default_count_guestlist },
+      ...(v.demo ? { demo: { managerCode: DEMO_CODE, hours: DEMO_HOURS } } : {}),
     };
   }
 
@@ -786,6 +788,22 @@ function createApp(db, options = {}) {
     return { status: 'pending' };
   }
   route('POST', /^\/api\/apply$/, apply, { auth: 'public' });
+
+  // "Try the demo": a private sandbox venue for this visitor, logged straight in.
+  const demoLimiter = auth.createLimiter({ max: 10, windowMs: 60 * 60 * 1000 });
+  const MAX_DEMOS = 150;
+  route('POST', /^\/api\/demo$/, ({ req, res }) => {
+    const ip = clientIp(req);
+    if (demoLimiter.blocked(ip)) throw new HttpError(429, 'You’ve started a lot of demos. Try again in an hour.');
+    deleteOldDemos(db);
+    if (db.prepare('SELECT COUNT(*) AS n FROM venues WHERE demo = 1').get().n >= MAX_DEMOS) {
+      throw new HttpError(503, 'The demo is busy right now. Try again in a few minutes.');
+    }
+    demoLimiter.fail(ip);
+    const v = tx(db, () => seedDemo(db, { hashPassword: auth.hashPassword, venueDay }));
+    res.setHeader('Set-Cookie', auth.venueCookie(db, v, secureCookies));
+    return { ok: true };
+  }, { auth: 'public' });
   route('POST', /^\/api\/signup$/, apply, { auth: 'public' }); // older pages still post here
 
   // "Forgot password?" — emails a reset link to the venue's contact email (the GM/owner).
@@ -966,7 +984,7 @@ function createApp(db, options = {}) {
            (SELECT COUNT(*) FROM events e WHERE e.venue_id = v.id AND e.archived = 0 AND e.date >= date('now', '-1 day')) AS upcoming,
            (SELECT COUNT(*) FROM guests g JOIN events e ON e.id = g.event_id WHERE e.venue_id = v.id) AS guest_count,
            (SELECT MAX(a.at) FROM activity a JOIN events e ON e.id = a.event_id WHERE e.venue_id = v.id) AS last_activity
-         FROM venues v ORDER BY v.name COLLATE NOCASE`
+         FROM venues v WHERE v.demo = 0 ORDER BY v.name COLLATE NOCASE`
       )
       .all();
     const requests = db
@@ -1566,6 +1584,7 @@ function createApp(db, options = {}) {
   route('POST', /^\/api\/events\/(\d+)\/report\/email$/, async ({ venue, req, params }) => {
     actorFrom(req);
     const e = evt(venue, params[0]);
+    if (venue.demo) throw new HttpError(400, 'Emailing reports is switched off in the demo.');
     if (!venue.email) throw new HttpError(400, 'Add a contact email in the venue admin page first.');
     if (!mailConfig()) throw new HttpError(400, 'Email isn’t set up on the server yet.');
     const r = reportFor(e);
@@ -1965,6 +1984,7 @@ function createApp(db, options = {}) {
   route('POST', /^\/api\/vadmin\/login\/([A-Za-z0-9_-]+)$/, ({ req, params, body, res }) => {
     limit(req);
     const v = venueBySlug(params[0]);
+    if (v.demo) throw new HttpError(403, 'Venue admin isn’t part of the demo. Apply for your venue to get your own.');
     let ok;
     if (!v.admin_password_hash) {
       // First time for an older venue: prove you're a manager with an existing code, then choose the admin password.
@@ -2388,11 +2408,14 @@ function createApp(db, options = {}) {
   if (options.purgeTimer !== false) {
     const first = setTimeout(() => purgeExpired(), 30 * 1000);
     const daily = setInterval(() => purgeExpired(), 24 * 3600 * 1000);
+    const demos = setInterval(() => deleteOldDemos(db), 3600 * 1000);
     first.unref();
     daily.unref();
+    demos.unref();
     server.on('close', () => {
       clearTimeout(first);
       clearInterval(daily);
+      clearInterval(demos);
     });
   }
   return server;

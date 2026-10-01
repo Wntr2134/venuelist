@@ -210,6 +210,31 @@
     })();
   }
 
+  // ---------- try the demo ----------
+  // Starts a private sandbox venue for this visitor and opens it.
+  for (const btn of document.querySelectorAll('[data-demo]')) {
+    btn.addEventListener('click', async () => {
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Setting up your demo…';
+      try {
+        const res = await fetch('/api/demo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || 'The demo couldn’t start. Please try again.');
+        try {
+          if (!localStorage.getItem('vl.deviceName')) localStorage.setItem('vl.deviceName', 'You (demo)');
+        } catch {
+          /* ignore */
+        }
+        location.href = '/app#/';
+      } catch (err) {
+        btn.textContent = label;
+        btn.disabled = false;
+        alert(err.message);
+      }
+    });
+  }
+
   // ---------- application form ----------
 
   const form = document.getElementById('signup-form');
