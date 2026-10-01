@@ -18,6 +18,9 @@ jobs:
         with:
           node-version: 22
       - run: npm test
+      # No npm packages today (built-ins only); this fails the run if one with a known
+      # high or critical vulnerability is ever added.
+      - run: npm audit --audit-level=high
 
   deploy:
     needs: test
