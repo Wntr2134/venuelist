@@ -1130,7 +1130,8 @@ test('Back up now saves locally, uploads an encrypted copy, and reports failures
     fs.writeFileSync(cfgFile, JSON.stringify({ ...cfg, endpoint: `http://127.0.0.1:${s3.address().port}` }));
     r = await o.call('POST', '/api/owner/backup-now');
     assert.equal(r.data.offsite.ok, true, JSON.stringify(r.data));
-    assert.equal(puts.length, 1);
+    // One daily copy, plus the monthly one when this runs on the 1st (UTC).
+    assert.equal(puts.length, new Date().getUTCDate() === 1 ? 2 : 1);
     assert.match(puts[0].url, /^\/riderly-backups\/guestlist\/daily-(sun|mon|tue|wed|thu|fri|sat)\.vlb$/);
     const restoredFile = path.join(dir, 'restored.db');
     fs.writeFileSync(restoredFile, decrypt(puts[0].body, cfg.passphrase));
@@ -1263,4 +1264,49 @@ test('Riderly connection: API key, show sync and totals without guest names', as
   assert.equal((await call(otherKey, 'GET', '/api/v1/venue')).status, 200, 'other venues keep syncing');
   const owned = (await owner.call('GET', '/api/owner/venues')).data.venues.find((v) => v.slug === venue.slug);
   assert.equal(owned.riderlyConnected, false);
+});
+
+test('past shows move to Past and close their contributor links; Riderly removals archive and restore', async () => {
+  const { c, admin } = await onboard('Timeline Hall');
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const past = (await c.call('POST', '/api/events', { name: 'Last Week', date: day(-7), overridePin: '2468' })).data;
+  const next = (await c.call('POST', '/api/events', { name: 'Next Week', date: day(7), overridePin: '2468' })).data;
+  const names = (r) => r.data.map((e) => e.name);
+  assert.deepEqual(names(await c.call('GET', '/api/events')), ['Next Week'], 'upcoming only by default');
+  assert.deepEqual(names(await c.call('GET', '/api/events?view=past')), ['Last Week']);
+  assert.deepEqual(names(await c.call('GET', '/api/events?view=all')).sort(), ['Last Week', 'Next Week']);
+  assert.equal((await c.call('GET', `/api/events/${past.id}`)).data.event.over, true);
+  assert.equal((await c.call('GET', `/api/events/${next.id}`)).data.event.over, false);
+
+  // A finished show's contributor link stops taking guests.
+  const tm = (await c.call('POST', `/api/events/${past.id}/contributors`, { name: 'TM' })).data;
+  const late = await client().call('POST', `/api/c/${tm.token}/guests`, { name: 'Too Late' });
+  assert.ok(late.status >= 400, 'locked');
+  assert.match(late.data.error, /finished/);
+
+  // Riderly: removing a show with contributors keeps it (archived), and sending it again restores it.
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const api = (m, p, b) => client().call(m, p, b, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  const made = (await api('PUT', '/api/v1/events/ext:vmt-1', { name: 'Synced Show', date: day(10) })).data.event;
+  await c.call('POST', `/api/events/${made.id}/contributors`, { name: 'Promoter' });
+  assert.deepEqual((await api('DELETE', '/api/v1/events/ext:vmt-1')).data, { deleted: false, archived: true });
+  let ev = (await c.call('GET', `/api/events/${made.id}`)).data.event;
+  assert.equal(ev.archived, true);
+  assert.equal(ev.removedByRiderly, true);
+  assert.ok((await c.call('GET', '/api/events?archived=1')).data.some((e) => e.id === made.id));
+  await api('PUT', '/api/v1/events/ext:vmt-1', { name: 'Synced Show', date: day(10) });
+  ev = (await c.call('GET', `/api/events/${made.id}`)).data.event;
+  assert.equal(ev.archived, false, 'back in the schedule, back in the list');
+  assert.equal(ev.removedByRiderly, false);
+
+  // A show the venue archived itself is not un-archived by a sync.
+  await c.call('PUT', `/api/events/${made.id}`, { archived: true });
+  await api('PUT', '/api/v1/events/ext:vmt-1', { name: 'Synced Show (renamed)', date: day(10) });
+  ev = (await c.call('GET', `/api/events/${made.id}`)).data.event;
+  assert.equal(ev.archived, true);
+  assert.equal(ev.name, 'Synced Show (renamed)');
+
+  // An untouched show is deleted outright.
+  await api('PUT', '/api/v1/events/ext:vmt-2', { name: 'Empty Show', date: day(11) });
+  assert.deepEqual((await api('DELETE', '/api/v1/events/ext:vmt-2')).data, { deleted: true, archived: false });
 });

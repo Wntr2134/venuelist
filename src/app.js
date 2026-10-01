@@ -92,6 +92,8 @@ function eventOut(e) {
     ticketsSold: e.tickets_sold ?? null,
     ticketsScanned: e.tickets_scanned ?? null,
     externalId: e.external_id ?? null,
+    removedByRiderly: !!e.removed_by_riderly,
+    over: showIsOver(e.date),
   };
 }
 
@@ -230,6 +232,15 @@ function log(db, { eventId, guest, action, detail, actor, via }) {
   ).run(eventId, guest ? guest.id : null, guest ? guest.name : null, action, detail || null, actor, via, now());
 }
 
+// The venue's "day": Melbourne date, rolling over at 6am, so tonight's show is still tonight's
+// at 1am. A show is over once the venue day is past its date.
+const VENUE_TZ = process.env.DISPLAY_TZ || 'Australia/Melbourne';
+const venueDayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: VENUE_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+function venueDay(at = Date.now()) {
+  return venueDayFmt.format(new Date(at - 6 * 3600 * 1000));
+}
+const showIsOver = (date, at) => !!date && date < venueDay(at);
+
 function contributorLocked(db, contributor) {
   const e = getEvent(db, contributor.event_id);
   const venue = db.prepare('SELECT active FROM venues WHERE id = ?').get(e.venue_id);
@@ -237,6 +248,7 @@ function contributorLocked(db, contributor) {
   if (e.archived) return 'This event has been archived.';
   if (!contributor.active) return 'This link has been disabled by the venue.';
   if (e.cutoff_at && Date.now() > Date.parse(e.cutoff_at)) return 'The guest list cutoff for this event has passed.';
+  if (showIsOver(e.date)) return 'This show has finished, so its guest list is closed.';
   return null;
 }
 
@@ -1239,8 +1251,13 @@ function createApp(db, options = {}) {
 
   // ----- events -----
 
+  // Lists: upcoming (default: tonight and later), past (finished, not archived), archived, or all.
   route('GET', /^\/api\/events$/, ({ venue, query }) => {
-    const archived = query.get('archived') === '1' ? 1 : 0;
+    const view = query.get('archived') === '1' ? 'archived' : ['past', 'all'].includes(query.get('view')) ? query.get('view') : 'upcoming';
+    const archived = view === 'archived' ? 1 : 0;
+    const today = venueDay();
+    const when = view === 'upcoming' ? 'AND e.date >= ?' : view === 'past' ? 'AND e.date < ?' : '';
+    const desc = view === 'archived' || view === 'past';
     const rows = db
       .prepare(
         `SELECT e.*,
@@ -1248,10 +1265,10 @@ function createApp(db, options = {}) {
            (SELECT COALESCE(SUM(1 + plus_ones), 0) FROM guests g WHERE g.event_id = e.id) AS expected,
            (SELECT COALESCE(SUM(admitted), 0) FROM guests g WHERE g.event_id = e.id) AS admitted,
            (SELECT COUNT(*) FROM contributors c WHERE c.event_id = e.id) AS contributor_count
-         FROM events e WHERE e.venue_id = ? AND e.archived = ?
-         ORDER BY e.date ${archived ? 'DESC' : 'ASC'}, e.id`
+         FROM events e WHERE e.venue_id = ? ${view === 'all' ? '' : 'AND e.archived = ?'} ${when}
+         ORDER BY e.date ${desc ? 'DESC' : 'ASC'}, e.id`
       )
-      .all(venue.id, archived);
+      .all(...[venue.id, ...(view === 'all' ? [] : [archived]), ...(when ? [today] : [])]);
     return rows.map((r) => ({
       ...eventOut(r),
       guestCount: r.guest_count,
@@ -1328,9 +1345,10 @@ function createApp(db, options = {}) {
     }
     db.prepare(
       `UPDATE events SET name = ?, date = ?, doors_time = ?, capacity = ?, cutoff_at = ?, notes = ?, archived = ?,
-         venue_capacity = ?, count_guestlist = ?, tickets_sold = ?, tickets_scanned = ? WHERE id = ?`
+         venue_capacity = ?, count_guestlist = ?, tickets_sold = ?, tickets_scanned = ?,
+         removed_by_riderly = CASE WHEN ? = 0 THEN 0 ELSE removed_by_riderly END WHERE id = ?`
     ).run(next.name, next.date, next.doors_time, next.capacity, next.cutoff_at, next.notes, next.archived,
-      next.venue_capacity, next.count_guestlist, next.tickets_sold, next.tickets_scanned, e.id);
+      next.venue_capacity, next.count_guestlist, next.tickets_sold, next.tickets_scanned, next.archived, e.id);
     if (next.venue_capacity !== e.venue_capacity) {
       publish(e.id, 'count', { headcount: headcountOut(getEvent(db, e.id)), actor });
     }
@@ -2231,6 +2249,13 @@ function createApp(db, options = {}) {
       log(db, { eventId: id, action: 'event.create', detail: 'from Riderly', actor: 'Riderly', via: 'venue' });
       return { created: true, event: apiEventOut(getEvent(db, id)) };
     }
+    // Back in the Riderly schedule after Riderly removed it: restore it (unless this call archives it).
+    if (e.removed_by_riderly && fields.archived === undefined) {
+      db.prepare('UPDATE events SET archived = 0, removed_by_riderly = 0 WHERE id = ?').run(e.id);
+      log(db, { eventId: e.id, action: 'event.unarchive', detail: 'back in the Riderly schedule', actor: 'Riderly', via: 'venue' });
+      e.archived = 0;
+      publish(e.id, 'event');
+    }
     const changed = set.filter(([k, v]) => e[k] !== v);
     if (changed.length) {
       db.prepare(`UPDATE events SET ${changed.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...changed.map(([, v]) => v), e.id);
@@ -2245,13 +2270,15 @@ function createApp(db, options = {}) {
   route('DELETE', /^\/api\/v1\/events\/([^/]+)$/, ({ venue, params }) => {
     const e = apiEvent(venue, params[0]);
     const guests = db.prepare('SELECT COUNT(*) AS n FROM guests WHERE event_id = ?').get(e.id).n;
-    if (guests === 0 && !e.head_in) {
+    const contributors = db.prepare('SELECT COUNT(*) AS n FROM contributors WHERE event_id = ?').get(e.id).n;
+    if (guests === 0 && contributors === 0 && !e.head_in) {
       db.prepare('DELETE FROM events WHERE id = ?').run(e.id);
       publish(e.id, 'deleted');
       return { deleted: true, archived: false };
     }
-    db.prepare('UPDATE events SET archived = 1 WHERE id = ?').run(e.id);
-    log(db, { eventId: e.id, action: 'event.archive', detail: 'from Riderly (show has guests, so kept)', actor: 'Riderly', via: 'venue' });
+    if (e.archived && !e.removed_by_riderly) return { deleted: false, archived: true }; // the venue archived it already
+    db.prepare('UPDATE events SET archived = 1, removed_by_riderly = 1 WHERE id = ?').run(e.id);
+    log(db, { eventId: e.id, action: 'event.archive', detail: 'removed from the Riderly schedule (kept: it has guests or contributor links)', actor: 'Riderly', via: 'venue' });
     publish(e.id, 'event');
     return { deleted: false, archived: true };
   }, { auth: 'api' });

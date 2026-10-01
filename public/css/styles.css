@@ -882,3 +882,6 @@ small { font-size: max(0.8em, 12px); }
 /* Guide: header stays on screen so "Back to guest list" is always one tap away */
 .guide-page .landing-nav { position: sticky; top: 0; z-index: 10; background: rgba(13, 11, 9, 0.92); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
 .guide-body section { scroll-margin-top: 80px; }
+
+/* Event page: finished / removed-by-Riderly notice */
+.show-notice { margin-bottom: 12px; padding: 10px 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--muted); }

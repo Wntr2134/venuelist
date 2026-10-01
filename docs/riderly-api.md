@@ -47,14 +47,16 @@ Returns one `event`.
 Night report totals: `{ event, door, tickets, guestlist, byContributor[], byList[], firstIn, overrideCount }`. `byContributor` includes contributor names (e.g. the artist or promoter) and their numbers.
 
 ### `DELETE /events/<id or ext:…>`
-Cancelled show. If nobody is on the list yet, it's deleted and you get `{deleted:true}`. Otherwise it's archived, so no names are lost, and you get `{archived:true}`.
+The show was cancelled or taken out of your schedule. If nobody has touched it yet (no guests, no contributor links, no door count), it's deleted and you get `{deleted:true}`. Otherwise it's archived, so nothing is lost, and you get `{archived:true}`.
+
+A show archived this way **comes back by itself** the next time you `PUT` it, so sending a show again after an accidental removal restores it. A show the venue archived itself stays archived; your `PUT` still updates its details.
 
 ## The `event` object
 
 ```json
 {
   "id": 12, "externalId": "show-123", "name": "Friday", "date": "2026-10-02", "doorsTime": "19:30",
-  "capacity": 40, "venueCapacity": 300, "archived": false, "countGuestlist": false,
+  "capacity": 40, "venueCapacity": 300, "archived": false, "removedByRiderly": false, "over": false, "countGuestlist": false,
   "ticketsSold": 180, "ticketsScanned": 141,
   "door": { "count": 12, "capacity": 300, "peak": 290, "totalIn": 350, "totalOut": 338 },
   "guestlist": { "entries": 20, "heads": 38, "arrived": 30, "inside": 2, "noShow": 8, "vip": 3 },

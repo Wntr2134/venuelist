@@ -46,8 +46,9 @@ function route() {
     if (parts[0] === 'event' && parts[1]) return renderEvent(Number(parts[1]), parts[2] || 'guests');
     if (parts[0] === 'door' && parts[1]) return renderDoor(Number(parts[1]));
     if (parts[0] === 'settings') return renderSettings();
-    if (parts[0] === 'archive') return renderEvents(true);
-    return renderEvents(false);
+    if (parts[0] === 'archive') return renderEvents('archived');
+    if (parts[0] === 'past') return renderEvents('past');
+    return renderEvents('upcoming');
   } catch (err) {
     handleError(err);
   }
@@ -141,16 +142,22 @@ function toLogin() {
 
 // ---------- events list ----------
 
-async function renderEvents(archived) {
-  const events = await api('GET', `/api/events${archived ? '?archived=1' : ''}`).catch(handleError);
+// The venue's day rolls over at 6am, like the server's: tonight's show is still "tonight" at 1am.
+const venueToday = () => localDate(new Date(Date.now() - 6 * 3600 * 1000));
+
+async function renderEvents(view) {
+  const q = view === 'archived' ? '?archived=1' : view === 'past' ? '?view=past' : '';
+  const events = await api('GET', `/api/events${q}`).catch(handleError);
   if (!events) return;
-  const today = localDate();
+  const today = venueToday();
+  const empty = {
+    upcoming: 'No upcoming shows. Create one, or connect the Riderly venue manager in venue admin so your shows appear here automatically.',
+    past: 'No past shows yet. Shows move here the morning after.',
+    archived: 'No archived shows.',
+  }[view];
+  const tab = (id, label, href) => h('a', { class: view === id ? 'active' : '', href }, label);
 
-  const list = events.length
-    ? h('div', { class: 'event-grid' }, events.map((e) => eventCard(e, today)))
-    : h('div', { class: 'empty' }, archived ? 'No archived events.' : 'No upcoming events yet. Create your first one.');
-
-  put(app, 
+  put(app,
     topbar({
       right: h('a', { class: 'icon-btn', href: '#/settings', title: 'Venue settings', 'aria-label': 'Settings' }, '⚙'),
     }),
@@ -159,13 +166,11 @@ async function renderEvents(archived) {
         h('strong', null, '🔒 No manager codes yet'),
         h('span', null, ' — until your venue admin adds them, staff can go over capacity and guest list limits with just a tap. Open venue admin →')),
       h('div', { class: 'page-head' },
-        h('h1', null, archived ? 'Archived events' : 'Events'),
-        h('div', { class: 'row' },
-          h('a', { class: 'btn', href: archived ? '#/' : '#/archive' }, archived ? 'Upcoming' : 'Archive'),
-          archived ? null : h('button', { class: 'btn btn-primary', onclick: () => eventForm() }, '+ New event')
-        )
+        h('h1', null, 'Events'),
+        view === 'upcoming' ? h('button', { class: 'btn btn-primary', onclick: () => eventForm() }, '+ New event') : null
       ),
-      list
+      h('nav', { class: 'tabs' }, tab('upcoming', 'Upcoming', '#/'), tab('past', 'Past', '#/past'), tab('archived', 'Archived', '#/archive')),
+      events.length ? h('div', { class: 'event-grid' }, events.map((e) => eventCard(e, today))) : h('div', { class: 'empty' }, empty)
     )
   );
 }
@@ -176,6 +181,7 @@ function eventCard(e, today) {
   return h('div', { class: `card event-card${isToday ? ' today' : ''}${past ? ' past' : ''}` },
     h('a', { class: 'event-card-main', href: `#/event/${e.id}` },
       h('div', { class: 'event-date' }, isToday ? h('span', { class: 'badge badge-live' }, 'TONIGHT') : null, fmtDate(e.date), e.doorsTime ? ` · Doors ${e.doorsTime}` : ''),
+      e.removedByRiderly ? h('div', { class: 'small muted' }, 'Removed from the Riderly schedule') : null,
       h('h3', null, e.name),
       h('div', { class: 'event-meta' },
         h('span', null, `${e.expected} on list`),
@@ -241,6 +247,7 @@ async function renderEvent(id, tab) {
   const ui = { search: '', contributor: state.guestFilter && state.guestFilter.eventId === id ? state.guestFilter.contributor : 'all' };
 
   const statsBox = h('div', { class: 'stats event-stats' });
+  const noticeBox = h('div');
   const tabBody = h('div', { class: 'tab-body' });
   const tabs = ['guests', 'contributors', 'report', 'activity', 'settings'];
   const tabLabels = { guests: 'Guest list', contributors: 'Contributors', report: 'Report', activity: 'Activity', settings: 'Event settings' };
@@ -263,12 +270,16 @@ async function renderEvent(id, tab) {
     const e = data.event;
     put(header, 
       topbar({
-        back: e.archived ? '#/archive' : '#/',
+        back: e.archived ? '#/archive' : e.over ? '#/past' : '#/',
         title: e.name,
         sub: `${fmtDate(e.date)}${e.doorsTime ? ` · Doors ${e.doorsTime}` : ''}`,
         right: h('span', { id: 'live-dot', class: 'live-dot', title: 'Live' }),
       })
     );
+    const notice = e.removedByRiderly
+      ? 'Taken out of the Riderly schedule, so it’s archived here. Everything is kept, and it comes back if the show goes back in the schedule.'
+      : e.over && !e.archived ? 'This show has finished. Contributor links are closed; you can still edit the list and the report.' : null;
+    put(noticeBox, notice ? h('p', { class: 'show-notice' }, notice) : null);
     put(statsBox, statTiles(data.stats, e));
     const active = document.activeElement;
     const keepFocus = active && active.dataset && active.dataset.keep;
@@ -481,6 +492,7 @@ async function renderEvent(id, tab) {
   put(app, 
     header,
     h('main', { class: 'page' },
+      noticeBox,
       statsBox,
       h('nav', { class: 'tabs' }, tabs.map((t) => h('a', { href: `#/event/${id}/${t}`, class: t === tab ? 'active' : '' }, tabLabels[t]))),
       tabBody
@@ -696,8 +708,7 @@ function contributorForm(data, c, onDone) {
 async function copyContributors(data, onDone) {
   let events;
   try {
-    const [live, archived] = await Promise.all([api('GET', '/api/events'), api('GET', '/api/events?archived=1')]);
-    events = [...live, ...archived].filter((e) => e.id !== data.event.id && e.contributorCount > 0)
+    events = (await api('GET', '/api/events?view=all')).filter((e) => e.id !== data.event.id && e.contributorCount > 0)
       .sort((a, b) => b.date.localeCompare(a.date));
   } catch (err) {
     return handleError(err);

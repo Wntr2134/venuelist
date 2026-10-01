@@ -187,6 +187,8 @@ function migrate(db) {
     ['tickets_scanned', 'INTEGER'],
     // The show's ID in the Riderly venue manager, so it can update the same show again.
     ['external_id', 'TEXT'],
+    // 1 = archived because Riderly took the show out of its schedule; it comes back if the show does.
+    ['removed_by_riderly', 'INTEGER NOT NULL DEFAULT 0'],
   ]) {
     if (!evCols.includes(col)) db.exec(`ALTER TABLE events ADD COLUMN ${col} ${def}`);
   }
