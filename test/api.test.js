@@ -1309,4 +1309,14 @@ test('past shows move to Past and close their contributor links; Riderly removal
   // An untouched show is deleted outright.
   await api('PUT', '/api/v1/events/ext:vmt-2', { name: 'Empty Show', date: day(11) });
   assert.deepEqual((await api('DELETE', '/api/v1/events/ext:vmt-2')).data, { deleted: true, archived: false });
+  // Sent again after a true delete: created fresh (the same external id is free again), never a 404.
+  const again = await api('PUT', '/api/v1/events/ext:vmt-2', { name: 'Empty Show', date: day(11) });
+  assert.equal(again.status, 200);
+  assert.equal(again.data.created, true);
+  assert.equal(again.data.event.externalId, 'vmt-2');
+  assert.equal(again.data.event.archived, false);
+  // ...but only with a name and date, like any new show; a partial update gets 400, not 404.
+  await api('DELETE', '/api/v1/events/ext:vmt-2');
+  assert.equal((await api('PUT', '/api/v1/events/ext:vmt-2', { ticketsSold: 5 })).status, 400);
+  assert.equal((await api('GET', '/api/v1/events/ext:vmt-2')).status, 404, 'reading a deleted show is 404');
 });

@@ -49,6 +49,8 @@ Night report totals: `{ event, door, tickets, guestlist, byContributor[], byList
 ### `DELETE /events/<id or ext:…>`
 The show was cancelled or taken out of your schedule. If nobody has touched it yet (no guests, no contributor links, no door count), it's deleted and you get `{deleted:true}`. Otherwise it's archived, so nothing is lost, and you get `{archived:true}`.
 
+If the show was truly deleted, a later `PUT` to the same `ext:` id **creates it fresh** (`created: true`); it's never a 404. As with any new show, that `PUT` must include `name` and `date`, or you get 400. A `GET` of a deleted show is 404.
+
 A show archived this way **comes back by itself** the next time you `PUT` it, so sending a show again after an accidental removal restores it. A show the venue archived itself stays archived; your `PUT` still updates its details.
 
 ## The `event` object
