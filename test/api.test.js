@@ -1369,7 +1369,11 @@ test('one-click sign-in from Riderly: single use, a minute long, staff only, lan
 
   const open = await fetch(base + path, { redirect: 'manual' });
   assert.equal(open.status, 302);
-  assert.equal(open.headers.get('location'), `/app?as=${encodeURIComponent('Sam (Riderly)')}#/door/${show.id}`);
+  assert.equal(open.headers.get('location'), `/app#/door/${show.id}`, 'clean address: no token, no name');
+  assert.equal(open.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(open.headers.get('cache-control'), 'no-store');
+  const as = open.headers.getSetCookie().find((x) => x.startsWith('vl_as='));
+  assert.match(as, /^vl_as=Sam%20\(Riderly\); Path=\/app; Max-Age=60/, 'the name rides in a one-minute cookie');
   const cookie = open.headers.getSetCookie().find((x) => x.startsWith('vl_session=')).split(';')[0];
   const events = await fetch(`${base}/api/events`, { headers: { Cookie: cookie } });
   assert.equal(events.status, 200, 'logged in as staff');
@@ -1378,6 +1382,13 @@ test('one-click sign-in from Riderly: single use, a minute long, staff only, lan
 
   const again = await fetch(base + path, { redirect: 'manual' });
   assert.equal(again.headers.get('location'), '/login?expired=1', 'single use');
+  assert.equal(again.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(again.headers.getSetCookie().length, 0, 'no session from a used link');
+
+  // Two taps at the same moment: exactly one gets in.
+  const race = new URL((await api('POST', '/api/v1/sso', { show: 'ext:click-1' })).data.url).pathname;
+  const both = await Promise.all([fetch(base + race, { redirect: 'manual' }), fetch(base + race, { redirect: 'manual' })]);
+  assert.equal(both.filter((x) => x.headers.getSetCookie().some((c) => c.startsWith('vl_session='))).length, 1);
   assert.equal((await api('POST', '/api/v1/sso', { show: 'ext:nope' })).status, 404);
   const plain = await api('POST', '/api/v1/sso', {});
   const home = await fetch(base + new URL(plain.data.url).pathname, { redirect: 'manual' });

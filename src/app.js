@@ -2584,21 +2584,23 @@ function createApp(db, options = {}) {
     return { connected: false };
   }, { auth: 'vadmin' });
 
+  // Opening a one-click link: the token is claimed and deleted in one statement (so it can't
+  // be used twice, even by two taps at once), then the browser is sent to a clean address with
+  // no token or name in it. The name rides in a one-minute cookie the app reads and clears, and
+  // no-referrer means the /sso address never leaks to another site.
   function openSso(req, res, token) {
-    const row = db.prepare('SELECT * FROM sso_tokens WHERE token_hash = ?').get(sha256(token));
-    if (row) db.prepare('DELETE FROM sso_tokens WHERE token_hash = ?').run(row.token_hash); // single use
+    const row = db.prepare('DELETE FROM sso_tokens WHERE token_hash = ? RETURNING *').get(sha256(token));
     const v = row && Date.parse(row.expires_at) > Date.now() ? db.prepare('SELECT * FROM venues WHERE id = ?').get(row.venue_id) : null;
+    const headers = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' };
     if (!v || !v.active || !v.password_hash) {
-      res.writeHead(302, { Location: '/login?expired=1', 'Cache-Control': 'no-store' });
+      res.writeHead(302, { ...headers, Location: '/login?expired=1' });
       return res.end();
     }
-    const q = row.actor ? `?as=${encodeURIComponent(row.actor)}` : '';
-    res.writeHead(302, {
-      'Set-Cookie': auth.venueCookie(db, v, secureCookies),
-      Location: `/app${q}${row.target}`,
-      'Cache-Control': 'no-store',
-      'Referrer-Policy': 'no-referrer',
-    });
+    const cookies = [auth.venueCookie(db, v, secureCookies)];
+    if (row.actor) {
+      cookies.push(`vl_as=${encodeURIComponent(row.actor)}; Path=/app; Max-Age=60; SameSite=Lax${secureCookies ? '; Secure' : ''}`);
+    }
+    res.writeHead(302, { ...headers, 'Set-Cookie': cookies, Location: `/app${row.target}` });
     res.end();
   }
 

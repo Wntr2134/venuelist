@@ -58,6 +58,8 @@ Body: `{ "show": "ext:<id>" | <id> (optional), "view": "guests" | "door" | "repo
 
 Returns `{ url, expiresIn: 60 }`. Send the person's browser to `url` within 60 seconds. It works **once**, logs that browser in as **venue staff** (never venue admin), names the device after `name` so everything they do is logged under it, and opens the show (door mode for `view: "door"`). With no `show`, it opens the events list. An expired or used link goes to the login page with a note.
 
+Opening the link claims and deletes the token in one step (two taps at once can't both get in), then redirects to a clean address (`/app#/door/<id>`, with no token or name in it) with `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. The link never stays in the address bar or browser history, and never leaks in a Referer. The name is passed in a one-minute cookie that the app reads once and clears.
+
 Make the link only when the person clicks (e.g. an "Open guest list" button that calls your server, then redirects). Don't put it in emails or pages ahead of time.
 
 ## The `event` object
