@@ -10,6 +10,7 @@ const { loadMailConfig, sendMail } = require('./mail');
 const { backupNow, scheduleBackups } = require('./backup');
 const { loadOffsiteConfig, uploadBackup } = require('./offsite');
 const { seedDemo, deleteOldDemos, DEMO_CODE, DEMO_HOURS } = require('./demo');
+const { findMatch } = require('./banned');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Door'];
@@ -1340,7 +1341,7 @@ function createApp(db, options = {}) {
       .prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY name COLLATE NOCASE')
       .all(e.id)
       .map(contributorOut);
-    const guests = listGuests(db, e.id);
+    const guests = flagBanned(venue, listGuests(db, e.id));
     for (const c of contributors) {
       const mine = guests.filter((g) => g.contributorId === c.id);
       c.stats = stats(mine);
@@ -1796,7 +1797,7 @@ function createApp(db, options = {}) {
       return g;
     });
     publish(e.id, 'guests', { actor, guestId: g.id });
-    return guestOut(g);
+    return flagBanned(venue, [guestOut(g)])[0];
   });
 
   route('POST', /^\/api\/events\/(\d+)\/guests\/import$/, ({ venue, req, params, body }) => {
@@ -2088,6 +2089,90 @@ function createApp(db, options = {}) {
     return { id: c.id, name: c.name, active: !!c.active, createdAt: c.created_at, lastUsedAt: c.last_used_at };
   }
 
+  // ----- banned (refused entry) list -----
+  // Only the venue admin sees the list. Staff only ever see a warning on a guest whose name
+  // matches it (with the venue's reason), and contributors never see anything.
+
+  const BAN_REVIEW_MONTHS = 12;
+  const BAN_GRACE_DAYS = 30;
+  const banActor = (req) => {
+    try {
+      return actorFrom(req);
+    } catch {
+      return 'Venue admin';
+    }
+  };
+  const banLog = (venueId, action, detail, actor) => db.prepare(
+    'INSERT INTO banned_log (venue_id, action, detail, actor, at) VALUES (?, ?, ?, ?, ?)'
+  ).run(venueId, action, detail || null, actor, now());
+  const reviewDefault = () => {
+    const d = new Date(`${venueDay()}T00:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() + BAN_REVIEW_MONTHS);
+    return d.toISOString().slice(0, 10);
+  };
+  const banOut = (b) => ({ id: b.id, name: b.name, reason: b.reason, reviewAt: b.review_at, reviewDue: b.review_at <= venueDay(), createdAt: b.created_at, createdBy: b.created_by });
+
+  function flagBanned(venue, guests) {
+    const bans = db.prepare('SELECT * FROM banned WHERE venue_id = ?').all(venue.id);
+    if (!bans.length) return guests;
+    for (const g of guests) {
+      const m = findMatch(bans, g.name);
+      if (m) g.banned = { reason: m.reason || null };
+    }
+    return guests;
+  }
+
+  // The door checks a walk-up's name before letting them in. Yes/no and the reason, never the list.
+  route('GET', /^\/api\/banned\/check$/, ({ venue, query }) => {
+    const name = str(query.get('name'), 'Name', { required: true, max: 120 });
+    const m = findMatch(db.prepare('SELECT * FROM banned WHERE venue_id = ?').all(venue.id), name);
+    return m ? { match: true, reason: m.reason || null } : { match: false };
+  });
+
+  route('GET', /^\/api\/vadmin\/banned$/, ({ venue, req }) => {
+    banLog(venue.id, 'viewed', null, banActor(req));
+    return {
+      entries: db.prepare('SELECT * FROM banned WHERE venue_id = ? ORDER BY name COLLATE NOCASE').all(venue.id).map(banOut),
+      log: db.prepare('SELECT action, detail, actor, at FROM banned_log WHERE venue_id = ? ORDER BY id DESC LIMIT 40').all(venue.id),
+      reviewMonths: BAN_REVIEW_MONTHS,
+      graceDays: BAN_GRACE_DAYS,
+    };
+  }, { auth: 'vadmin' });
+
+  route('POST', /^\/api\/vadmin\/banned$/, ({ venue, req, body }) => {
+    const actor = banActor(req);
+    const name = str(body.name, 'Name', { required: true, max: 120 });
+    if (name.split(/\s+/).filter(Boolean).length < 2 && !body.singleName) {
+      throw new HttpError(400, 'Use their first name and surname, so the warning doesn’t fire for everyone with that first name.');
+    }
+    const t = now();
+    const info = db.prepare('INSERT INTO banned (venue_id, name, reason, review_at, created_at, created_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(venue.id, name, str(body.reason, 'Reason', { max: 200 }) || null, body.reviewAt ? dateStr(body.reviewAt) : reviewDefault(), t, actor, t);
+    banLog(venue.id, 'added', name, actor);
+    return banOut(db.prepare('SELECT * FROM banned WHERE id = ?').get(Number(info.lastInsertRowid)));
+  }, { auth: 'vadmin' });
+
+  route('PUT', /^\/api\/vadmin\/banned\/(\d+)$/, ({ venue, req, params, body }) => {
+    const b = db.prepare('SELECT * FROM banned WHERE id = ? AND venue_id = ?').get(params[0], venue.id);
+    if (!b) throw new HttpError(404, 'Not found');
+    const actor = banActor(req);
+    const next = {
+      reason: body.reason !== undefined ? str(body.reason, 'Reason', { max: 200 }) || null : b.reason,
+      review_at: body.renew ? reviewDefault() : body.reviewAt ? dateStr(body.reviewAt) : b.review_at,
+    };
+    db.prepare('UPDATE banned SET reason = ?, review_at = ?, updated_at = ? WHERE id = ?').run(next.reason, next.review_at, now(), b.id);
+    banLog(venue.id, body.renew ? 'renewed' : 'edited', b.name, actor);
+    return banOut(db.prepare('SELECT * FROM banned WHERE id = ?').get(b.id));
+  }, { auth: 'vadmin' });
+
+  route('DELETE', /^\/api\/vadmin\/banned\/(\d+)$/, ({ venue, req, params }) => {
+    const b = db.prepare('SELECT * FROM banned WHERE id = ? AND venue_id = ?').get(params[0], venue.id);
+    if (!b) throw new HttpError(404, 'Not found');
+    db.prepare('DELETE FROM banned WHERE id = ?').run(b.id);
+    banLog(venue.id, 'removed', b.name, banActor(req));
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
   route('GET', /^\/api\/vadmin\/overview$/, ({ venue }) => {
     const codes = db.prepare('SELECT * FROM manager_codes WHERE venue_id = ? ORDER BY active DESC, name COLLATE NOCASE').all(venue.id).map(codeOut);
     const overrides = db
@@ -2230,6 +2315,12 @@ function createApp(db, options = {}) {
 
   function purgeExpired(at = new Date()) {
     billingReminder(at.getTime());
+    // Banned entries lapse a month after their review date unless the venue admin renewed them.
+    const lapse = new Date(Date.parse(`${venueDay(at.getTime())}T00:00:00Z`) - BAN_GRACE_DAYS * 86400000).toISOString().slice(0, 10);
+    for (const b of db.prepare('SELECT * FROM banned WHERE review_at < ?').all(lapse)) {
+      db.prepare('DELETE FROM banned WHERE id = ?').run(b.id);
+      banLog(b.venue_id, 'lapsed', `${b.name} (not renewed after review)`, 'Riderly');
+    }
     let purged = 0;
     db.prepare('DELETE FROM applied_ops WHERE created_at < ?').run(new Date(at.getTime() - 7 * 86400000).toISOString());
     const venues = db.prepare('SELECT id, retention_days FROM venues WHERE retention_days IS NOT NULL').all();

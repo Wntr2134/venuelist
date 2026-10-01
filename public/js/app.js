@@ -358,7 +358,8 @@ async function renderEvent(id, tab) {
             h('tr', { class: g.vip ? 'vip-row' : '' },
               h('td', null,
                 h('div', { class: 'guest-name' }, g.vip ? h('span', { class: 'badge badge-vip' }, 'VIP') : null, g.name, g.plusOnes ? h('span', { class: 'plus' }, `+${g.plusOnes}`) : null),
-                g.notes ? h('div', { class: 'muted small' }, g.notes) : null
+                g.notes ? h('div', { class: 'muted small' }, g.notes) : null,
+                bannedFlag(g)
               ),
               h('td', null, h('span', { class: `badge badge-type t-${g.listType.toLowerCase()}` }, g.listType), h('div', { class: 'muted small' }, g.contributorName || 'Venue')),
               h('td', { class: 'small' }, h('span', { class: 'cell-label' }, 'Added by '), g.addedBy, h('div', { class: 'muted' }, fmtDateTime(g.createdAt))),
@@ -530,6 +531,21 @@ function statTiles(s, e) {
   ];
 }
 
+// A guest whose name matches the venue's banned list: staff see the warning and the reason,
+// never the list itself.
+function bannedFlag(g) {
+  if (!g.banned) return null;
+  return h('div', { class: 'banned-flag' }, h('strong', null, '⚠ Banned list'), g.banned.reason ? ` · ${g.banned.reason}` : '', ' · get a manager');
+}
+
+function bannedAlert(name, reason) {
+  const m = modal('⚠ Matches your banned list', h('div', { class: 'stack' },
+    h('p', null, h('strong', null, name), ' matches a name on your venue’s banned list.'),
+    reason ? h('p', { class: 'banned-flag' }, `Reason: ${reason}`) : null,
+    h('p', { class: 'muted' }, 'Get a manager before letting them in. It may be someone else with the same name.')
+  ), { actions: [h('button', { class: 'btn btn-primary', onclick: () => m.close() }, 'OK')] });
+}
+
 function doorStatus(g) {
   const by = g.admitted > 0 && g.lastInBy ? h('div', { class: 'small muted checked-by' }, `In by ${g.lastInBy}${g.lastInAt ? ` · ${fmtTime(g.lastInAt)}` : ''}`) : null;
   if (g.inside > 0) return [h('span', { class: 'status status-in' }, `${g.inside}/${g.party} in`), by];
@@ -615,7 +631,8 @@ function guestForm(data, g, onDone, { atDoor = false } = {}) {
         : api('POST', `/api/events/${data.event.id}/guests`, { ...body, ...extra }));
       if (!saved) return;
       m.close();
-      toast(editing ? 'Guest saved' : `${body.name} added`, 'ok');
+      if (saved.banned) bannedAlert(saved.name, saved.banned.reason);
+      else toast(editing ? 'Guest saved' : `${body.name} added`, 'ok');
       onDone();
     } catch (err) {
       handleError(err);
@@ -1089,6 +1106,23 @@ async function renderDoor(id) {
     drawList();
   }
 
+  // Not on the list: is the name they gave on the banned list? (Full names only, after a pause.)
+  const banWarn = h('div');
+  let banTimer = null;
+  function checkWalkUp(name) {
+    clearTimeout(banTimer);
+    put(banWarn, null);
+    if (name.split(/\s+/).filter(Boolean).length < 2) return;
+    banTimer = setTimeout(async () => {
+      try {
+        const r = await api('GET', `/api/banned/check?name=${encodeURIComponent(name)}`);
+        if (r.match && ui.search.trim() === name) put(banWarn, h('p', { class: 'banned-flag' }, h('strong', null, '⚠ Matches your banned list'), r.reason ? ` · ${r.reason}` : '', '. Get a manager.'));
+      } catch {
+        /* offline: the check happens again when they're added */
+      }
+    }, 400);
+  }
+
   function drawList() {
     if (!data) return;
     const q = ui.search.trim();
@@ -1108,13 +1142,14 @@ async function renderDoor(id) {
     put(list, 
       rows.length
         ? rows.slice(0, 300).map(doorRow)
-        : h('div', { class: 'empty' }, ui.search ? h('div', null, `No one called “${ui.search}”.`, h('div', null, h('button', { class: 'btn btn-primary', onclick: () => walkUp(ui.search) }, `+ Add “${ui.search}” as walk-up`))) : 'No guests here.')
+        : h('div', { class: 'empty' }, ui.search ? h('div', null, `No one called “${ui.search}”.`, banWarn, h('div', null, h('button', { class: 'btn btn-primary', onclick: () => walkUp(ui.search) }, `+ Add “${ui.search}” as walk-up`))) : 'No guests here.')
     );
+    if (!rows.length) checkWalkUp(ui.search.trim());
   }
 
   function doorRow(g) {
     const allIn = g.inside >= g.party;
-    return h('div', { class: `door-row${g.vip ? ' vip' : ''}${g.inside ? ' is-in' : ''}${g.admitted && !g.inside ? ' has-left' : ''}` },
+    return h('div', { class: `door-row${g.vip ? ' vip' : ''}${g.banned ? ' banned' : ''}${g.inside ? ' is-in' : ''}${g.admitted && !g.inside ? ' has-left' : ''}` },
       h('div', { class: 'door-info' },
         h('div', { class: 'door-name' },
           g.vip ? h('span', { class: 'badge badge-vip' }, '★ VIP') : null,
@@ -1127,7 +1162,8 @@ async function renderDoor(id) {
           g.inside ? h('span', { class: 'status status-in' }, `${g.inside}/${g.party} in`) : g.admitted ? h('span', { class: 'status status-out' }, `Left ${fmtTime(g.lastMoveAt)}`) : null,
           g.admitted && g.lastInBy ? h('span', { class: 'small muted checked-by' }, ` · in by ${g.lastInBy}`) : null
         ),
-        g.notes ? h('div', { class: 'door-note' }, g.notes) : null
+        g.notes ? h('div', { class: 'door-note' }, g.notes) : null,
+        bannedFlag(g)
       ),
       h('div', { class: 'door-actions' },
         h('button', { class: 'btn btn-out', disabled: g.inside === 0, onclick: () => doMove(g, 'out') }, 'OUT'),
@@ -1139,6 +1175,12 @@ async function renderDoor(id) {
   async function doMove(g, dir) {
     const room = dir === 'in' ? g.party - g.inside : g.inside;
     if (room <= 0) return;
+    if (dir === 'in' && g.banned && !g.admitted) {
+      const ok = await confirmDialog('⚠ Matches your banned list',
+        `${g.name} matches a name on your banned list${g.banned.reason ? ` (${g.banned.reason})` : ''}. Only let them in once a manager has checked.`,
+        { confirmText: 'Manager checked, let in', danger: true });
+      if (!ok) return;
+    }
     let count = room;
     if (room > 1) {
       count = await pickCount(g, dir, room);

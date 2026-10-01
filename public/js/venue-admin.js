@@ -127,6 +127,7 @@ async function dashboard() {
     staffCard(data),
     venueCard(data),
     privacyCard(data),
+    bannedCard(),
     riderlyCard(data),
     overridesCard(data),
     adminPasswordCard()
@@ -334,6 +335,76 @@ function privacyCard(data) {
     h('p', { class: 'muted' }, 'Guest names and notes are personal information. Choose when they’re removed automatically — head counts, check-in numbers and reports are kept.'),
     field('Remove guest names and notes', sel)
   );
+}
+
+// ---------- banned (refused entry) list ----------
+// Closed until someone taps Open, because every look is logged. Staff never see this list:
+// they get a warning on a guest whose name matches it.
+
+function bannedCard() {
+  const body = h('div', { class: 'stack' });
+  const intro = h('p', { class: 'muted' }, 'People your venue has refused entry. When someone on a guest list, or a walk-up, matches a name here, door staff see a warning and your reason. They never see the list. Every look and change is logged below. Each name needs a review every 12 months and drops off a month after that unless you renew it.');
+  const open = h('button', { class: 'btn', onclick: () => load() }, 'Open banned list');
+  put(body, intro, open);
+
+  async function load() {
+    let r;
+    try {
+      r = await api('GET', '/api/vadmin/banned');
+    } catch (err) {
+      return toast(err.message, 'error');
+    }
+    const form = h('form', { class: 'stack' },
+      h('div', { class: 'grid-2' },
+        field('Full name', h('input', { name: 'name', required: true, maxlength: '120', placeholder: 'First name and surname' })),
+        field('Reason (staff see this)', h('input', { name: 'reason', maxlength: '200', placeholder: 'e.g. Violence, Feb 2026' }))
+      ),
+      h('button', { class: 'btn btn-primary', type: 'submit' }, 'Add to banned list')
+    );
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      try {
+        await api('POST', '/api/vadmin/banned', formData(form));
+        toast('Added', 'ok');
+        load();
+      } catch (err) {
+        toast(err.message, 'error', 6000);
+      }
+    });
+    const act = async (method, b, body, msg) => {
+      try {
+        await api(method, `/api/vadmin/banned/${b.id}`, body);
+        toast(msg, 'ok');
+        load();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+    const rows = r.entries.map((b) => h('li', { class: 'ban-row' },
+      h('div', null,
+        h('strong', null, b.name), b.reason ? h('span', { class: 'muted' }, ` · ${b.reason}`) : null,
+        h('div', { class: 'small muted' }, `Added by ${b.createdBy} · review by ${fmtDate(b.reviewAt)}`, b.reviewDue ? h('span', { class: 'badge badge-warn' }, ' Review due') : null)
+      ),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn btn-small', onclick: () => act('PUT', b, { renew: true }, 'Renewed for 12 months') }, 'Renew'),
+        h('button', { class: 'btn btn-small btn-ghost-danger', onclick: async () => {
+          if (await confirmDialog('Remove from banned list?', `${b.name} will no longer trigger a warning at the door.`, { confirmText: 'Remove', danger: true })) act('DELETE', b, undefined, 'Removed');
+        } }, 'Remove')
+      )
+    ));
+    put(body,
+      intro,
+      form,
+      rows.length ? h('ul', { class: 'ban-list' }, rows) : h('div', { class: 'empty' }, 'No one on the list.'),
+      h('details', null, h('summary', null, 'Access log'),
+        h('ul', { class: 'activity' }, r.log.map((l) => h('li', null,
+          h('span', { class: 'time' }, fmtDateTime(l.at)), h('span', { class: 'who' }, l.actor), h('span', { class: 'what' }, `${l.action}${l.detail ? `: ${l.detail}` : ''}`))))),
+      h('button', { class: 'btn', onclick: () => put(body, intro, open) }, 'Close list')
+    );
+  }
+
+  return h('div', { class: 'card stack' }, h('h2', null, '🚫 Banned list'), body);
 }
 
 // ---------- Riderly connection ----------

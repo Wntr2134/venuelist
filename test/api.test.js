@@ -1434,3 +1434,40 @@ test('billing: plan, price and paid-until per venue; overdue flagged; one mornin
   v = (await owner.call('GET', '/api/owner/venues')).data.venues.find((x) => x.id === id);
   assert.equal(v.billing.overdue, false);
 });
+
+test('banned list: venue admin only, staff see a warning on matches, contributors see nothing, entries lapse', async () => {
+  const { c, admin } = await onboard('Ban Hall');
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  assert.equal((await admin.call('POST', '/api/vadmin/banned', { name: 'Jake' })).status, 400, 'full names only');
+  const add = await admin.call('POST', '/api/vadmin/banned', { name: 'Jake Smith', reason: 'Violence, Feb 2026' });
+  assert.equal(add.status, 200);
+  assert.equal((await c.call('GET', '/api/vadmin/banned')).status, 401, 'staff cannot see the list');
+  assert.equal((await c.call('POST', '/api/vadmin/banned', { name: 'Some One' })).status, 401);
+
+  const ev = (await c.call('POST', '/api/events', { name: 'Ban Night', date: day(2), overridePin: '2468' })).data;
+  const tm = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'TM' })).data;
+  const viaLink = await client().call('POST', `/api/c/${tm.token}/guests`, { name: 'Jake Smyth' });
+  assert.equal(viaLink.status, 200);
+  assert.ok(!JSON.stringify(viaLink.data).match(/banned|Violence/i), 'the contributor gets no hint');
+  await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Jake Brown' });
+  const direct = await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'jake smith' });
+  assert.equal(direct.data.banned.reason, 'Violence, Feb 2026', 'staff are warned when adding');
+
+  const list = (await c.call('GET', `/api/events/${ev.id}`)).data.guests;
+  assert.equal(list.find((g) => g.name === 'Jake Smyth').banned.reason, 'Violence, Feb 2026');
+  assert.equal(list.find((g) => g.name === 'Jake Brown').banned, undefined);
+  assert.deepEqual((await c.call('GET', '/api/banned/check?name=Jake%20Smith')).data, { match: true, reason: 'Violence, Feb 2026' });
+  assert.deepEqual((await c.call('GET', '/api/banned/check?name=Jake%20Jones')).data, { match: false });
+  const csv = await c.call('GET', `/api/events/${ev.id}/export.csv`);
+  assert.ok(!/Violence/.test(csv.data), 'not in the export');
+
+  // Every look and change is logged; entries lapse a month after review unless renewed.
+  const view = (await admin.call('GET', '/api/vadmin/banned')).data;
+  assert.ok(view.log.some((l) => l.action === 'added') && view.log.some((l) => l.action === 'viewed'));
+  appDb.prepare('UPDATE banned SET review_at = ? WHERE id = ?').run(day(-40), add.data.id);
+  server.purgeExpired(new Date());
+  const after = (await admin.call('GET', '/api/vadmin/banned')).data;
+  assert.equal(after.entries.length, 0);
+  assert.ok(after.log.some((l) => l.action === 'lapsed'));
+  assert.equal((await c.call('GET', `/api/events/${ev.id}`)).data.guests.find((g) => g.name === 'Jake Smyth').banned, undefined);
+});

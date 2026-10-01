@@ -91,6 +91,29 @@ CREATE TABLE IF NOT EXISTS activity (
 CREATE INDEX IF NOT EXISTS idx_activity_event ON activity(event_id, id);
 CREATE INDEX IF NOT EXISTS idx_activity_guest ON activity(guest_id, action, id);
 
+-- A venue's refused-entry list. Only the venue admin sees it; staff see a warning on a matching
+-- guest. Every view and change is logged in banned_log. Entries lapse 30 days after review_at.
+CREATE TABLE IF NOT EXISTS banned (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  reason      TEXT,
+  review_at   TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  created_by  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_banned_venue ON banned(venue_id);
+CREATE TABLE IF NOT EXISTS banned_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  action      TEXT NOT NULL,
+  detail      TEXT,
+  actor       TEXT NOT NULL,
+  at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_banned_log_venue ON banned_log(venue_id, id);
+
 -- One-click sign-in links from the Riderly venue manager: single use, a minute long.
 CREATE TABLE IF NOT EXISTS sso_tokens (
   token_hash  TEXT PRIMARY KEY,

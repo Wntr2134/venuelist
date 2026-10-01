@@ -929,3 +929,11 @@ small { font-size: max(0.8em, 12px); }
 .screen-stats span { color: var(--muted); font-size: clamp(0.8rem, 1.6vw, 1.1rem); text-transform: uppercase; letter-spacing: 0.06em; }
 @media (orientation: landscape) and (max-height: 500px) { .screen-count b { font-size: 38vh; } .screen-stats { margin-top: 0; } }
 .billing-box.overdue { border-color: rgba(255, 107, 87, 0.5); }
+
+/* Banned list warning (staff see the flag and reason, never the list) */
+.banned-flag { margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: rgba(255, 77, 94, 0.14); border: 1px solid rgba(255, 77, 94, 0.5); color: #ffc2c8; font-size: 0.9rem; }
+.banned-flag strong { color: #ff8a95; }
+.door-row.banned { border-color: rgba(255, 77, 94, 0.6); border-left: 3px solid var(--danger); }
+.ban-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); }
+.ban-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ban-row:last-child { border-bottom: none; }
