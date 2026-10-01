@@ -45,6 +45,9 @@ function draw() {
   const pw = h('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' });
   const form = h('form', { class: 'card narrow stack' },
     h('a', { class: 'brand', href: '/' }, h('span', { class: 'logo big' }, '★'), h('h1', null, 'Guest List')),
+    new URLSearchParams(location.search).get('expired')
+      ? h('p', { class: 'notice' }, 'That link from Riderly has expired or was already used. Open it again from Riderly, or log in here.')
+      : null,
     h('p', { class: 'muted' }, 'Log in with your venue’s username and password.'),
     fromLink
       ? h('div', { class: 'venue-pill' }, h('span', { class: 'muted small' }, 'Username'), h('strong', null, fromLink),

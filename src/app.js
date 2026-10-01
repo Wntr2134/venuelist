@@ -2318,6 +2318,24 @@ function createApp(db, options = {}) {
     };
   }, { auth: 'api' });
 
+  // One-click sign-in: Riderly asks for a link for one of its staff; opening it logs that
+  // browser in as venue staff (never venue admin) and lands on the show, named.
+  route('POST', /^\/api\/v1\/sso$/, ({ venue, body }) => {
+    const views = { guests: 'guests', door: 'door', report: 'report', contributors: 'contributors' };
+    const view = views[body.view] || 'guests';
+    let target = '#/';
+    if (body.show !== undefined && body.show !== null && body.show !== '') {
+      const e = apiEvent(venue, String(body.show));
+      target = view === 'door' ? `#/door/${e.id}` : `#/event/${e.id}/${view}`;
+    }
+    const actor = str(body.name, 'Name', { max: 60 }) || null;
+    const token = crypto.randomBytes(24).toString('base64url');
+    db.prepare("DELETE FROM sso_tokens WHERE expires_at < ?").run(now());
+    db.prepare('INSERT INTO sso_tokens (token_hash, venue_id, target, actor, expires_at) VALUES (?, ?, ?, ?, ?)')
+      .run(sha256(token), venue.id, target, actor, new Date(Date.now() + 60 * 1000).toISOString());
+    return { url: `${PUBLIC_URL}/sso/${token}`, expiresIn: 60 };
+  }, { auth: 'api' });
+
   // Venue admin: make, see and revoke the key.
   function apiKeyOut(venue) {
     return {
@@ -2340,12 +2358,32 @@ function createApp(db, options = {}) {
     return { connected: false };
   }, { auth: 'vadmin' });
 
+  function openSso(req, res, token) {
+    const row = db.prepare('SELECT * FROM sso_tokens WHERE token_hash = ?').get(sha256(token));
+    if (row) db.prepare('DELETE FROM sso_tokens WHERE token_hash = ?').run(row.token_hash); // single use
+    const v = row && Date.parse(row.expires_at) > Date.now() ? db.prepare('SELECT * FROM venues WHERE id = ?').get(row.venue_id) : null;
+    if (!v || !v.active || !v.password_hash) {
+      res.writeHead(302, { Location: '/login?expired=1', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    const q = row.actor ? `?as=${encodeURIComponent(row.actor)}` : '';
+    res.writeHead(302, {
+      'Set-Cookie': auth.venueCookie(db, v, secureCookies),
+      Location: `/app${q}${row.target}`,
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+    });
+    res.end();
+  }
+
   // ----- dispatcher -----
 
   async function handle(req, res) {
     const url = new URL(req.url, 'http://local');
     const pathname = url.pathname;
 
+    const sso = pathname.match(/^\/sso\/([A-Za-z0-9_-]{20,80})$/);
+    if (sso && req.method === 'GET') return openSso(req, res, sso[1]);
     if (!pathname.startsWith('/api/') && pathname !== '/health') {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
       return serveStatic(req, res, pathname);

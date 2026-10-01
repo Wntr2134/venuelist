@@ -1,6 +1,6 @@
 'use strict';
 
-/* global guestScore, h, clear, put, api, ApiError, toast, modal, confirmDialog, promptDeviceName, currentName,
+/* global setDeviceName, guestScore, h, clear, put, api, ApiError, toast, modal, confirmDialog, promptDeviceName, currentName,
    fmtDate, fmtDateTime, fmtTime, toLocalInput, fromLocalInput, field, formData, norm */
 
 const app = document.getElementById('app');
@@ -10,6 +10,12 @@ const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Do
 // ---------- boot & routing ----------
 
 async function boot() {
+  // Arrived from the Riderly venue manager's one-click link: it says who this is.
+  const params = new URLSearchParams(location.search);
+  if (params.get('as')) {
+    setDeviceName(params.get('as').slice(0, 60));
+    history.replaceState(null, '', `/app${location.hash}`);
+  }
   let session;
   try {
     session = await api('GET', '/api/session');

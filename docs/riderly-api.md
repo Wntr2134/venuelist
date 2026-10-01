@@ -53,6 +53,13 @@ If the show was truly deleted, a later `PUT` to the same `ext:` id **creates it 
 
 A show archived this way **comes back by itself** the next time you `PUT` it, so sending a show again after an accidental removal restores it. A show the venue archived itself stays archived; your `PUT` still updates its details.
 
+### `POST /sso` (one-click sign-in)
+Body: `{ "show": "ext:<id>" | <id> (optional), "view": "guests" | "door" | "report" | "contributors" (optional), "name": "Sam" (optional) }`.
+
+Returns `{ url, expiresIn: 60 }`. Send the person's browser to `url` within 60 seconds. It works **once**, logs that browser in as **venue staff** (never venue admin), names the device after `name` so everything they do is logged under it, and opens the show (door mode for `view: "door"`). With no `show`, it opens the events list. An expired or used link goes to the login page with a note.
+
+Make the link only when the person clicks (e.g. an "Open guest list" button that calls your server, then redirects). Don't put it in emails or pages ahead of time.
+
 ## The `event` object
 
 ```json

@@ -91,6 +91,15 @@ CREATE TABLE IF NOT EXISTS activity (
 CREATE INDEX IF NOT EXISTS idx_activity_event ON activity(event_id, id);
 CREATE INDEX IF NOT EXISTS idx_activity_guest ON activity(guest_id, action, id);
 
+-- One-click sign-in links from the Riderly venue manager: single use, a minute long.
+CREATE TABLE IF NOT EXISTS sso_tokens (
+  token_hash  TEXT PRIMARY KEY,
+  venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  target      TEXT NOT NULL,
+  actor       TEXT,
+  expires_at  TEXT NOT NULL
+);
+
 -- Door clicker: every tap of + / − (or a manual correction), for peak and history.
 CREATE TABLE IF NOT EXISTS headcount_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

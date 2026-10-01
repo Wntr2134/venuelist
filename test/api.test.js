@@ -1355,3 +1355,32 @@ test('try the demo: a private sandbox venue, logged in, hidden from the owner, d
   assert.equal((await visitor.call('GET', '/api/events')).status, 401, 'demo gone');
   assert.equal(appDb.prepare('SELECT COUNT(*) AS n FROM guests g LEFT JOIN events e ON e.id = g.event_id WHERE e.id IS NULL').get().n, 0, 'nothing left behind');
 });
+
+test('one-click sign-in from Riderly: single use, a minute long, staff only, lands on the show named', async () => {
+  const { c, admin } = await onboard('Click Hall');
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const api = (m, p, b) => client().call(m, p, b, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  const show = (await api('PUT', '/api/v1/events/ext:click-1', { name: 'Click Night', date: new Date(Date.now() + 86400000).toISOString().slice(0, 10) })).data.event;
+  assert.equal((await client().call('POST', '/api/v1/sso', { show: 'ext:click-1' })).status, 401, 'needs the API key');
+  const r = await api('POST', '/api/v1/sso', { show: 'ext:click-1', view: 'door', name: 'Sam (Riderly)' });
+  assert.equal(r.status, 200);
+  const path = new URL(r.data.url).pathname;
+  assert.match(path, /^\/sso\//);
+
+  const open = await fetch(base + path, { redirect: 'manual' });
+  assert.equal(open.status, 302);
+  assert.equal(open.headers.get('location'), `/app?as=${encodeURIComponent('Sam (Riderly)')}#/door/${show.id}`);
+  const cookie = open.headers.getSetCookie().find((x) => x.startsWith('vl_session=')).split(';')[0];
+  const events = await fetch(`${base}/api/events`, { headers: { Cookie: cookie } });
+  assert.equal(events.status, 200, 'logged in as staff');
+  const vadmin = await fetch(`${base}/api/vadmin/overview`, { headers: { Cookie: cookie } });
+  assert.equal(vadmin.status, 401, 'never venue admin');
+
+  const again = await fetch(base + path, { redirect: 'manual' });
+  assert.equal(again.headers.get('location'), '/login?expired=1', 'single use');
+  assert.equal((await api('POST', '/api/v1/sso', { show: 'ext:nope' })).status, 404);
+  const plain = await api('POST', '/api/v1/sso', {});
+  const home = await fetch(base + new URL(plain.data.url).pathname, { redirect: 'manual' });
+  assert.equal(home.headers.get('location'), '/app#/', 'no show: the events list');
+  assert.ok(c);
+});
