@@ -1693,3 +1693,40 @@ test('a contributor link stops showing names once it is locked, but keeps the to
   assert.equal(locked.used, 2, 'but the total is still shown');
   void view;
 });
+
+test('one-click session is revoked when the API key is disconnected or rotated', async () => {
+  const { admin } = await onboard('Revoke Click Hall');
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const api = (m, p, b) => client().call(m, p, b, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  await api('PUT', '/api/v1/events/ext:rc-1', { name: 'Night', date: new Date(Date.now() + 86400000).toISOString().slice(0, 10) });
+  const link = (await api('POST', '/api/v1/sso', { show: 'ext:rc-1' })).data.url;
+  const open = await fetch(base + new URL(link).pathname, { redirect: 'manual' });
+  const cookie = open.headers.getSetCookie().find((x) => x.startsWith('vl_session=')).split(';')[0];
+  assert.equal((await fetch(`${base}/api/events`, { headers: { Cookie: cookie } })).status, 200, 'the one-click session works');
+  // Disconnect Riderly: the one-click session dies, even though it was a staff login.
+  await admin.call('DELETE', '/api/vadmin/api-key');
+  assert.equal((await fetch(`${base}/api/events`, { headers: { Cookie: cookie } })).status, 401, 'revoked with the key');
+});
+
+test('the API never returns staff notes or the staff member who created a show', async () => {
+  const { c, admin } = await onboard('Notes Hall');
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const api = (m, p, b) => client().call(m, p, b, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  const ev = (await c.call('POST', '/api/events', { name: 'With Notes', date: '2099-09-09', notes: 'Artist entry via the laneway — secret', overridePin: '2468' })).data;
+  const out = await api('GET', `/api/v1/events/${ev.id}`);
+  assert.equal(out.status, 200);
+  assert.equal(out.data.notes, undefined, 'staff notes stay in the venue');
+  assert.equal(out.data.createdBy, undefined, 'staff name stays in the venue');
+  assert.equal(JSON.stringify(out.data).includes('secret'), false);
+});
+
+test('the API cannot delete a show the venue created itself, and rejects a malformed external id', async () => {
+  const { c, admin } = await onboard('Guard API Hall');
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const api = (m, p, b) => client().call(m, p, b, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  const mine = (await c.call('POST', '/api/events', { name: 'Venue Made', date: '2099-10-10', overridePin: '2468' })).data;
+  assert.equal((await api('DELETE', `/api/v1/events/${mine.id}`)).status, 409, 'a venue-made show is not Riderly’s to delete');
+  assert.equal((await c.call('GET', `/api/events/${mine.id}`)).status, 200, 'still there');
+  // A broken percent-encoding is a clean 400, not a 500.
+  assert.equal((await api('GET', '/api/v1/events/ext:%E0%A4%A')).status, 400);
+});

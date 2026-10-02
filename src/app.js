@@ -704,6 +704,8 @@ function createApp(db, options = {}) {
     if (!s) return null;
     const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(s.venueId);
     if (!v || !v.active || !v.password_hash || v.password_version !== s.version) return null;
+    // A one-click session also dies when the API key is rotated or Riderly is disconnected.
+    if (s.sso && s.epoch !== (v.api_epoch || 1)) return null;
     return v;
   }
 
@@ -2489,20 +2491,22 @@ function createApp(db, options = {}) {
 
   function apiVenue(req) {
     const m = String(req.headers.authorization || '').match(/^Bearer\s+(rgl_[A-Za-z0-9_-]{20,80})$/);
+    // Check the key FIRST. A valid key is served even if other (dead) keys from the same Riderly
+    // server have been failing — the limiters only ever gate failed attempts, never good ones.
+    const v = m ? db.prepare('SELECT * FROM venues WHERE api_key_hash = ?').get(hashKey(m[1])) : null;
+    if (v && v.active && v.password_hash) {
+      const last = Date.parse(v.api_key_last_used_at || '') || 0;
+      if (Date.now() - last > 60 * 1000) db.prepare('UPDATE venues SET api_key_last_used_at = ? WHERE id = ?').run(now(), v.id);
+      return v;
+    }
     const hash = m ? hashKey(m[1]) : 'none';
     const keyScope = `api|${clientIp(req)}|${hash.slice(0, 16)}`;
     const netScope = `api|${clientIp(req)}`;
+    if (apiKeyLimiter.blocked(keyScope)) throw new HttpError(429, 'This API key keeps failing. Stop retrying it and reconnect the venue.');
     if (apiNetLimiter.blocked(netScope)) throw new HttpError(429, 'Too many bad API keys from this address. Try again in a few minutes.');
-    const v = m ? db.prepare('SELECT * FROM venues WHERE api_key_hash = ?').get(hash) : null;
-    if (!v || !v.active || !v.password_hash) {
-      if (apiKeyLimiter.blocked(keyScope)) throw new HttpError(429, 'This API key keeps failing. Stop retrying it and reconnect the venue.');
-      apiKeyLimiter.fail(keyScope);
-      apiNetLimiter.fail(netScope);
-      throw new HttpError(401, 'Invalid API key');
-    }
-    const last = Date.parse(v.api_key_last_used_at || '') || 0;
-    if (Date.now() - last > 60 * 1000) db.prepare('UPDATE venues SET api_key_last_used_at = ? WHERE id = ?').run(now(), v.id);
-    return v;
+    apiKeyLimiter.fail(keyScope);
+    apiNetLimiter.fail(netScope);
+    throw new HttpError(401, 'Invalid API key');
   }
 
   function externalId(v) {
@@ -2511,17 +2515,27 @@ function createApp(db, options = {}) {
     return s;
   }
 
+  // decodeURIComponent throws on malformed input (e.g. a stray %); turn that into a clean 400.
+  function decodeExt(raw) {
+    try {
+      return decodeURIComponent(String(raw).replace(/^ext:/, ''));
+    } catch {
+      throw new HttpError(400, 'External ID is not validly encoded');
+    }
+  }
+
   function apiEvent(venue, ref) {
     const e = /^\d+$/.test(ref)
       ? db.prepare('SELECT * FROM events WHERE id = ? AND venue_id = ?').get(Number(ref), venue.id)
-      : db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(externalId(decodeURIComponent(ref.replace(/^ext:/, ''))), venue.id);
+      : db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(externalId(decodeExt(ref)), venue.id);
     if (!e) throw new HttpError(404, 'Show not found');
     return e;
   }
 
   function apiEventOut(e) {
     const st = stats(listGuests(db, e.id));
-    const { headcount, ...rest } = eventOut(e);
+    // Staff-entered notes and the staff member's name stay inside the venue — never sent to Riderly.
+    const { headcount, notes, createdBy, ...rest } = eventOut(e);
     return {
       ...rest,
       door: headcount,
@@ -2555,7 +2569,7 @@ function createApp(db, options = {}) {
 
   // Creates the show the first time, then keeps it in step. Only the fields sent are changed.
   route('PUT', /^\/api\/v1\/events\/ext:([^/]+)$/, ({ venue, params, body }) => {
-    const ext = externalId(decodeURIComponent(params[0]));
+    const ext = externalId(decodeExt(params[0]));
     const e = db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(ext, venue.id);
     const has = (k) => body[k] !== undefined;
     const fields = {
@@ -2602,9 +2616,14 @@ function createApp(db, options = {}) {
   // A cancelled show: deleted if nobody is on its list yet, otherwise archived so no names are lost.
   route('DELETE', /^\/api\/v1\/events\/([^/]+)$/, ({ venue, params }) => {
     const e = apiEvent(venue, params[0]);
+    // Riderly only manages the shows it created. A show the venue made itself (no external id)
+    // is never hard-deleted through the API — archive it at most.
+    if (!e.external_id) throw new HttpError(409, 'This show was created in Guest List, not by Riderly, so it can’t be deleted through the API. Archive it in Guest List instead.');
     const guests = db.prepare('SELECT COUNT(*) AS n FROM guests WHERE event_id = ?').get(e.id).n;
     const contributors = db.prepare('SELECT COUNT(*) AS n FROM contributors WHERE event_id = ?').get(e.id).n;
-    if (guests === 0 && contributors === 0 && !e.head_in) {
+    // Truly empty: no list, no contributor links, and no door activity (live tally or a count
+    // someone typed in). Only then is it safe to remove with no record.
+    if (guests === 0 && contributors === 0 && !e.head_in && !e.head_count) {
       db.prepare('DELETE FROM events WHERE id = ?').run(e.id);
       publish(e.id, 'deleted');
       return { deleted: true, archived: false };
@@ -2644,8 +2663,13 @@ function createApp(db, options = {}) {
     const actor = str(body.name, 'Name', { max: 60 }) || null;
     const token = crypto.randomBytes(24).toString('base64url');
     db.prepare("DELETE FROM sso_tokens WHERE expires_at < ?").run(now());
-    db.prepare('INSERT INTO sso_tokens (token_hash, venue_id, target, actor, expires_at) VALUES (?, ?, ?, ?, ?)')
-      .run(sha256(token), venue.id, target, actor, new Date(Date.now() + 60 * 1000).toISOString());
+    db.prepare('INSERT INTO sso_tokens (token_hash, venue_id, target, actor, epoch, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(sha256(token), venue.id, target, actor, venue.api_epoch || 1, new Date(Date.now() + 60 * 1000).toISOString());
+    // Leave a trace that Riderly handed out a sign-in link (no token, no guest data).
+    if (body.show !== undefined && body.show !== null && body.show !== '') {
+      const e = apiEvent(venue, String(body.show));
+      log(db, { eventId: e.id, action: 'sso.issue', detail: actor ? `one-click link for ${actor}` : 'one-click link', actor: 'Riderly', via: 'venue' });
+    }
     return { url: `${PUBLIC_URL}/sso/${token}`, expiresIn: 60 };
   }, { auth: 'api' });
 
@@ -2661,13 +2685,15 @@ function createApp(db, options = {}) {
 
   route('POST', /^\/api\/vadmin\/api-key$/, ({ venue }) => {
     const key = `rgl_${crypto.randomBytes(24).toString('base64url')}`;
-    db.prepare('UPDATE venues SET api_key_hash = ?, api_key_hint = ?, api_key_created_at = ?, api_key_last_used_at = NULL WHERE id = ?')
+    // Rotating the key bumps the epoch, so any one-click sessions it minted stop working.
+    db.prepare('UPDATE venues SET api_key_hash = ?, api_key_hint = ?, api_key_created_at = ?, api_key_last_used_at = NULL, api_epoch = api_epoch + 1 WHERE id = ?')
       .run(hashKey(key), key.slice(-4), now(), venue.id);
     return { key, ...apiKeyOut(db.prepare('SELECT * FROM venues WHERE id = ?').get(venue.id)) };
   }, { auth: 'vadmin' });
 
   route('DELETE', /^\/api\/vadmin\/api-key$/, ({ venue }) => {
-    db.prepare('UPDATE venues SET api_key_hash = NULL, api_key_hint = NULL, api_key_created_at = NULL, api_key_last_used_at = NULL WHERE id = ?').run(venue.id);
+    // Disconnecting Riderly also revokes the one-click sessions the key granted.
+    db.prepare('UPDATE venues SET api_key_hash = NULL, api_key_hint = NULL, api_key_created_at = NULL, api_key_last_used_at = NULL, api_epoch = api_epoch + 1 WHERE id = ?').run(venue.id);
     return { connected: false };
   }, { auth: 'vadmin' });
 
@@ -2683,7 +2709,12 @@ function createApp(db, options = {}) {
       res.writeHead(302, { ...headers, Location: '/login?expired=1' });
       return res.end();
     }
-    const cookies = [auth.venueCookie(db, v, secureCookies)];
+    // If the key was rotated or disconnected in the 60s since the link was made, don't honour it.
+    if ((row.epoch || 1) !== (v.api_epoch || 1)) {
+      res.writeHead(302, { ...headers, Location: '/login?expired=1' });
+      return res.end();
+    }
+    const cookies = [auth.ssoVenueCookie(db, v, secureCookies)];
     if (row.actor) {
       // Over HTTPS the name rides in a __Host- cookie (host-only, Path=/), which a sibling
       // subdomain can't set, so it can't silently rename this device in the log.

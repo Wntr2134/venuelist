@@ -102,10 +102,17 @@ function venueCookie(db, venue, secure) {
   return issue(db, VENUE_COOKIE, ['v', venue.id, venue.password_version], secure);
 }
 
+// A one-click (SSO) session also pins the venue's API epoch, so revoking the key revokes it.
+function ssoVenueCookie(db, venue, secure) {
+  return issue(db, VENUE_COOKIE, ['s', venue.id, venue.password_version, venue.api_epoch || 1], secure);
+}
+
 function venueSession(db, req) {
   const f = read(db, req, VENUE_COOKIE);
-  if (!f || f.length !== 3 || f[0] !== 'v') return null;
-  return { venueId: Number(f[1]), version: Number(f[2]) };
+  if (!f) return null;
+  if (f.length === 3 && f[0] === 'v') return { venueId: Number(f[1]), version: Number(f[2]), sso: false };
+  if (f.length === 4 && f[0] === 's') return { venueId: Number(f[1]), version: Number(f[2]), epoch: Number(f[3]), sso: true };
+  return null;
 }
 
 function clearVenueCookie(secure) {
@@ -187,6 +194,7 @@ module.exports = {
   hashPassword,
   verifyPassword,
   venueCookie,
+  ssoVenueCookie,
   venueSession,
   clearVenueCookie,
   vadminCookie,

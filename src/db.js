@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS sso_tokens (
   venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
   target      TEXT NOT NULL,
   actor       TEXT,
+  epoch       INTEGER NOT NULL DEFAULT 1,
   expires_at  TEXT NOT NULL
 );
 
@@ -260,6 +261,9 @@ function migrate(db) {
     ['api_key_hint', 'TEXT'],
     ['api_key_created_at', 'TEXT'],
     ['api_key_last_used_at', 'TEXT'],
+    // Bumped whenever the API key is made or revoked, so one-click (SSO) staff sessions minted
+    // with the old key stop working the moment Riderly is disconnected or the key is rotated.
+    ['api_epoch', 'INTEGER NOT NULL DEFAULT 1'],
     ['demo', 'INTEGER NOT NULL DEFAULT 0'], // a "Try the demo" sandbox, deleted after a few hours
     // Billing, kept by Riderly (invoices go out from Xero; this just tracks who's paid up).
     ['plan', 'TEXT'],
@@ -270,6 +274,10 @@ function migrate(db) {
     if (!vCols.includes(col)) db.exec(`ALTER TABLE venues ADD COLUMN ${col} ${def}`);
   }
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_venues_api_key ON venues(api_key_hash) WHERE api_key_hash IS NOT NULL');
+
+  // One-click (SSO) tokens gained an epoch, so revoking the API key revokes the sessions it made.
+  const ssoCols = db.prepare('PRAGMA table_info(sso_tokens)').all().map((c) => c.name);
+  if (ssoCols.length && !ssoCols.includes('epoch')) db.exec('ALTER TABLE sso_tokens ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1');
 
   // Sign-ups carry the username and password the venue chose, so approving them is one tap.
   const reqCols = db.prepare('PRAGMA table_info(access_requests)').all().map((c) => c.name);
