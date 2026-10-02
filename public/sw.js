@@ -3,7 +3,7 @@
 // Service worker: keeps the door app usable when the venue Wi-Fi drops.
 // Network first (so updates always win), falling back to the last copy saved on this phone.
 
-const CACHE = 'vl-door-v4';
+const CACHE = 'vl-door-v5';
 const SHELL = ['/app', '/guide', '/js/guide.js', '/css/styles.css', '/js/common.js', '/js/app.js', '/icon.svg', '/apple-touch-icon.png', '/manifest.webmanifest',
   '/fonts/bigshoulders-var.woff2', '/fonts/instrumentsans-var.woff2', '/fonts/jetbrainsmono-500.woff2'];
 
@@ -43,6 +43,10 @@ self.addEventListener('fetch', (event) => {
         if (res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+        } else if (res.status === 401 && url.pathname.startsWith('/api/')) {
+          // Logged out (or the session expired/was revoked): drop the cached guest data so it
+          // can't be reopened offline on a phone that no longer has a valid login.
+          clearData();
         }
         return res;
       })
@@ -50,8 +54,13 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
+// Wipe everything this phone cached — the app shell, the guest data, and the push cursor.
+function clearData() {
+  return Promise.all([caches.delete(CACHE), caches.delete('vl-push')]).catch(() => {});
+}
+
 self.addEventListener('message', (event) => {
-  if (event.data === 'clear') event.waitUntil(caches.delete(CACHE));
+  if (event.data === 'clear') event.waitUntil(clearData());
 });
 
 // VIP alerts. The push itself is empty; the phone asks the server (with its own login) what's new.

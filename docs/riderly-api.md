@@ -30,7 +30,7 @@ Tests a key. Returns `{ name, username, links: { staffLogin, venueAdmin, app, gu
 | `doorsTime` | `HH:MM` or null | |
 | `venueCapacity` | int or null | Door clicker capacity. Default: the venue's default |
 | `guestListCap` | int or null | Max guest list heads |
-| `notes` | string | Staff can see these |
+| `notes` | string | Write-only: staff can see these, but the API never reads them back |
 | `ticketsSold` | int or null | e.g. from Moshtix |
 | `ticketsScanned` | int or null | e.g. from Moshtix after the night |
 | `archived` | bool | |
@@ -47,7 +47,9 @@ Returns one `event`.
 Night report totals: `{ event, door, tickets, guestlist, byContributor[], byList[], firstIn, overrideCount }`. `byContributor` includes contributor names (e.g. the artist or promoter) and their numbers.
 
 ### `DELETE /events/<id or ext:…>`
-The show was cancelled or taken out of your schedule. If nobody has touched it yet (no guests, no contributor links, no door count), it's deleted and you get `{deleted:true}`. Otherwise it's archived, so nothing is lost, and you get `{archived:true}`.
+The show was cancelled or taken out of your schedule. If nobody has touched it yet (no guests, no contributor links, and no door count — live or typed in), it's deleted and you get `{deleted:true}`. Otherwise it's archived, so nothing is lost, and you get `{archived:true}`.
+
+Only shows **you created** (ones with an `externalId`) can be deleted through the API. A show the venue made itself in Guest List is never deleted this way — you get `409` and it's left for the venue to archive.
 
 If the show was truly deleted, a later `PUT` to the same `ext:` id **creates it fresh** (`created: true`); it's never a 404. As with any new show, that `PUT` must include `name` and `date`, or you get 400. A `GET` of a deleted show is 404.
 
@@ -61,6 +63,8 @@ Returns `{ url, expiresIn: 60 }`. Send the person's browser to `url` within 60 s
 Opening the link claims and deletes the token in one step (two taps at once can't both get in), then redirects to a clean address (`/app#/door/<id>`, with no token or name in it) with `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. The link never stays in the address bar or browser history, and never leaks in a Referer. The name is passed in a one-minute cookie that the app reads once and clears.
 
 Make the link only when the person clicks (e.g. an "Open guest list" button that calls your server, then redirects). Don't put it in emails or pages ahead of time.
+
+The staff session a one-click link creates is tied to the API key that made it: if the key is rotated (a new `POST /vadmin/api-key`) or the venue disconnects Riderly, those sessions stop working at once, and the person signs in again through a fresh link.
 
 ## The `event` object
 

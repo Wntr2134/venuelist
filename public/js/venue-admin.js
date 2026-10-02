@@ -49,29 +49,31 @@ async function start() {
   venueName = s.venue.name;
   document.title = `${venueName} · Venue admin`;
   if (s.authed) return dashboard();
-  return s.needsSetup ? firstSetup(s.venue) : login(s.venue);
+  return login(s.venue, s.needsSetup);
 }
 
-function login(venue) {
+function login(venue, needsSetup) {
   const pw = h('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' });
+  const emailLink = h('button', {
+    type: 'button',
+    class: 'linklike',
+    onclick: async () => {
+      try {
+        const r = await api('POST', '/api/forgot', { username: slug, kind: 'admin' });
+        toast(`${r.message} If nothing arrives, ask Riderly.`, 'ok', 7000);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    },
+  }, needsSetup ? 'Email me a setup link' : 'Email me a reset link');
   const form = h('form', { class: 'card narrow stack' },
     h('div', { class: 'brand' }, h('span', { class: 'logo big' }, '★'), h('h1', null, venue.name)),
-    h('p', { class: 'muted' }, 'Venue admin — for the GM or owner. Staff use the normal guest list login.'),
+    h('p', { class: 'muted' }, needsSetup
+      ? 'Venue admin isn’t set up yet. Open the setup link Riderly emailed you, or get a fresh one below. Staff use the normal guest list login.'
+      : 'Venue admin — for the GM or owner. Staff use the normal guest list login.'),
     field('Venue admin password', pw),
     h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Log in'),
-    h('p', { class: 'small muted center-text' }, 'Forgotten it? ',
-      h('button', {
-        type: 'button',
-        class: 'linklike',
-        onclick: async () => {
-          try {
-            const r = await api('POST', '/api/forgot', { username: slug, kind: 'admin' });
-            toast(`${r.message} If nothing arrives, ask Riderly.`, 'ok', 7000);
-          } catch (err) {
-            toast(err.message, 'error');
-          }
-        },
-      }, 'Email me a reset link'))
+    h('p', { class: 'small muted center-text' }, needsSetup ? 'First time here? ' : 'Forgotten it? ', emailLink)
   );
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -85,32 +87,6 @@ function login(venue) {
   });
   put(root, h('main', { class: 'center' }, form));
   pw.focus();
-}
-
-// Older venues: prove you're a manager with an existing code, then choose the admin password.
-function firstSetup(venue) {
-  const form = h('form', { class: 'card narrow stack' },
-    h('div', { class: 'brand' }, h('span', { class: 'logo big' }, '★'), h('h1', null, venue.name)),
-    h('p', null, 'Set up the venue admin password. Enter your current manager code to prove it’s you.'),
-    field('Current manager code', h('input', { name: 'managerCode', type: 'password', required: true, autocomplete: 'off', inputmode: 'numeric' })),
-    field('New venue admin password', h('input', { name: 'newPassword', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' }), 'At least 8 characters. Different from the staff password.'),
-    field('Type it again', h('input', { name: 'confirm', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' })),
-    h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Set up venue admin')
-  );
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (!form.reportValidity()) return;
-    const d = formData(form);
-    if (d.newPassword !== d.confirm) return toast('Passwords don’t match', 'error');
-    try {
-      await api('POST', `/api/vadmin/login/${encodeURIComponent(slug)}`, { managerCode: d.managerCode, newPassword: d.newPassword });
-      toast('Venue admin set up', 'ok');
-      dashboard();
-    } catch (err) {
-      toast(err.message, 'error', 5000);
-    }
-  });
-  put(root, h('main', { class: 'center' }, form));
 }
 
 async function dashboard() {

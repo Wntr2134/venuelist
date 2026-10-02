@@ -12,14 +12,18 @@ const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Do
 async function boot() {
   // Arrived from the Riderly venue manager's one-click link: a one-minute cookie says who this
   // is. Read it once, then clear it.
-  const as = document.cookie.split('; ').find((c) => c.startsWith('vl_as='));
+  const cookies = document.cookie.split('; ');
+  const host = cookies.find((c) => c.startsWith('__Host-vl_as='));
+  const as = host || cookies.find((c) => c.startsWith('vl_as='));
   if (as) {
     try {
-      setDeviceName(decodeURIComponent(as.slice(6)).slice(0, 60));
+      setDeviceName(decodeURIComponent(as.slice(as.indexOf('=') + 1)).slice(0, 60));
     } catch {
       /* a mangled cookie: they'll be asked their name instead */
     }
-    document.cookie = 'vl_as=; Path=/app; Max-Age=0; SameSite=Lax';
+    document.cookie = host
+      ? '__Host-vl_as=; Path=/; Max-Age=0; SameSite=Lax; Secure'
+      : 'vl_as=; Path=/app; Max-Age=0; SameSite=Lax';
   }
   let session;
   try {
