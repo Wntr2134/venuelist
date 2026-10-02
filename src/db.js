@@ -190,6 +190,9 @@ function openDb(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL;');
+  // Overwrite deleted/updated rows rather than leaving the old bytes in the file, so a purged
+  // guest name can't be recovered from the raw database or a backup of it.
+  db.exec('PRAGMA secure_delete = ON;');
   db.exec(SCHEMA);
   migrate(db);
   return db;

@@ -1931,7 +1931,10 @@ function createApp(db, options = {}) {
     }
     tx(db, () => {
       db.prepare('DELETE FROM guests WHERE id = ?').run(g.id);
-      log(db, { eventId: g.event_id, guest: g, action: 'guest.remove', actor, via: 'venue' });
+      // Deleting a guest is the venue's erase button, so wipe the name from the log too — the
+      // action and who did it stay, the person's name doesn't.
+      db.prepare('UPDATE activity SET guest_name = NULL WHERE guest_id = ?').run(g.id);
+      log(db, { eventId: g.event_id, guest: { id: g.id, name: null }, action: 'guest.remove', actor, via: 'venue' });
     });
     publish(g.event_id, 'guests', { actor, guestId: g.id });
     return { ok: true };
@@ -2003,7 +2006,12 @@ function createApp(db, options = {}) {
 
   function portalView(c) {
     const e = getEvent(db, c.event_id);
-    const guests = listGuests(db, e.id, c.id).map((g) => ({
+    const all = listGuests(db, e.id, c.id);
+    const used = all.reduce((n, g) => n + g.party, 0);
+    const locked = contributorLocked(db, c);
+    // Once the link is locked (disabled, archived, past cutoff, finished, or the venue is off),
+    // keep showing the totals but stop handing back the guests' names and notes.
+    const guests = locked ? [] : all.map((g) => ({
       id: g.id,
       name: g.name,
       plusOnes: g.plusOnes,
@@ -2013,14 +2021,13 @@ function createApp(db, options = {}) {
       addedBy: g.addedBy,
       createdAt: g.createdAt,
     }));
-    const used = guests.reduce((n, g) => n + g.party, 0);
     return {
       venueName: venueOfEvent(e.id)?.name || 'Venue',
       event: { name: e.name, date: e.date, doorsTime: e.doors_time, cutoffAt: e.cutoff_at },
       contributor: { name: c.name, listType: c.list_type, allocation: c.allocation },
       used,
       remaining: c.allocation === null ? null : Math.max(0, c.allocation - used),
-      locked: contributorLocked(db, c),
+      locked,
       guests,
     };
   }
@@ -2085,7 +2092,8 @@ function createApp(db, options = {}) {
     if (g.admitted > 0) throw new HttpError(409, 'This guest has already arrived and can no longer be removed.');
     tx(db, () => {
       db.prepare('DELETE FROM guests WHERE id = ?').run(g.id);
-      log(db, { eventId: c.event_id, guest: g, action: 'guest.remove', actor, via: c.name });
+      db.prepare('UPDATE activity SET guest_name = NULL WHERE guest_id = ?').run(g.id);
+      log(db, { eventId: c.event_id, guest: { id: g.id, name: null }, action: 'guest.remove', actor, via: c.name });
     });
     publish(c.event_id, 'guests', { actor, guestId: g.id });
     return portalView(c);
@@ -2432,16 +2440,31 @@ function createApp(db, options = {}) {
       banLog(b.venue_id, 'lapsed', `${b.name} (not renewed after review)`, 'Riderly');
     }
     let purged = 0;
-    db.prepare('DELETE FROM applied_ops WHERE created_at < ?').run(new Date(at.getTime() - 7 * 86400000).toISOString());
+    // The door-tap cache can hold guest names in its stored responses; keep it short.
+    db.prepare('DELETE FROM applied_ops WHERE created_at < ?').run(new Date(at.getTime() - 2 * 86400000).toISOString());
+    // The banned-list audit log names people; keep it only about as long as a ban can run.
+    db.prepare('DELETE FROM banned_log WHERE at < ?').run(new Date(at.getTime() - 400 * 86400000).toISOString());
     const venues = db.prepare('SELECT id, retention_days FROM venues WHERE retention_days IS NOT NULL').all();
     for (const v of venues) {
       const cutoff = new Date(at.getTime() - v.retention_days * 86400000).toISOString().slice(0, 10);
-      const events = db.prepare('SELECT id FROM events WHERE venue_id = ? AND date < ? AND purged_at IS NULL').all(v.id, cutoff);
+      // Past the retention window AND not already fully scrubbed — the second clause re-catches a
+      // past show that had new guests added (or was renamed) after an earlier purge.
+      const events = db.prepare(
+        `SELECT id FROM events WHERE venue_id = ? AND date < ? AND (
+           purged_at IS NULL
+           OR EXISTS (SELECT 1 FROM guests g WHERE g.event_id = events.id AND (g.name <> 'Guest (removed)' OR g.notes IS NOT NULL))
+           OR EXISTS (SELECT 1 FROM activity a WHERE a.event_id = events.id AND a.guest_name IS NOT NULL)
+         )`
+      ).all(v.id, cutoff);
       for (const e of events) {
         tx(db, () => {
-          // Counts stay for reporting; names and notes go.
+          // Counts stay for reporting; names and notes go — from the guest rows, the activity
+          // log (names and the free-text detail that can quote them), and the VIP push alerts.
           db.prepare("UPDATE guests SET name = 'Guest (removed)', notes = NULL WHERE event_id = ?").run(e.id);
-          db.prepare('UPDATE activity SET guest_name = NULL WHERE event_id = ?').run(e.id);
+          // Null both the name column and the free-text detail (override reasons can quote a
+          // guest's name). The event.purge note below is written after this, so it survives.
+          db.prepare('UPDATE activity SET guest_name = NULL, detail = NULL WHERE event_id = ?').run(e.id);
+          db.prepare('DELETE FROM push_alerts WHERE event_id = ?').run(e.id);
           db.prepare('UPDATE events SET purged_at = ? WHERE id = ?').run(at.toISOString(), e.id);
           log(db, { eventId: e.id, action: 'event.purge', detail: `guest details removed after ${v.retention_days} days`, actor: 'Riderly', via: 'venue' });
         });

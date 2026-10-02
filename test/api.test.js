@@ -1651,3 +1651,45 @@ test('a live stream is cut when the venue logs out all devices', async () => {
   ac.abort();
   assert.equal(closed, true, 'the stream closed after logout-all');
 });
+
+test('deleting a guest wipes their name from the activity log (the erase route)', async () => {
+  const { c } = await onboard('Erase Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2099-03-03', overridePin: '2468' })).data;
+  const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Jane Private', notes: 'VIP friend' })).data;
+  assert.equal((await c.call('DELETE', `/api/guests/${g.id}`)).status, 200);
+  const act = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  assert.ok(!JSON.stringify(act).includes('Jane Private'), 'name gone from every activity row');
+  assert.ok(act.some((a) => a.action === 'guest.remove'), 'the removal is still recorded');
+});
+
+test('a past show re-purges when guests are added after an earlier purge', async () => {
+  const { c, admin } = await onboard('Repurge Hall');
+  await admin.call('PUT', '/api/vadmin/venue', { retentionDays: 30 });
+  const old = (await c.call('POST', '/api/events', { name: 'Old', date: '2026-01-10', overridePin: '2468' })).data;
+  await c.call('POST', `/api/events/${old.id}/guests`, { name: 'First Person' });
+  assert.ok(server.purgeExpired(new Date('2026-06-01T12:00:00Z')) >= 1);
+  assert.equal((await c.call('GET', `/api/events/${old.id}`)).data.guests[0].name, 'Guest (removed)');
+  // A name added to the already-purged past show must not linger.
+  await c.call('POST', `/api/events/${old.id}/guests`, { name: 'Late Addition' });
+  assert.ok(server.purgeExpired(new Date('2026-06-01T12:00:00Z')) >= 1, 're-purged');
+  const g = (await c.call('GET', `/api/events/${old.id}`)).data.guests;
+  assert.ok(g.every((x) => x.name === 'Guest (removed)'), 'the late name is scrubbed too');
+});
+
+test('a contributor link stops showing names once it is locked, but keeps the totals', async () => {
+  const { c } = await onboard('Lock Portal Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Portal Show', date: '2099-07-07', overridePin: '2468' })).data;
+  const contr = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Tour Mgr', allocation: 10 })).data;
+  const view = await fetch(`${base}/api/c/${contr.token}`).then((r) => r.json());
+  await fetch(`${base}/api/c/${contr.token}/guests`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Actor': 'TM' }, body: JSON.stringify({ name: 'Band Friend', plusOnes: 1 }) });
+  let open = await fetch(`${base}/api/c/${contr.token}`).then((r) => r.json());
+  assert.equal(open.guests.length, 1);
+  assert.equal(open.used, 2);
+  // Disable the link: names disappear, the count stays.
+  await c.call('PUT', `/api/contributors/${contr.id}`, { active: false });
+  const locked = await fetch(`${base}/api/c/${contr.token}`).then((r) => r.json());
+  assert.ok(locked.locked);
+  assert.equal(locked.guests.length, 0, 'no names once locked');
+  assert.equal(locked.used, 2, 'but the total is still shown');
+  void view;
+});
