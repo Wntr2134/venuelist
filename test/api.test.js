@@ -1730,3 +1730,29 @@ test('the API cannot delete a show the venue created itself, and rejects a malfo
   // A broken percent-encoding is a clean 400, not a 500.
   assert.equal((await api('GET', '/api/v1/events/ext:%E0%A4%A')).status, 400);
 });
+
+test('CSV export neutralises spreadsheet formulas and keeps odd cells in one column', async () => {
+  const { c } = await onboard('CSV Export Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Export Night', date: '2099-02-02', overridePin: '2468' })).data;
+  await c.call('POST', `/api/events/${ev.id}/guests`, { name: '=HYPERLINK("http://evil","x")', notes: 'a;b\tc' });
+  const cookie = Object.entries(c.jar).map(([k, v]) => `${k}=${v}`).join('; ');
+  const csv = await (await fetch(`${base}/api/events/${ev.id}/export.csv`, { headers: { Cookie: cookie } })).text();
+  assert.ok(csv.includes("'=HYPERLINK"), 'formula is prefixed with an apostrophe');
+  assert.ok(csv.includes('"a;b\tc"'), 'a cell with a delimiter stays quoted as one field');
+});
+
+test('paste import caps line length and total size so it can’t hang the server', () => {
+  const row = parseImport('X'.repeat(5000));
+  assert.equal(row.length, 1);
+  assert.ok(row[0].name.length <= 300, 'one line is capped');
+  const many = parseImport(Array.from({ length: 100 }, (_, i) => `Name ${i} +1`).join('\n'));
+  assert.equal(many.length, 100);
+});
+
+test('email headers never carry an injected line', () => {
+  const { buildMessage } = require('../src/mail');
+  const msg = buildMessage({ from: 'Riderly <r@x.com>' }, { to: 'a@b.com\r\nBcc: evil@x.com', subject: 'Hi\r\nX-Evil: y', text: 'body' });
+  const headers = msg.split('\r\n\r\n')[0].split('\r\n');
+  assert.ok(!headers.some((l) => /^Bcc:/i.test(l)), 'the CRLF is collapsed, not turned into a Bcc header');
+  assert.ok(!headers.some((l) => /^X-Evil:/i.test(l)), 'nor an injected header from the subject');
+});

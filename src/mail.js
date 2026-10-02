@@ -29,7 +29,13 @@ function loadMailConfig(file) {
   }
 }
 
-const addr = (s) => (String(s).match(/<([^>]+)>/) || [null, String(s)])[1].trim();
+// The bare address for the SMTP envelope (MAIL FROM / RCPT TO). Reject anything with spaces or
+// control characters so a crafted "recipient" can't inject extra SMTP lines or mail headers.
+const addr = (s) => {
+  const a = (String(s).match(/<([^>]+)>/) || [null, String(s)])[1].trim();
+  if (!a || /[\s<>",]/.test(a) || /[\u0000-\u001F]/.test(a)) throw new Error('Invalid email address');
+  return a;
+};
 const encodeHeader = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s, 'utf8').toString('base64')}?=`);
 const clean = (s) => String(s).replace(/[\r\n]+/g, ' ').trim();
 

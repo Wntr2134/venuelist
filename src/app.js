@@ -455,15 +455,20 @@ const csvTime = (iso) => (iso ? localTime.format(new Date(iso)).replace(',', '')
 
 function csvCell(v) {
   let s = v === null || v === undefined ? '' : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; // guard against spreadsheet formula injection
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  // Neutralise spreadsheet formulas: anything a tool might evaluate if it leads the cell.
+  if (/^[=+\-@\t\r\n]/.test(s) || /^[\u0000-\u001F]/.test(s)) s = `'${s}`;
+  // Quote on comma, semicolon or tab (either CSV delimiter) and on quotes/newlines, so a cell
+  // can never break out into extra columns.
+  return /[",;\t\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 // Parses pasted lines like "Jane Smith +2, note" or CSV "Jane Smith,2,note".
 function parseImport(text) {
   const rows = [];
-  for (const rawLine of String(text || '').split(/\r?\n/)) {
-    const line = rawLine.trim();
+  // Cap the whole paste and each line before any pattern-matching, so a giant or pathological
+  // line can't make the parse take a long time and hold the server up.
+  for (const rawLine of String(text || '').slice(0, 200000).split(/\r?\n/)) {
+    const line = rawLine.trim().slice(0, 300);
     if (!line) continue;
     const parts = line.split(/\t|,/).map((p) => p.trim());
     let name = parts[0];
@@ -2791,6 +2796,11 @@ function createApp(db, options = {}) {
   const server = http.createServer((req, res) => {
     handle(req, res);
   });
+  // Bound how long a client may take to send its headers and body, so a trickle of bytes can't
+  // tie up a connection (and memory) indefinitely. These limit receiving the request, not the
+  // live-update response, so the event stream is unaffected.
+  server.headersTimeout = 20 * 1000;
+  server.requestTimeout = 30 * 1000;
   server.on('close', () => hub.closeAll());
   server.purgeExpired = purgeExpired;
   server.billingReminder = billingReminder;
