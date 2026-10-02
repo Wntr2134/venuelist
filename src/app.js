@@ -2802,6 +2802,9 @@ function createApp(db, options = {}) {
   server.headersTimeout = 20 * 1000;
   server.requestTimeout = 30 * 1000;
   server.on('close', () => hub.closeAll());
+  // A read-only view of the route table and each route's auth mode. Used by the test suite to
+  // assert that every non-public route refuses an unauthenticated request. No handler is exposed.
+  server.routes = routes.map((r) => ({ method: r.method, source: r.pattern.source, auth: r.auth || 'venue' }));
   server.purgeExpired = purgeExpired;
   server.billingReminder = billingReminder;
   server.runBackup = runBackup;

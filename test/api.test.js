@@ -1756,3 +1756,26 @@ test('email headers never carry an injected line', () => {
   assert.ok(!headers.some((l) => /^Bcc:/i.test(l)), 'the CRLF is collapsed, not turned into a Bcc header');
   assert.ok(!headers.some((l) => /^X-Evil:/i.test(l)), 'nor an injected header from the subject');
 });
+
+test('every non-public route refuses an unauthenticated request', async () => {
+  // Turn a route's regex source into a concrete path we can call with no cookie and no API key.
+  const sample = (src) => src
+    .replace(/^\^/, '').replace(/\$$/, '')
+    .replace(/\\\//g, '/').replace(/\\\./g, '.')
+    .replace(/\(\\d\+\)/g, '1')
+    .replace(/\(\[\^\/\]\+\)/g, 'x');
+  let checked = 0;
+  for (const r of server.routes) {
+    if (r.auth === 'public') continue;
+    const path = sample(r.source);
+    assert.ok(!/[()\\[\]]/.test(path), `sampler left regex metachars in ${path} (from ${r.source})`);
+    const res = await fetch(base + path, {
+      method: r.method,
+      headers: r.method === 'GET' ? {} : { 'Content-Type': 'application/json' },
+      body: r.method === 'GET' ? undefined : '{}',
+    });
+    assert.ok([401, 403].includes(res.status), `${r.method} ${path} (auth: ${r.auth}) must refuse an anonymous caller, got ${res.status}`);
+    checked += 1;
+  }
+  assert.ok(checked >= 50, `expected to cover the whole protected surface, only checked ${checked}`);
+});

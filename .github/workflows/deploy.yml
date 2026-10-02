@@ -9,11 +9,16 @@ concurrency:
   group: deploy-guestlist
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -49,6 +54,7 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
@@ -57,15 +63,17 @@ jobs:
           if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
             printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           else
+            # Trust-on-first-use fallback; set DEPLOY_KNOWN_HOSTS to pin the host key instead.
             ssh-keyscan -H "$DEPLOY_HOST" > ~/.ssh/known_hosts 2>/dev/null
           fi
+          # Deploy exactly the commit that just passed tests, not whatever main points at now.
           # Only touches /srv/guestlist and the guestlist unit. data/ is git-ignored,
           # so reset --hard never touches the database or backups.
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "venue@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "venue@$DEPLOY_HOST" "GIT_SHA=$GIT_SHA bash -s" <<'REMOTE'
           set -euo pipefail
           cd /srv/guestlist
           git fetch --quiet origin main
-          git reset --hard origin/main
+          git reset --hard "$GIT_SHA"
           sudo -n /bin/systemctl restart guestlist
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:5070/health | grep -q '"ok":true'; then
