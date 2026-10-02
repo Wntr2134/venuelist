@@ -1631,3 +1631,23 @@ test('forgot-password is capped per venue and never overwrites a live owner-issu
     app.close();
   }
 });
+
+test('a live stream is cut when the venue logs out all devices', async () => {
+  const { c, admin } = await onboard('Stream Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Stream Night', date: '2099-05-01', overridePin: '2468' })).data;
+  const cookie = Object.entries(c.jar).map(([k, v]) => `${k}=${v}`).join('; ');
+  const ac = new AbortController();
+  const res = await fetch(`${base}/api/events/${ev.id}/stream`, { headers: { Cookie: cookie, Accept: 'text/event-stream' }, signal: ac.signal });
+  assert.equal(res.status, 200);
+  const reader = res.body.getReader();
+  const first = await reader.read(); // the hello frame
+  assert.ok(new TextDecoder().decode(first.value).includes('hello'));
+  // Log every device out; the open stream should end on its own.
+  await admin.call('POST', '/api/vadmin/logout-devices');
+  const closed = await Promise.race([
+    (async () => { while (true) { const { done } = await reader.read(); if (done) return true; } })(),
+    new Promise((r) => setTimeout(() => r(false), 2000)),
+  ]);
+  ac.abort();
+  assert.equal(closed, true, 'the stream closed after logout-all');
+});

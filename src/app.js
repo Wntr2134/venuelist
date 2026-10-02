@@ -274,23 +274,50 @@ function checkCapacity(db, event, party, excludeGuestId) {
 
 // ---------- live updates (Server-Sent Events) ----------
 
+const MAX_STREAMS_PER_VENUE = 60;
+const MAX_STREAM_MS = 6 * 3600 * 1000;
+
 function createHub() {
-  const streams = new Map(); // eventId -> Set<res>
+  const streams = new Map(); // eventId -> Set<entry>
+  const entries = new Set(); // every live entry, for per-venue limits and sweeping
+  const drop = (e) => {
+    entries.delete(e);
+    streams.get(e.eventId)?.delete(e);
+    try { e.res.end(); } catch { /* already closed */ }
+  };
   return {
-    add(eventId, res) {
+    add(eventId, res, { venueId, version } = {}) {
+      const entry = { res, eventId, venueId, version, at: Date.now() };
+      // Cap how many streams one venue can hold open, oldest-first, so a venue can't pin memory.
+      const mine = [...entries].filter((e) => e.venueId === venueId);
+      if (mine.length >= MAX_STREAMS_PER_VENUE) drop(mine.sort((a, b) => a.at - b.at)[0]);
       if (!streams.has(eventId)) streams.set(eventId, new Set());
-      streams.get(eventId).add(res);
-      res.on('close', () => streams.get(eventId)?.delete(res));
+      streams.get(eventId).add(entry);
+      entries.add(entry);
+      res.on('close', () => { entries.delete(entry); streams.get(eventId)?.delete(entry); });
     },
     publish(eventId, payload) {
       const set = streams.get(eventId);
       if (!set) return;
       const data = `data: ${JSON.stringify(payload)}\n\n`;
-      for (const res of set) res.write(data);
+      for (const e of set) e.res.write(data);
+    },
+    // Stop every stream for a venue — called when its sessions are revoked (logout-all,
+    // password change, or the venue being disabled), so a live feed can't outlive the login.
+    closeVenue(venueId) {
+      for (const e of [...entries]) if (e.venueId === venueId) drop(e);
+    },
+    // Periodic tidy: close anything past its max age, or whose session is no longer valid.
+    sweep(stillValid) {
+      const now = Date.now();
+      for (const e of [...entries]) {
+        if (now - e.at > MAX_STREAM_MS || (stillValid && !stillValid(e))) drop(e);
+      }
     },
     closeAll() {
-      for (const set of streams.values()) for (const res of set) res.end();
+      for (const e of [...entries]) drop(e);
       streams.clear();
+      entries.clear();
     },
   };
 }
@@ -931,6 +958,7 @@ function createApp(db, options = {}) {
       `UPDATE venues SET password_hash = ?, password_version = ?, admin_password_hash = ?, setup_token_hash = NULL,
          setup_expires_at = NULL, setup_at = COALESCE(setup_at, ?), last_login_at = ? WHERE id = ?`
     ).run(auth.hashPassword(staffPw), version, adminHash, t, t, v.id);
+    if (version !== v.password_version) hub.closeVenue(v.id); // a reset logs out old devices' live feeds too
     const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(v.id);
     res.setHeader('Set-Cookie', auth.venueCookie(db, fresh, secureCookies));
     return { ok: true, venue: venueOut(fresh) };
@@ -1092,6 +1120,7 @@ function createApp(db, options = {}) {
       `UPDATE venues SET password_hash = ?, password_version = password_version + 1, setup_token_hash = NULL,
          setup_expires_at = NULL, setup_at = COALESCE(setup_at, ?) WHERE id = ?`
     ).run(hash, now(), v.id);
+    hub.closeVenue(v.id);
     return { ok: true, venue: venueOut(ownerVenue(v.id)) };
   }, { auth: 'owner' });
 
@@ -1125,6 +1154,7 @@ function createApp(db, options = {}) {
     };
     db.prepare('UPDATE venues SET name = ?, active = ?, plan = ?, price_aud = ?, paid_until = ?, billing_notes = ? WHERE id = ?')
       .run(name, active, billing.plan, billing.price_aud, billing.paid_until, billing.billing_notes, v.id);
+    if (!active) hub.closeVenue(v.id); // disabling a venue cuts its live feeds immediately
     return venueOut(ownerVenue(v.id));
   }, { auth: 'owner' });
 
@@ -1479,7 +1509,7 @@ function createApp(db, options = {}) {
       'X-Accel-Buffering': 'no',
     });
     res.write(`data: ${JSON.stringify({ type: 'hello' })}\n\n`);
-    hub.add(e.id, res);
+    hub.add(e.id, res, { venueId: venue.id, version: venue.password_version });
     const ping = setInterval(() => res.write(': ping\n\n'), 25000);
     req.on('close', () => clearInterval(ping));
     return undefined;
@@ -2146,6 +2176,9 @@ function createApp(db, options = {}) {
     const actor = actorFrom(req);
     db.prepare(`INSERT INTO push_subs (venue_id, endpoint, actor, created_at) VALUES (?, ?, ?, ?)
                 ON CONFLICT(endpoint) DO UPDATE SET venue_id = excluded.venue_id, actor = excluded.actor`).run(venue.id, endpoint, actor, now());
+    // Keep at most the newest 50 per venue, so subscriptions can't pile up without bound.
+    db.prepare(`DELETE FROM push_subs WHERE venue_id = ? AND id NOT IN
+                (SELECT id FROM push_subs WHERE venue_id = ? ORDER BY id DESC LIMIT 50)`).run(venue.id, venue.id);
     return { ok: true };
   });
 
@@ -2326,12 +2359,14 @@ function createApp(db, options = {}) {
     const pw = password(body.password, 'New staff password');
     if (auth.verifyPassword(pw, venue.admin_password_hash)) throw new HttpError(400, 'Use a staff password that’s different from the venue admin password.');
     db.prepare('UPDATE venues SET password_hash = ?, password_version = password_version + 1 WHERE id = ?').run(auth.hashPassword(pw), venue.id);
+    hub.closeVenue(venue.id);
     return { ok: true };
   }, { auth: 'vadmin' });
 
   // Logs every staff phone out without changing the password (e.g. a lost phone).
   route('POST', /^\/api\/vadmin\/logout-devices$/, ({ venue }) => {
     db.prepare('UPDATE venues SET password_version = password_version + 1 WHERE id = ?').run(venue.id);
+    hub.closeVenue(venue.id);
     return { ok: true };
   }, { auth: 'vadmin' });
 
@@ -2715,6 +2750,11 @@ function createApp(db, options = {}) {
     const demos = setInterval(() => {
       deleteOldDemos(db);
       billingReminder();
+      // Close live feeds past their max age or whose session is no longer valid.
+      hub.sweep((e) => {
+        const v = db.prepare('SELECT active, password_version FROM venues WHERE id = ?').get(e.venueId);
+        return !!v && !!v.active && v.password_version === e.version;
+      });
     }, 3600 * 1000);
     first.unref();
     daily.unref();
