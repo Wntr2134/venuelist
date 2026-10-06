@@ -3,6 +3,8 @@
 Guest list and door app for live music venues, at https://guestlist.riderly.com.au. A side
 product of Riderly (riderly.com.au, the venue manager, "VMT"). Owner: Will.
 
+New to this repo, or asked to get caught up? Read `docs/onboarding.md` first.
+
 ## How work gets in
 - Work on a branch, open a pull request into `main`. Never push to `main`: only Will merges,
   and every merge to `main` deploys to production automatically (GitHub Actions).
