@@ -297,6 +297,30 @@ function slugPreview(name) {
     .replace(/-+$/g, '');
 }
 
+// ---------- photos ----------
+
+// Shrinks a photo on the phone before it's sent (max 900px, JPEG), so uploads stay small.
+function shrinkPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 900 / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.8));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('That photo couldn’t be read. Try taking it again.'));
+    };
+    img.src = url;
+  });
+}
+
 // ---------- manager override ----------
 
 function askManagerPin(reason) {

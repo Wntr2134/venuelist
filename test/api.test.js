@@ -1867,3 +1867,68 @@ test('red colours: off by default; on for one venue reaches its staff app, venue
   await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { set: { 'red-theme': false } });
   assert.equal((await c.call('GET', '/api/session')).data.venue.theme, null);
 });
+
+test('banned photos: off by default; door photo waits in memory for approval, then shows on matches and in the gallery', async () => {
+  const { c, admin, venue } = await onboard('Photo Hall');
+  const other = await onboard('Photo Other');
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 7)]);
+  const photo = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+  const shot = { name: 'Jake Smith', reason: 'Fighting, Oct 2026', photo };
+
+  assert.equal((await c.call('POST', '/api/banned/pending', shot)).status, 404, 'off until switched on');
+  assert.equal((await c.call('GET', '/api/banned/gallery')).status, 404);
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+
+  assert.equal((await c.call('POST', '/api/banned/pending', { ...shot, photo: 'data:image/jpeg;base64,aGVsbG8=' })).status, 400, 'not a real image');
+  assert.equal((await c.call('POST', '/api/banned/pending', { ...shot, photo: 'data:text/html;base64,PGgxPg==' })).status, 400);
+  const first = await c.call('POST', '/api/banned/pending', shot, { actor: 'Sam (Door 1)' });
+  assert.equal(first.status, 200);
+  assert.equal(appDb.prepare('SELECT COUNT(*) AS n FROM banned_photos').get().n, 0, 'nothing saved while it waits');
+
+  // The venue admin sees it waiting; nobody approves it within the hour, so it's gone.
+  let list = (await admin.call('GET', '/api/vadmin/banned')).data;
+  assert.equal(list.pending.length, 1);
+  assert.equal(list.pending[0].takenBy, 'Sam (Door 1)');
+  const pic = await fetch(base + list.pending[0].photo, { headers: { Cookie: Object.entries(admin.jar).map(([k, v]) => `${k}=${v}`).join('; ') } });
+  assert.equal(pic.headers.get('content-type'), 'image/jpeg');
+  assert.ok(Buffer.from(await pic.arrayBuffer()).equals(jpeg));
+  server.sweepPendingPhotos(Date.now() + 3601 * 1000);
+  assert.equal((await admin.call('GET', '/api/vadmin/banned')).data.pending.length, 0, 'purged after an hour');
+  assert.equal((await admin.call('POST', `/api/vadmin/banned/pending/${first.data.id}/approve`, {})).status, 404);
+
+  // Rejected: deleted.
+  const rej = (await c.call('POST', '/api/banned/pending', shot)).data;
+  assert.equal((await admin.call('DELETE', `/api/vadmin/banned/pending/${rej.id}`)).status, 200);
+  assert.equal((await admin.call('GET', '/api/vadmin/banned')).data.pending.length, 0);
+
+  // Approved: joins the banned list with its photo.
+  const ok = (await c.call('POST', '/api/banned/pending', shot)).data;
+  const appr = await admin.call('POST', `/api/vadmin/banned/pending/${ok.id}/approve`, {});
+  assert.equal(appr.status, 200, JSON.stringify(appr.data));
+  const check = (await c.call('GET', '/api/banned/check?name=Jake%20Smith')).data;
+  assert.equal(check.match, true);
+  assert.match(check.photo, /^\/api\/banned\/photo\/\d+$/);
+  const cookie = Object.entries(c.jar).map(([k, v]) => `${k}=${v}`).join('; ');
+  assert.equal((await fetch(base + check.photo, { headers: { Cookie: cookie } })).status, 200, 'door staff see it');
+  const otherCookie = Object.entries(other.c.jar).map(([k, v]) => `${k}=${v}`).join('; ');
+  assert.equal((await fetch(base + check.photo, { headers: { Cookie: otherCookie } })).status, 404, 'another venue can’t');
+  const gallery = (await c.call('GET', '/api/banned/gallery', undefined, { actor: 'Sam (Door 1)' })).data;
+  assert.deepEqual(gallery.map((g) => g.name), ['Jake Smith']);
+  list = (await admin.call('GET', '/api/vadmin/banned')).data;
+  assert.ok(list.log.some((l) => l.action === 'photo gallery viewed' && l.actor === 'Sam (Door 1)'), 'gallery views are logged');
+  assert.ok(list.log.some((l) => l.action === 'photo approved'));
+
+  // A manager code removes the photo; the entry stays.
+  const banId = check.photo.split('/').pop();
+  assert.equal((await c.call('DELETE', `/api/banned/photo/${banId}`, {})).data.code, 'override');
+  assert.equal((await c.call('DELETE', `/api/banned/photo/${banId}`, { overridePin: '0000' })).status, 403);
+  assert.equal((await c.call('DELETE', `/api/banned/photo/${banId}`, { overridePin: '2468' })).status, 200);
+  assert.equal((await c.call('GET', '/api/banned/check?name=Jake%20Smith')).data.photo, undefined);
+  assert.equal((await c.call('GET', '/api/banned/check?name=Jake%20Smith')).data.match, true, 'still banned');
+
+  // The venue admin can add one directly; it goes when the entry goes.
+  assert.equal((await admin.call('PUT', `/api/vadmin/banned/${banId}/photo`, { photo })).status, 200);
+  assert.equal(appDb.prepare('SELECT COUNT(*) AS n FROM banned_photos WHERE banned_id = ?').get(banId).n, 1);
+  await admin.call('DELETE', `/api/vadmin/banned/${banId}`);
+  assert.equal(appDb.prepare('SELECT COUNT(*) AS n FROM banned_photos WHERE banned_id = ?').get(banId).n, 0, 'photo deleted with the entry');
+});

@@ -26,6 +26,12 @@ const FEATURES = [
     what: 'The venue’s guest list, door screens, venue admin and contributor links turn red instead of amber. OUT and delete buttons turn orange so they don’t look like the main buttons.',
     added: '2026-10-06',
   },
+  {
+    key: 'banned-photos',
+    name: 'Banned list photos',
+    what: 'Door staff can take a photo of someone being refused entry. It waits in memory for 1 hour for the venue admin to approve (then it joins the banned list) or it is deleted. Door staff see the photo when a name matches, and can open a gallery of banned faces. A manager code can remove a photo. Staff compare by eye only: there is no automatic face matching.',
+    added: '2026-10-07',
+  },
 ];
 
 // Problems with a feature list, as readable strings (empty = fine). Used by the tests.

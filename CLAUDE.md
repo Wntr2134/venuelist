@@ -6,8 +6,11 @@ product of Riderly (riderly.com.au, the venue manager, "VMT"). Owner: Will.
 New to this repo, or asked to get caught up? Read `docs/onboarding.md` first.
 
 ## How work gets in
-- Work on a branch, open a pull request into `main`. Never push to `main`: only Will merges,
-  and every merge to `main` deploys to production automatically (GitHub Actions).
+- Work on a branch, open a pull request into `main`. Never push to `main` directly. Every merge to
+  `main` deploys to production automatically (GitHub Actions).
+- Who merges: sessions working under Will's own GitHub account (Wntr2134) may merge their own pull
+  request once its `test` check is green, then tell Will it's live. Everyone else's pull requests
+  wait for Will's review and approval (GitHub enforces this: only the repo admin can bypass).
 - Pull requests run the tests (`.github/workflows/test.yml`). Keep them green.
 - Never deploy by hand, never SSH to the droplet, never read or ask for the deploy secrets.
 
@@ -36,7 +39,9 @@ New to this repo, or asked to get caught up? Read `docs/onboarding.md` first.
 
 ## Rules that don't bend
 - Guest lists are personal information. No guest names in logs, emails to Riderly, the Riderly
-  API (`/api/v1`), analytics or third parties. The banned list is venue-admin only.
+  API (`/api/v1`), analytics or third parties. The banned list is venue-admin only, except that venues with the `banned-photos` feature let door
+  staff see a matching entry's photo and a logged gallery of photos. Staff compare faces by eye: never add
+  automatic face matching (biometric data under the Privacy Act).
 - Secrets never go in git (`mail.json`, `backup.json` are git-ignored on the server).
 - Times shown to people are Melbourne time; a venue's "day" rolls over at 6am.
 - Plain Australian English in the UI. No model names in commits or code.

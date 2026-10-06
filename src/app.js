@@ -2269,6 +2269,11 @@ function createApp(db, options = {}) {
     const e = getEvent(db, g.eventId);
     db.prepare('INSERT INTO push_alerts (venue_id, event_id, title, body, at) VALUES (?, ?, ?, ?, ?)')
       .run(venue.id, e.id, `★ VIP arrived: ${g.name}`, `${e.name} · checked in by ${actor}`, now());
+    pushToManagers(venue, actor);
+  }
+
+  // Wakes managers' phones (not the phone that caused it); each phone then fetches the alert itself.
+  function pushToManagers(venue, actor) {
     db.prepare('DELETE FROM push_alerts WHERE at < ?').run(new Date(Date.now() - 24 * 3600 * 1000).toISOString());
     const subs = db.prepare('SELECT * FROM push_subs WHERE venue_id = ? AND (actor IS NULL OR actor != ?)').all(venue.id, actor);
     for (const sub of subs) {
@@ -2329,12 +2334,21 @@ function createApp(db, options = {}) {
   };
   const banOut = (b) => ({ id: b.id, name: b.name, reason: b.reason, reviewAt: b.review_at, reviewDue: b.review_at <= venueDay(), createdAt: b.created_at, createdBy: b.created_by });
 
+  // Photo URL for a banned entry, when the venue has the photos feature and the entry has one.
+  function banPhotoUrl(venue, banId, base = '/api/banned/photo') {
+    if (!feature(venue, 'banned-photos')) return null;
+    return db.prepare('SELECT 1 FROM banned_photos WHERE banned_id = ? AND venue_id = ?').get(banId, venue.id) ? `${base}/${banId}` : null;
+  }
+
   function flagBanned(venue, guests) {
     const bans = db.prepare('SELECT * FROM banned WHERE venue_id = ?').all(venue.id);
     if (!bans.length) return guests;
     for (const g of guests) {
       const m = findMatch(bans, g.name);
-      if (m) g.banned = { reason: m.reason || null };
+      if (m) {
+        const photo = banPhotoUrl(venue, m.id);
+        g.banned = { reason: m.reason || null, ...(photo ? { photo } : {}) };
+      }
     }
     return guests;
   }
@@ -2343,13 +2357,19 @@ function createApp(db, options = {}) {
   route('GET', /^\/api\/banned\/check$/, ({ venue, query }) => {
     const name = str(query.get('name'), 'Name', { required: true, max: 120 });
     const m = findMatch(db.prepare('SELECT * FROM banned WHERE venue_id = ?').all(venue.id), name);
-    return m ? { match: true, reason: m.reason || null } : { match: false };
+    if (!m) return { match: false };
+    const photo = banPhotoUrl(venue, m.id);
+    return { match: true, reason: m.reason || null, ...(photo ? { photo } : {}) };
   });
 
   route('GET', /^\/api\/vadmin\/banned$/, ({ venue, req }) => {
     banLog(venue.id, 'viewed', null, banActor(req));
+    const photos = feature(venue, 'banned-photos');
     return {
-      entries: db.prepare('SELECT * FROM banned WHERE venue_id = ? ORDER BY name COLLATE NOCASE').all(venue.id).map(banOut),
+      photos,
+      pending: photos ? pendingFor(venue).map(pendingOut) : [],
+      entries: db.prepare('SELECT * FROM banned WHERE venue_id = ? ORDER BY name COLLATE NOCASE').all(venue.id)
+        .map((b) => ({ ...banOut(b), photo: photos ? banPhotoUrl(venue, b.id, '/api/vadmin/banned/photo') : null })),
       log: db.prepare('SELECT action, detail, actor, at FROM banned_log WHERE venue_id = ? ORDER BY id DESC LIMIT 40').all(venue.id),
       reviewMonths: BAN_REVIEW_MONTHS,
       graceDays: BAN_GRACE_DAYS,
@@ -2387,6 +2407,179 @@ function createApp(db, options = {}) {
     if (!b) throw new HttpError(404, 'Not found');
     db.prepare('DELETE FROM banned WHERE id = ?').run(b.id);
     banLog(venue.id, 'removed', b.name, banActor(req));
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
+  // ----- banned list photos (feature: banned-photos) -----
+  // Door staff take a photo; it waits in this server's memory (never the database, never a backup)
+  // for an hour. The venue admin approves it onto the banned list, or it's gone. Staff compare
+  // faces by eye: nothing here does automatic face matching.
+
+  const PENDING_MS = 3600 * 1000;
+  const pendingPhotos = new Map(); // id -> { venueId, name, reason, mime, data, by, at }
+  const sweepPending = (at = Date.now()) => {
+    for (const [id, p] of pendingPhotos) if (at - p.at > PENDING_MS) pendingPhotos.delete(id);
+  };
+  const pendingFor = (venue) => {
+    sweepPending();
+    return [...pendingPhotos.entries()].filter(([, p]) => p.venueId === venue.id).map(([id, p]) => ({ id, ...p }));
+  };
+  const pendingOut = (p) => ({
+    id: p.id, name: p.name, reason: p.reason, takenBy: p.by, takenAt: new Date(p.at).toISOString(),
+    expiresAt: new Date(p.at + PENDING_MS).toISOString(), photo: `/api/vadmin/banned/pending/${p.id}/photo`,
+  });
+
+  function photosOn(venue) {
+    if (!feature(venue, 'banned-photos')) throw new HttpError(404, 'Not found');
+  }
+
+  // A data URL from the phone (already shrunk there) → checked image bytes.
+  const MAGIC = { 'image/jpeg': [0xff, 0xd8, 0xff], 'image/png': [0x89, 0x50, 0x4e, 0x47], 'image/webp': [0x52, 0x49, 0x46, 0x46] };
+  function imageFrom(dataUrl) {
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(String(dataUrl || ''));
+    if (!m) throw new HttpError(400, 'The photo must be a JPEG, PNG or WebP image.');
+    const data = Buffer.from(m[2], 'base64');
+    if (data.length < 100) throw new HttpError(400, 'That photo looks empty.');
+    if (data.length > 700 * 1024) throw new HttpError(413, 'That photo is too big. Try again (the app shrinks it first).');
+    if (!MAGIC[m[1]].every((byte, i) => data[i] === byte)) throw new HttpError(400, 'That file isn’t a real image.');
+    if (m[1] === 'image/webp' && data.toString('ascii', 8, 12) !== 'WEBP') throw new HttpError(400, 'That file isn’t a real image.');
+    return { mime: m[1], data };
+  }
+
+  function sendImage(res, mime, data) {
+    res.writeHead(200, { 'Content-Type': mime, 'Content-Length': data.length, 'Cache-Control': 'no-store, private', 'Content-Disposition': 'inline' });
+    res.end(Buffer.from(data));
+  }
+
+  function savePhoto(venue, banId, img, by, approvedBy) {
+    db.prepare(`INSERT INTO banned_photos (banned_id, venue_id, mime, data, created_at, created_by, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(banned_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, created_at = excluded.created_at,
+                  created_by = excluded.created_by, approved_by = excluded.approved_by`)
+      .run(banId, venue.id, img.mime, img.data, now(), by, approvedBy || null);
+  }
+
+  const banOf = (venue, id) => {
+    const b = db.prepare('SELECT * FROM banned WHERE id = ? AND venue_id = ?').get(id, venue.id);
+    if (!b) throw new HttpError(404, 'Not found');
+    return b;
+  };
+
+  // Door: take a photo for the banned list. Held for an hour until the venue admin approves it.
+  route('POST', /^\/api\/banned\/pending$/, ({ venue, req, body }) => {
+    photosOn(venue);
+    const actor = actorFrom(req);
+    const name = str(body.name, 'Name', { required: true, max: 120 });
+    const reason = str(body.reason, 'Reason', { max: 200 }) || null;
+    const img = imageFrom(body.photo);
+    sweepPending();
+    if (pendingFor(venue).length >= 10) throw new HttpError(429, 'There are already 10 photos waiting. Ask your venue admin to approve or reject them first.');
+    if (pendingPhotos.size >= 60) throw new HttpError(503, 'Too many photos are waiting right now. Try again in a little while.');
+    const id = crypto.randomBytes(12).toString('base64url');
+    pendingPhotos.set(id, { venueId: venue.id, name, reason, mime: img.mime, data: img.data, by: actor, at: Date.now() });
+    banLog(venue.id, 'photo taken, waiting for approval', name, actor);
+    db.prepare('INSERT INTO push_alerts (venue_id, event_id, title, body, at) VALUES (?, NULL, ?, ?, ?)')
+      .run(venue.id, '📷 Banned-list photo waiting', 'Your venue admin has an hour to approve it, or it’s deleted.', now());
+    pushToManagers(venue, actor);
+    return { id, expiresAt: new Date(Date.now() + PENDING_MS).toISOString() };
+  });
+
+  // Door: everyone on the banned list who has a photo. Every look is logged.
+  route('GET', /^\/api\/banned\/gallery$/, ({ venue, req }) => {
+    photosOn(venue);
+    banLog(venue.id, 'photo gallery viewed', null, banActor(req));
+    return db.prepare(`SELECT b.* FROM banned b JOIN banned_photos p ON p.banned_id = b.id WHERE b.venue_id = ? ORDER BY b.name COLLATE NOCASE`)
+      .all(venue.id).map((b) => ({ id: b.id, name: b.name, reason: b.reason, photo: `/api/banned/photo/${b.id}` }));
+  });
+
+  route('GET', /^\/api\/banned\/photo\/(\d+)$/, ({ venue, params, res }) => {
+    photosOn(venue);
+    const p = db.prepare('SELECT mime, data FROM banned_photos WHERE banned_id = ? AND venue_id = ?').get(params[0], venue.id);
+    if (!p) throw new HttpError(404, 'Not found');
+    sendImage(res, p.mime, p.data);
+  });
+
+  // Door: a manager code removes a photo (the entry itself stays, and the venue admin manages it).
+  route('DELETE', /^\/api\/banned\/photo\/(\d+)$/, ({ venue, req, params, body }) => {
+    photosOn(venue);
+    const actor = actorFrom(req);
+    const b = banOf(venue, params[0]);
+    if (!canOverride(venue)) throw new HttpError(403, 'Removing a photo needs a manager code. Your venue admin can set codes up in venue admin.');
+    const approver = override(venue, req, body, 'Removing a banned-list photo needs a manager code.');
+    const r = db.prepare('DELETE FROM banned_photos WHERE banned_id = ?').run(b.id);
+    if (!r.changes) throw new HttpError(404, 'That photo has already gone.');
+    banLog(venue.id, 'photo removed with a manager code', `${b.name} (code: ${approver})`, actor);
+    return { ok: true };
+  });
+
+  route('GET', /^\/api\/vadmin\/banned\/photo\/(\d+)$/, ({ venue, params, res }) => {
+    photosOn(venue);
+    const p = db.prepare('SELECT mime, data FROM banned_photos WHERE banned_id = ? AND venue_id = ?').get(params[0], venue.id);
+    if (!p) throw new HttpError(404, 'Not found');
+    sendImage(res, p.mime, p.data);
+  }, { auth: 'vadmin' });
+
+  const pendingOf = (venue, id) => {
+    sweepPending();
+    const p = pendingPhotos.get(id);
+    if (!p || p.venueId !== venue.id) throw new HttpError(404, 'That photo has expired or was already dealt with.');
+    return p;
+  };
+
+  route('GET', /^\/api\/vadmin\/banned\/pending\/([^/]+)\/photo$/, ({ venue, params, res }) => {
+    photosOn(venue);
+    const p = pendingOf(venue, params[0]);
+    sendImage(res, p.mime, p.data);
+  }, { auth: 'vadmin' });
+
+  // Approve: onto an existing entry (entryId), or a new entry with this name and reason.
+  route('POST', /^\/api\/vadmin\/banned\/pending\/([^/]+)\/approve$/, ({ venue, req, params, body }) => {
+    photosOn(venue);
+    const p = pendingOf(venue, params[0]);
+    const actor = banActor(req);
+    let banId;
+    tx(db, () => {
+      if (body.entryId) {
+        banId = banOf(venue, body.entryId).id;
+      } else {
+        const name = str(body.name ?? p.name, 'Name', { required: true, max: 120 });
+        if (name.split(/\s+/).filter(Boolean).length < 2 && !body.singleName) {
+          throw new HttpError(400, 'Use their first name and surname, so the warning doesn’t fire for everyone with that first name.');
+        }
+        const t = now();
+        banId = Number(db.prepare('INSERT INTO banned (venue_id, name, reason, review_at, created_at, created_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(venue.id, name, str(body.reason ?? p.reason, 'Reason', { max: 200 }) || null, reviewDefault(), t, actor, t).lastInsertRowid);
+        banLog(venue.id, 'added', name, actor);
+      }
+      savePhoto(venue, banId, p, p.by, actor);
+    });
+    pendingPhotos.delete(params[0]);
+    banLog(venue.id, 'photo approved', `${banOf(venue, banId).name} (taken by ${p.by})`, actor);
+    return { ok: true, id: banId };
+  }, { auth: 'vadmin' });
+
+  route('DELETE', /^\/api\/vadmin\/banned\/pending\/([^/]+)$/, ({ venue, req, params }) => {
+    photosOn(venue);
+    const p = pendingOf(venue, params[0]);
+    pendingPhotos.delete(params[0]);
+    banLog(venue.id, 'photo rejected and deleted', `${p.name} (taken by ${p.by})`, banActor(req));
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
+  // Venue admin adds or replaces an entry's photo directly, or removes it.
+  route('PUT', /^\/api\/vadmin\/banned\/(\d+)\/photo$/, ({ venue, req, params, body }) => {
+    photosOn(venue);
+    const b = banOf(venue, params[0]);
+    const actor = banActor(req);
+    savePhoto(venue, b.id, imageFrom(body.photo), actor, actor);
+    banLog(venue.id, 'photo added', b.name, actor);
+    return { ok: true };
+  }, { auth: 'vadmin' });
+
+  route('DELETE', /^\/api\/vadmin\/banned\/(\d+)\/photo$/, ({ venue, req, params }) => {
+    photosOn(venue);
+    const b = banOf(venue, params[0]);
+    db.prepare('DELETE FROM banned_photos WHERE banned_id = ?').run(b.id);
+    banLog(venue.id, 'photo removed', b.name, banActor(req));
     return { ok: true };
   }, { auth: 'vadmin' });
 
@@ -2901,6 +3094,7 @@ function createApp(db, options = {}) {
   // assert that every non-public route refuses an unauthenticated request. No handler is exposed.
   server.routes = routes.map((r) => ({ method: r.method, source: r.pattern.source, auth: r.auth || 'venue' }));
   server.feature = feature;
+  server.sweepPendingPhotos = sweepPending;
   server.purgeExpired = purgeExpired;
   server.billingReminder = billingReminder;
   server.runBackup = runBackup;
@@ -2913,6 +3107,7 @@ function createApp(db, options = {}) {
     const demos = setInterval(() => {
       deleteOldDemos(db);
       billingReminder();
+      sweepPending();
       // Close live feeds past their max age or whose session is no longer valid.
       hub.sweep((e) => {
         const v = db.prepare('SELECT active, password_version FROM venues WHERE id = ?').get(e.venueId);

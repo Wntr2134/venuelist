@@ -39,7 +39,8 @@ GitHub enforces this, not just convention.
 
 - Work on your own branch and open a pull request into `main`. `main` is protected: no direct
   pushes, and a PR needs Will's approval and a green `test` check.
-- Every merge to `main` deploys to production automatically. Only Will merges.
+- Every merge to `main` deploys to production automatically. Your pull requests wait for Will's
+  approval; only sessions running under Will's own account merge their own.
 - Never SSH to the server, deploy by hand, or read or ask for any secrets or keys. You don't have
   them and don't need them.
 - Keep PRs small, one change each. Write the description in plain English for Will: what changed,
@@ -86,7 +87,8 @@ Never use a real venue's guests, the Toff's included, to test or demo changes.
 ## Security rules already built in (keep them true)
 
 - **Guest names are personal information.** Never put them in logs, emails to Riderly, the Riderly
-  API, analytics or third parties. The banned list is venue-admin only.
+  API, analytics or third parties. The banned list is venue-admin only, except that venues with the `banned-photos` feature let door
+  staff see a matching entry's photo and a logged gallery. Never add automatic face matching.
 - **Every mutation must be `Content-Type: application/json`.** This is a cross-site request guard.
 - **Every new route must declare the right `auth`.** A test enumerates every route and fails if a
   non-public one answers an anonymous caller.

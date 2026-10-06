@@ -966,6 +966,21 @@ small { font-size: max(0.8em, 12px); }
 .banned-flag { margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: rgba(var(--danger-rgb), 0.14); border: 1px solid rgba(var(--danger-rgb), 0.5); color: var(--danger-ink); font-size: 0.9rem; }
 .banned-flag strong { color: #ff8a95; }
 .door-row.banned { border-color: rgba(var(--danger-rgb), 0.6); border-left: 3px solid var(--danger); }
+/* Banned-list photos (feature: banned-photos) */
+.banned-flag:has(.ban-thumb) { display: flex; gap: 10px; align-items: center; }
+.ban-thumb { width: 52px; height: 52px; object-fit: cover; border-radius: 8px; flex: none; cursor: zoom-in; border: 1px solid rgba(var(--danger-rgb), 0.5); }
+.ban-photo { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; cursor: zoom-in; background: var(--bg-2); }
+.ban-photo-big { display: block; width: 100%; max-height: 60vh; object-fit: contain; border-radius: 10px; margin: 0 auto 10px; background: var(--bg-2); }
+.ban-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.ban-card { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); min-width: 0; }
+.ban-card strong { overflow-wrap: anywhere; }
+.ban-preview:empty { display: none; }
+.door-ban-tools { margin-top: 8px; }
+.ban-row-photo { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; flex: none; }
+.ban-pending { border: 1px solid rgba(240, 180, 80, 0.5); border-radius: 12px; padding: 10px; display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: start; }
+.ban-pending img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; }
+@media (max-width: 400px) { .ban-pending { grid-template-columns: 1fr; } .ban-pending img { width: 100%; height: auto; } }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .ban-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); }
 .ban-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .ban-row:last-child { border-bottom: none; }
