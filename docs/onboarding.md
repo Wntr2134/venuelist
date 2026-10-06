@@ -68,6 +68,21 @@ GitHub enforces this, not just convention.
 - **Tests** live in `test/api.test.js`. Each test starts the app in-process and calls it like a
   browser would.
 
+## New features ship switched off
+
+Will chooses which venues get anything new. Every new feature gets an entry in `src/features.js`
+(key, name, plain-English `what`, `added` date) in the same PR as the code, and the new behaviour
+is guarded with `feature(venue, KEY)` on the server and `hasFeature(KEY)` in the venue app. It's
+off for every venue until Will switches it on in /admin: per venue, for venues with Early access
+(the Toff has this, so it sees new things first), or for everyone. A test fails if code checks a
+feature that isn't listed. Bug fixes, security fixes and wording tweaks don't need a flag.
+
+## Testing: never on a real venue's guest list
+
+Try things on your local copy (`npm run dev`), the **Try the demo** sandbox (made-up guests,
+deleted after 3 hours), or **Riderly Test Room** on the live site if you need the Riderly sync.
+Never use a real venue's guests, the Toff's included, to test or demo changes.
+
 ## Security rules already built in (keep them true)
 
 - **Guest names are personal information.** Never put them in logs, emails to Riderly, the Riderly

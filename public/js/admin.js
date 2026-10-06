@@ -87,8 +87,9 @@ function renderLogin() {
 
 async function renderDashboard() {
   let data;
+  let feats;
   try {
-    data = await api('GET', '/api/owner/venues');
+    [data, feats] = await Promise.all([api('GET', '/api/owner/venues'), api('GET', '/api/owner/features')]);
   } catch (err) {
     if (err.status === 401) return renderLogin();
     return toast(err.message, 'error');
@@ -132,6 +133,7 @@ async function renderDashboard() {
     addForm,
     h('div', { class: 'page-head' }, h('h2', null, `Venues (${data.venues.length})`)),
     list,
+    featuresCard(feats),
     signupCard(data),
     mailCard(data),
     backupCard(data.backup),
@@ -185,9 +187,9 @@ function venueCard(v) {
         )
       ),
     billingBox(v),
+    featuresBox(v),
     h('div', { class: 'row wrap' },
       h('button', { class: 'btn btn-small', onclick: () => rename(v) }, 'Rename'),
-      h('button', { class: 'btn btn-small', onclick: () => colours(v) }, v.theme === 'red' ? 'Colours: red' : 'Colours'),
       h('button', { class: 'btn btn-small', onclick: () => toggle(v) }, v.status === 'disabled' ? 'Enable' : 'Disable'),
       h('button', { class: 'btn btn-small btn-ghost-danger', onclick: () => remove(v) }, 'Delete')
     )
@@ -367,6 +369,93 @@ async function newLink(v) {
   }
 }
 
+// ----- new features: off by default; per venue, early access, or everyone -----
+
+function featuresCard(f) {
+  const intro = h('p', { class: 'muted' }, 'New features start off for every venue. Venues with Early access get every new one automatically. Switch one on for everyone when it’s ready.');
+  if (!f.features.length) {
+    return h('div', { class: 'card stack' }, h('h2', null, '🧪 New features'), intro,
+      h('div', { class: 'empty' }, 'Nothing new yet. When a feature is added to the app it appears here, off for every venue until you switch it on.'),
+      f.earlyAccess.length ? h('p', { class: 'small muted' }, `Early access: ${f.earlyAccess.join(', ')}`) : null);
+  }
+  return h('div', { class: 'card stack' },
+    h('h2', null, '🧪 New features ', h('span', { class: 'badge' }, String(f.features.length))),
+    intro,
+    f.earlyAccess.length ? h('p', { class: 'small' }, h('strong', null, 'Early access: '), f.earlyAccess.join(', ')) : h('p', { class: 'small muted' }, 'No venues have early access yet. Tick it on a venue below.'),
+    h('div', { class: 'stack' }, f.features.map((x) => h('div', { class: 'reset-box' },
+      h('div', { class: 'reset-title' }, x.name, x.everyone ? h('span', { class: 'badge s-active' }, 'Everyone') : null),
+      h('div', { class: 'small' }, x.what),
+      h('div', { class: 'small muted' }, `Added ${fmtDate(x.added)}${x.by ? ` by ${x.by}` : ''} · `,
+        x.venuesOn.length ? `on for ${x.venuesOn.join(', ')}` : 'on for no venues yet'),
+      h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: x.everyone, onchange: (e) => setEveryone(x, e.target.checked) }),
+        h('span', null, 'On for everyone'))
+    )))
+  );
+}
+
+async function setEveryone(x, on) {
+  if (on && !(await confirmDialog(`Turn on “${x.name}” for every venue?`, 'Every venue gets it straight away, except any you’ve switched off by hand.', { confirmText: 'Turn on for everyone' }))) return renderDashboard();
+  try {
+    await api('PUT', `/api/owner/features/${encodeURIComponent(x.key)}`, { everyone: on });
+    toast(on ? `${x.name} is on for everyone` : `${x.name} is back to opt-in`, 'ok');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+  renderDashboard();
+}
+
+function featuresBox(v) {
+  return h('div', { class: 'reset-box' },
+    h('div', { class: 'reset-title' }, '🧪 New features ', v.earlyAccess ? h('span', { class: 'badge s-active' }, 'Early access') : null),
+    h('div', { class: 'small muted' }, v.earlyAccess ? 'Gets every new feature automatically.' : `${(v.features || []).length} on`),
+    h('div', { class: 'row wrap' }, h('button', { class: 'btn btn-small', onclick: () => editFeatures(v) }, 'Choose'))
+  );
+}
+
+async function editFeatures(v) {
+  let f;
+  try {
+    f = await api('GET', `/api/owner/venues/${v.id}/features`);
+  } catch (err) {
+    return toast(err.message, 'error');
+  }
+  const early = h('input', { type: 'checkbox', checked: f.earlyAccess });
+  const boxes = f.features.map((x) => ({ x, input: h('input', { type: 'checkbox', checked: x.on }) }));
+  const content = h('div', { class: 'stack' },
+    h('label', { class: 'check check-top' }, early,
+      h('span', null, h('strong', null, 'Early access'), h('br'), h('span', { class: 'small muted' }, 'Gets every new feature automatically, now and in future. Good for a venue helping you test.'))),
+    boxes.length
+      ? h('div', { class: 'stack' }, h('p', { class: 'small muted' }, 'Or pick features one by one. A tick you set here wins over early access and “on for everyone”.'),
+        boxes.map(({ x, input }) => h('label', { class: 'check check-top' }, input,
+          h('span', null, h('strong', null, x.name), x.override !== null ? h('span', { class: 'small muted' }, ' · set by hand') : null,
+            h('br'), h('span', { class: 'small muted' }, x.what)))))
+      : h('p', { class: 'small muted' }, 'No new features yet. Early access means this venue will get them as they arrive.')
+  );
+  const save = async (reset) => {
+    const set = {};
+    for (const { x, input } of boxes) {
+      if (reset) set[x.key] = null;
+      else if (input.checked !== x.on) set[x.key] = input.checked;
+    }
+    try {
+      await api('PUT', `/api/owner/venues/${v.id}/features`, { earlyAccess: early.checked, set });
+      m.close();
+      toast('Saved', 'ok');
+      renderDashboard();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+  const m = modal(`New features — ${v.name}`, content, {
+    actions: [
+      boxes.some(({ x }) => x.override !== null) ? h('button', { class: 'btn', onclick: () => save(true) }, 'Clear hand-set ticks') : null,
+      h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'),
+      h('button', { class: 'btn btn-primary', onclick: () => save(false) }, 'Save'),
+    ].filter(Boolean),
+  });
+}
+
 // ----- billing: who's paid up (invoices go out from Xero; this is the tracker) -----
 
 function billingBox(v) {
@@ -448,32 +537,6 @@ function rename(v) {
   };
   form.addEventListener('submit', submit);
   const m = modal('Rename venue', form, {
-    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, 'Save')],
-  });
-}
-
-// The venue's colour theme: its staff app, door screens, venue admin and contributor links.
-function colours(v) {
-  const select = h('select', { name: 'theme' },
-    h('option', { value: '' }, 'Standard (amber)'),
-    h('option', { value: 'red' }, 'Red')
-  );
-  select.value = v.theme || '';
-  const form = h('form', { class: 'stack' },
-    field('Colour theme', select, 'Changes this venue’s guest list, door screens, venue admin and contributor links. With red, the OUT and delete buttons turn orange so they don’t look like the main buttons.'));
-  const submit = async (e) => {
-    if (e) e.preventDefault();
-    try {
-      await api('PUT', `/api/owner/venues/${v.id}`, { theme: select.value });
-      m.close();
-      toast('Saved', 'ok');
-      renderDashboard();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  };
-  form.addEventListener('submit', submit);
-  const m = modal(`Colours — ${v.name}`, form, {
     actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, 'Save')],
   });
 }

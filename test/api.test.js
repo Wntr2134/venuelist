@@ -1780,31 +1780,90 @@ test('every non-public route refuses an unauthenticated request', async () => {
   assert.ok(checked >= 50, `expected to cover the whole protected surface, only checked ${checked}`);
 });
 
-test('colour theme: owner sets it per venue; only that venue\'s pages get it', async () => {
+test('the new-features list is well formed, and code only checks features that are on it', () => {
+  const { FEATURES, validate } = require('../src/features');
+  assert.deepEqual(validate(FEATURES), [], 'fix src/features.js');
+  const known = new Set(FEATURES.map((f) => f.key));
+  const files = [
+    ...fs.readdirSync(path.join(__dirname, '..', 'src')).map((f) => path.join('src', f)),
+    ...fs.readdirSync(path.join(__dirname, '..', 'public', 'js')).map((f) => path.join('public', 'js', f)),
+  ].filter((f) => f.endsWith('.js'));
+  const used = [];
+  for (const f of files) {
+    const text = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    for (const m of text.matchAll(/\b(?:feature\(\s*[\w.]+\s*,|hasFeature\()\s*['"`]([^'"`]+)['"`]/g)) used.push([f, m[1]]);
+  }
+  for (const [f, key] of used) assert.ok(known.has(key), `${f} checks feature "${key}", which isn't in src/features.js`);
+  assert.deepEqual(validate([{ key: 'Bad Key', name: '', what: 'x', added: 'soon' }]).length, 4);
+});
+
+test('new features: off by default, on with early access or for everyone, and a hand-set tick wins', async () => {
+  const feats = [
+    { key: 'shiny-thing', name: 'Shiny thing', what: 'Adds a shiny thing to the door screen.', added: '2026-10-07' },
+    { key: 'other-thing', name: 'Other thing', what: 'Changes another thing for staff.', added: '2026-10-07' },
+  ];
+  const db = openDb(':memory:');
+  const app = createApp(db, { purgeTimer: false, features: feats, setupCode: 'CODE123456' });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const o = client(() => url);
+  try {
+    await o.call('POST', '/api/owner/setup', { password: 'ownerpass1', setupCode: 'CODE123456' });
+    const mk = async (name) => {
+      const r = await o.call('POST', '/api/owner/venues', { name });
+      const staff = client(() => url);
+      await staff.call('POST', `/api/setup/${r.data.setupPath.split('/').pop()}`, { password: 'staffpass1', adminPassword: 'adminpass1' });
+      return { id: r.data.venue.id, staff };
+    };
+    const toff = await mk('The Toff');
+    const ball = await mk('The Ball');
+    const on = async (v) => (await v.staff.call('GET', '/api/session')).data.venue.features;
+
+    assert.deepEqual(await on(toff), [], 'off by default');
+    assert.equal((await toff.staff.call('PUT', `/api/owner/venues/${toff.id}/features`, { earlyAccess: true })).status, 401, 'owner only');
+
+    await o.call('PUT', `/api/owner/venues/${toff.id}/features`, { earlyAccess: true });
+    assert.deepEqual(await on(toff), ['shiny-thing', 'other-thing'], 'early access gets everything');
+    assert.deepEqual(await on(ball), [], 'other venues stay off');
+
+    await o.call('PUT', `/api/owner/venues/${toff.id}/features`, { set: { 'other-thing': false } });
+    assert.deepEqual(await on(toff), ['shiny-thing'], 'a hand-set off beats early access');
+
+    await o.call('PUT', '/api/owner/features/shiny-thing', { everyone: true });
+    assert.deepEqual(await on(ball), ['shiny-thing'], 'on for everyone');
+    await o.call('PUT', `/api/owner/venues/${ball.id}/features`, { set: { 'shiny-thing': false } });
+    assert.deepEqual(await on(ball), [], 'a hand-set off beats everyone');
+    await o.call('PUT', `/api/owner/venues/${ball.id}/features`, { set: { 'shiny-thing': null } });
+    assert.deepEqual(await on(ball), ['shiny-thing'], 'clearing the hand-set tick goes back to the default');
+
+    assert.equal((await o.call('PUT', `/api/owner/venues/${ball.id}/features`, { set: { nope: true } })).status, 400);
+    assert.equal((await o.call('PUT', '/api/owner/features/nope', { everyone: true })).status, 404);
+    const list = (await o.call('GET', '/api/owner/features')).data;
+    assert.deepEqual(list.earlyAccess, ['The Toff']);
+    assert.deepEqual(list.features.find((x) => x.key === 'shiny-thing').venuesOn.sort(), ['The Ball', 'The Toff']);
+    const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(toff.id);
+    assert.equal(app.feature(v, 'shiny-thing'), true);
+    assert.throws(() => app.feature(v, 'not-listed'), /add it to src\/features\.js/);
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});
+
+test('red colours: off by default; on for one venue reaches its staff app, venue admin and contributor links only', async () => {
   const { c, venue, admin } = await onboard('Red Room');
   const other = await onboard('Amber Hall');
-  const id = venue.id;
   assert.equal((await c.call('GET', '/api/session')).data.venue.theme, null, 'standard by default');
+  assert.equal((await c.call('PUT', `/api/owner/venues/${venue.id}/features`, { set: { 'red-theme': true } })).status, 401, 'owner only');
+  assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { set: { 'red-theme': true } })).status, 200);
 
-  assert.equal((await owner.call('PUT', `/api/owner/venues/${id}`, { theme: 'purple' })).status, 400);
-  assert.equal((await client().call('PUT', `/api/owner/venues/${id}`, { theme: 'red' })).status, 401);
-  assert.equal((await c.call('PUT', `/api/owner/venues/${id}`, { theme: 'red' })).status, 401, 'venue staff cannot set it');
-  const r = await owner.call('PUT', `/api/owner/venues/${id}`, { theme: 'red' });
-  assert.equal(r.status, 200);
-  assert.equal(r.data.theme, 'red');
-
-  // The venue's staff app, venue admin and contributor links all see it; other venues don't.
   assert.equal((await c.call('GET', '/api/session')).data.venue.theme, 'red');
   assert.equal((await admin.call('GET', `/api/vadmin/session/${venue.slug}`)).data.venue.theme, 'red');
-  assert.equal((await other.c.call('GET', '/api/session')).data.venue.theme, null);
+  assert.equal((await other.c.call('GET', '/api/session')).data.venue.theme, null, 'other venues stay amber');
   const ev = (await c.call('POST', '/api/events', { name: 'Loud Night', date: '2026-10-10', overridePin: '2468' })).data;
   const contrib = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Promoter' })).data;
   assert.equal((await client().call('GET', `/api/c/${contrib.token}`)).data.theme, 'red');
-  assert.equal((await owner.call('GET', '/api/owner/venues')).data.venues.find((v) => v.id === id).theme, 'red');
 
-  // Other edits leave it alone; an empty value puts it back to standard.
-  await owner.call('PUT', `/api/owner/venues/${id}`, { name: 'The Red Room' });
-  assert.equal((await c.call('GET', '/api/session')).data.venue.theme, 'red');
-  await owner.call('PUT', `/api/owner/venues/${id}`, { theme: '' });
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { set: { 'red-theme': false } });
   assert.equal((await c.call('GET', '/api/session')).data.venue.theme, null);
 });

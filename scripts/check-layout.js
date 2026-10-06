@@ -122,11 +122,11 @@ async function main() {
   })).json();
   demo.setupPath = added.setupPath;
   if (THEME) {
-    // Check a venue colour theme: the demo venue's pages (staff app, door, contributor, venue admin) use it.
+    // Check a venue colour theme (a feature in src/features.js): switch it on for the demo venue.
     const owner = { 'Content-Type': 'application/json', Cookie: demo.ownerCookie };
     const { venues } = await (await fetch(`${demo.base}/api/owner/venues`, { headers: owner })).json();
     const v = venues.find((x) => x.slug === 'velvet-room');
-    const r = await fetch(`${demo.base}/api/owner/venues/${v.id}`, { method: 'PUT', headers: owner, body: JSON.stringify({ theme: THEME }) });
+    const r = await fetch(`${demo.base}/api/owner/venues/${v.id}/features`, { method: 'PUT', headers: owner, body: JSON.stringify({ set: { [`${THEME}-theme`]: true } }) });
     if (!r.ok) throw new Error(`Theme "${THEME}": ${(await r.json()).error}`);
   }
   const browser = await chromium.launch();

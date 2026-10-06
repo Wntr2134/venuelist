@@ -1,0 +1,51 @@
+'use strict';
+
+// New features: anything that changes how the app behaves beyond what venues already have.
+//
+// Every new feature ships OFF for every venue. Will turns it on in /admin → New features:
+// per venue, for every venue with "Early access" ticked (they get all new features
+// automatically), or for everyone once it's ready.
+//
+// Adding one: add an entry here in the same pull request as the code, then guard the new
+// behaviour with feature(venue, KEY) on the server or hasFeature(KEY) in the venue app.
+// A test fails if code checks a key that isn't listed here.
+//   key    lower-case-with-dashes, never reused or renamed (it's stored per venue)
+//   name   short name Will sees in /admin
+//   what   plain English: what changes for staff, guests or contributors when it's on
+//   added  YYYY-MM-DD, the date it was merged
+//   by     optional: who built it
+//
+// When a feature is on for everyone and will stay that way, delete its entry and its checks
+// (it becomes part of the base app). Saved per-venue settings for old keys are ignored.
+
+const FEATURES = [
+  // { key: 'example-thing', name: 'Example thing', what: 'What staff will notice.', added: '2026-10-07' },
+  {
+    key: 'red-theme',
+    name: 'Red colours',
+    what: 'The venue’s guest list, door screens, venue admin and contributor links turn red instead of amber. OUT and delete buttons turn orange so they don’t look like the main buttons.',
+    added: '2026-10-06',
+  },
+];
+
+// Problems with a feature list, as readable strings (empty = fine). Used by the tests.
+function validate(list) {
+  const problems = [];
+  const seen = new Set();
+  for (const [i, f] of list.entries()) {
+    const at = `features[${i}]${f && f.key ? ` (${f.key})` : ''}`;
+    if (!f || typeof f !== 'object') {
+      problems.push(`${at} is not an object`);
+      continue;
+    }
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(f.key || '')) problems.push(`${at}: key must be lower-case-with-dashes`);
+    if (seen.has(f.key)) problems.push(`${at}: key is used twice`);
+    seen.add(f.key);
+    if (!f.name || String(f.name).length > 60) problems.push(`${at}: needs a name (60 characters max)`);
+    if (!f.what || String(f.what).length < 10) problems.push(`${at}: needs a plain-English "what" saying what changes`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f.added || '')) problems.push(`${at}: "added" must be a YYYY-MM-DD date`);
+  }
+  return problems;
+}
+
+module.exports = { FEATURES, validate };
