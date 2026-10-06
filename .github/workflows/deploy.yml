@@ -34,19 +34,21 @@ jobs:
     # use. So a collaborator's branch, or a workflow they write on it, can never read the SSH key.
     environment: production
     steps:
-      # Until the DEPLOY_* secrets are added, skip quietly instead of failing.
+      # A missing secret fails the run (red), so a deploy that didn't happen never looks green.
       - name: Check deploy secrets
         id: check
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
-          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_SSH_KEY" ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::Deploy skipped: add DEPLOY_HOST and DEPLOY_SSH_KEY secrets to enable it."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+          missing=""
+          [ -n "$DEPLOY_HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$DEPLOY_SSH_KEY" ] || missing="$missing DEPLOY_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Not deployed: the production environment is missing:$missing (Settings → Environments → production)."
+            exit 1
           fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Deploy to droplet
         if: steps.check.outputs.ready == 'true'
