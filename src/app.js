@@ -2377,29 +2377,56 @@ function createApp(db, options = {}) {
     };
   }, { auth: 'vadmin' });
 
-  route('POST', /^\/api\/vadmin\/banned$/, ({ venue, req, body }) => {
-    const actor = banActor(req);
-    const name = str(body.name, 'Name', { required: true, max: 120 });
+  // A banned entry's name. Blank is allowed only when the venue admin says "no name" (we don't
+  // know who it is), and only with a photo, so staff have something to recognise. A blank name
+  // never matches anyone on a guest list (src/banned.js), so these show only in the gallery.
+  const shownName = (n) => n || 'Name unknown';
+  function banNameFrom(venue, body, fallback = '') {
+    if (body.noName) {
+      photosOn(venue);
+      return '';
+    }
+    const name = str(body.name ?? fallback, 'Name', { max: 120 });
+    if (!name) throw new HttpError(400, 'Enter their name, or tick “No name” if you don’t know it.');
     if (name.split(/\s+/).filter(Boolean).length < 2 && !body.singleName) {
       throw new HttpError(400, 'Use their first name and surname, so the warning doesn’t fire for everyone with that first name.');
     }
+    return name;
+  }
+
+  route('POST', /^\/api\/vadmin\/banned$/, ({ venue, req, body }) => {
+    const actor = banActor(req);
+    const name = banNameFrom(venue, body);
+    const img = body.photo ? (photosOn(venue), imageFrom(body.photo)) : null;
+    if (!name && !img) throw new HttpError(400, 'Someone with no name needs a photo, so door staff can recognise them.');
     const t = now();
-    const info = db.prepare('INSERT INTO banned (venue_id, name, reason, review_at, created_at, created_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(venue.id, name, str(body.reason, 'Reason', { max: 200 }) || null, body.reviewAt ? dateStr(body.reviewAt) : reviewDefault(), t, actor, t);
-    banLog(venue.id, 'added', name, actor);
-    return banOut(db.prepare('SELECT * FROM banned WHERE id = ?').get(Number(info.lastInsertRowid)));
+    const id = tx(db, () => {
+      const info = db.prepare('INSERT INTO banned (venue_id, name, reason, review_at, created_at, created_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(venue.id, name, str(body.reason, 'Reason', { max: 200 }) || null, body.reviewAt ? dateStr(body.reviewAt) : reviewDefault(), t, actor, t);
+      const newId = Number(info.lastInsertRowid);
+      if (img) savePhoto(venue, newId, img, actor, actor);
+      return newId;
+    });
+    banLog(venue.id, 'added', `${shownName(name)}${img ? ' (with photo)' : ''}`, actor);
+    return banOut(db.prepare('SELECT * FROM banned WHERE id = ?').get(id));
   }, { auth: 'vadmin' });
 
   route('PUT', /^\/api\/vadmin\/banned\/(\d+)$/, ({ venue, req, params, body }) => {
     const b = db.prepare('SELECT * FROM banned WHERE id = ? AND venue_id = ?').get(params[0], venue.id);
     if (!b) throw new HttpError(404, 'Not found');
     const actor = banActor(req);
+    const renaming = body.name !== undefined || body.noName;
     const next = {
+      name: renaming ? banNameFrom(venue, body) : b.name,
       reason: body.reason !== undefined ? str(body.reason, 'Reason', { max: 200 }) || null : b.reason,
       review_at: body.renew ? reviewDefault() : body.reviewAt ? dateStr(body.reviewAt) : b.review_at,
     };
-    db.prepare('UPDATE banned SET reason = ?, review_at = ?, updated_at = ? WHERE id = ?').run(next.reason, next.review_at, now(), b.id);
-    banLog(venue.id, body.renew ? 'renewed' : 'edited', b.name, actor);
+    if (!next.name && !db.prepare('SELECT 1 FROM banned_photos WHERE banned_id = ?').get(b.id)) {
+      throw new HttpError(400, 'Someone with no name needs a photo, so door staff can recognise them.');
+    }
+    db.prepare('UPDATE banned SET name = ?, reason = ?, review_at = ?, updated_at = ? WHERE id = ?').run(next.name, next.reason, next.review_at, now(), b.id);
+    banLog(venue.id, body.renew ? 'renewed' : renaming && next.name !== b.name ? 'named' : 'edited',
+      renaming && next.name !== b.name ? `${shownName(b.name)} → ${shownName(next.name)}` : shownName(b.name), actor);
     return banOut(db.prepare('SELECT * FROM banned WHERE id = ?').get(b.id));
   }, { auth: 'vadmin' });
 
@@ -2407,7 +2434,7 @@ function createApp(db, options = {}) {
     const b = db.prepare('SELECT * FROM banned WHERE id = ? AND venue_id = ?').get(params[0], venue.id);
     if (!b) throw new HttpError(404, 'Not found');
     db.prepare('DELETE FROM banned WHERE id = ?').run(b.id);
-    banLog(venue.id, 'removed', b.name, banActor(req));
+    banLog(venue.id, 'removed', shownName(b.name), banActor(req));
     return { ok: true };
   }, { auth: 'vadmin' });
 
@@ -2469,7 +2496,7 @@ function createApp(db, options = {}) {
   route('POST', /^\/api\/banned\/pending$/, ({ venue, req, body }) => {
     photosOn(venue);
     const actor = actorFrom(req);
-    const name = str(body.name, 'Name', { required: true, max: 120 });
+    const name = str(body.name, 'Name', { max: 120 }); // optional: the venue admin can add it later
     const reason = str(body.reason, 'Reason', { max: 200 }) || null;
     const img = imageFrom(body.photo);
     sweepPending();
@@ -2477,7 +2504,7 @@ function createApp(db, options = {}) {
     if (pendingPhotos.size >= 60) throw new HttpError(503, 'Too many photos are waiting right now. Try again in a little while.');
     const id = crypto.randomBytes(12).toString('base64url');
     pendingPhotos.set(id, { venueId: venue.id, name, reason, mime: img.mime, data: img.data, by: actor, at: Date.now() });
-    banLog(venue.id, 'photo taken, waiting for approval', name, actor);
+    banLog(venue.id, 'photo taken, waiting for approval', shownName(name), actor);
     db.prepare('INSERT INTO push_alerts (venue_id, event_id, title, body, at) VALUES (?, NULL, ?, ?, ?)')
       .run(venue.id, '📷 Banned-list photo waiting', 'Your venue admin has an hour to approve it, or it’s deleted.', now());
     pushToManagers(venue, actor);
@@ -2506,9 +2533,10 @@ function createApp(db, options = {}) {
     const b = banOf(venue, params[0]);
     if (!canOverride(venue)) throw new HttpError(403, 'Removing a photo needs a manager code. Your venue admin can set codes up in venue admin.');
     const approver = override(venue, req, body, 'Removing a banned-list photo needs a manager code.');
+    if (!b.name) throw new HttpError(409, 'This person has no name on the list, so their photo is all staff have. Ask your venue admin to add a name first, or remove the whole entry.');
     const r = db.prepare('DELETE FROM banned_photos WHERE banned_id = ?').run(b.id);
     if (!r.changes) throw new HttpError(404, 'That photo has already gone.');
-    banLog(venue.id, 'photo removed with a manager code', `${b.name} (code: ${approver})`, actor);
+    banLog(venue.id, 'photo removed with a manager code', `${shownName(b.name)} (code: ${approver})`, actor);
     return { ok: true };
   });
 
@@ -2542,19 +2570,16 @@ function createApp(db, options = {}) {
       if (body.entryId) {
         banId = banOf(venue, body.entryId).id;
       } else {
-        const name = str(body.name ?? p.name, 'Name', { required: true, max: 120 });
-        if (name.split(/\s+/).filter(Boolean).length < 2 && !body.singleName) {
-          throw new HttpError(400, 'Use their first name and surname, so the warning doesn’t fire for everyone with that first name.');
-        }
+        const name = banNameFrom(venue, body, p.name);
         const t = now();
         banId = Number(db.prepare('INSERT INTO banned (venue_id, name, reason, review_at, created_at, created_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(venue.id, name, str(body.reason ?? p.reason, 'Reason', { max: 200 }) || null, reviewDefault(), t, actor, t).lastInsertRowid);
-        banLog(venue.id, 'added', name, actor);
+        banLog(venue.id, 'added', shownName(name), actor);
       }
       savePhoto(venue, banId, p, p.by, actor);
     });
     pendingPhotos.delete(params[0]);
-    banLog(venue.id, 'photo approved', `${banOf(venue, banId).name} (taken by ${p.by})`, actor);
+    banLog(venue.id, 'photo approved', `${shownName(banOf(venue, banId).name)} (taken by ${p.by})`, actor);
     return { ok: true, id: banId };
   }, { auth: 'vadmin' });
 
@@ -2562,7 +2587,7 @@ function createApp(db, options = {}) {
     photosOn(venue);
     const p = pendingOf(venue, params[0]);
     pendingPhotos.delete(params[0]);
-    banLog(venue.id, 'photo rejected and deleted', `${p.name} (taken by ${p.by})`, banActor(req));
+    banLog(venue.id, 'photo rejected and deleted', `${shownName(p.name)} (taken by ${p.by})`, banActor(req));
     return { ok: true };
   }, { auth: 'vadmin' });
 
@@ -2572,15 +2597,16 @@ function createApp(db, options = {}) {
     const b = banOf(venue, params[0]);
     const actor = banActor(req);
     savePhoto(venue, b.id, imageFrom(body.photo), actor, actor);
-    banLog(venue.id, 'photo added', b.name, actor);
+    banLog(venue.id, 'photo added', shownName(b.name), actor);
     return { ok: true };
   }, { auth: 'vadmin' });
 
   route('DELETE', /^\/api\/vadmin\/banned\/(\d+)\/photo$/, ({ venue, req, params }) => {
     photosOn(venue);
     const b = banOf(venue, params[0]);
+    if (!b.name) throw new HttpError(409, 'This person has no name, so the photo is all staff have. Add a name first, or remove the whole entry.');
     db.prepare('DELETE FROM banned_photos WHERE banned_id = ?').run(b.id);
-    banLog(venue.id, 'photo removed', b.name, banActor(req));
+    banLog(venue.id, 'photo removed', shownName(b.name), banActor(req));
     return { ok: true };
   }, { auth: 'vadmin' });
 
@@ -2733,7 +2759,7 @@ function createApp(db, options = {}) {
     const lapse = new Date(Date.parse(`${venueDay(at.getTime())}T00:00:00Z`) - BAN_GRACE_DAYS * 86400000).toISOString().slice(0, 10);
     for (const b of db.prepare('SELECT * FROM banned WHERE review_at < ?').all(lapse)) {
       db.prepare('DELETE FROM banned WHERE id = ?').run(b.id);
-      banLog(b.venue_id, 'lapsed', `${b.name} (not renewed after review)`, 'Riderly');
+      banLog(b.venue_id, 'lapsed', `${b.name || 'Name unknown'} (not renewed after review)`, 'Riderly');
     }
     let purged = 0;
     // The door-tap cache can hold guest names in its stored responses; keep it short.

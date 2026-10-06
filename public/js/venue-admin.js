@@ -350,28 +350,33 @@ function bannedCard() {
       }
       uploadInput.value = '';
     });
+    const nameInput = h('input', { name: 'name', required: true, maxlength: '120', placeholder: 'First name and surname' });
+    const noName = h('input', { type: 'checkbox', name: 'noName' });
+    noName.addEventListener('change', () => {
+      nameInput.disabled = noName.checked;
+      nameInput.required = !noName.checked;
+      if (noName.checked) nameInput.value = '';
+    });
     const form = h('form', { class: 'stack' },
       h('div', { class: 'grid-2' },
-        field('Full name', h('input', { name: 'name', required: true, maxlength: '120', placeholder: 'First name and surname' })),
+        field('Full name', nameInput),
         field('Reason (staff see this)', h('input', { name: 'reason', maxlength: '200', placeholder: 'e.g. Violence, Feb 2026' }))
       ),
+      r.photos ? h('label', { class: 'check' }, noName,
+        h('span', null, 'No name: we don’t know who this is (needs a photo)')) : null,
       r.photos ? h('div', { class: 'row wrap ban-upload' }, uploadInput,
-        h('button', { type: 'button', class: 'btn', onclick: () => uploadInput.click() }, '⬆️ Upload photo (optional)'), newPreview) : null,
+        h('button', { type: 'button', class: 'btn', onclick: () => uploadInput.click() }, '⬆️ Upload photo'), newPreview) : null,
       h('button', { class: 'btn btn-primary', type: 'submit' }, 'Add to banned list')
     );
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!form.reportValidity()) return;
+      if (noName.checked && !newPhoto) return toast('Someone with no name needs a photo, so door staff can recognise them. Upload one first.', 'error', 6000);
+      const d = formData(form);
       try {
-        const added = await api('POST', '/api/vadmin/banned', formData(form));
-        if (newPhoto) {
-          try {
-            await api('PUT', `/api/vadmin/banned/${added.id}/photo`, { photo: newPhoto });
-          } catch (err) {
-            toast(`Added, but the photo didn’t upload: ${err.message} Use “Upload photo” on the entry to try again.`, 'error', 8000);
-            return load();
-          }
-        }
+        await api('POST', '/api/vadmin/banned', {
+          name: noName.checked ? undefined : d.name, noName: noName.checked || undefined, reason: d.reason, photo: newPhoto || undefined,
+        });
         toast(newPhoto ? 'Added with photo' : 'Added', 'ok');
         load();
       } catch (err) {
@@ -406,18 +411,46 @@ function bannedCard() {
       input.click();
       setTimeout(() => input.remove(), 60000);
     };
+    // Found out who a nameless entry is: add their name (they then match guest lists too).
+    const nameEntry = (b) => {
+      const input = h('input', { required: true, maxlength: '120', placeholder: 'First name and surname', autocomplete: 'off' });
+      const f = h('form', { class: 'stack' }, b.photo ? h('img', { src: b.photo, class: 'ban-photo-big', alt: 'Photo on the banned list' }) : null,
+        field('Full name', input, 'Once it has a name, the door also gets a warning if they’re on a guest list.'));
+      const save = async (e) => {
+        if (e) e.preventDefault();
+        if (!f.reportValidity()) return;
+        try {
+          await api('PUT', `/api/vadmin/banned/${b.id}`, { name: input.value });
+          m.close();
+          toast('Name added', 'ok');
+          load();
+        } catch (err) {
+          toast(err.message, 'error', 6000);
+        }
+      };
+      f.addEventListener('submit', save);
+      const m = modal('Add their name', f, { actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: save }, 'Save')] });
+      setTimeout(() => input.focus(), 50);
+    };
     const pending = (r.pending || []).map((p) => {
-      const nameIn = h('input', { value: p.name, maxlength: '120', 'aria-label': 'Full name' });
+      const nameIn = h('input', { value: p.name, maxlength: '120', placeholder: 'Full name', 'aria-label': 'Full name', disabled: !p.name });
+      const unknown = h('input', { type: 'checkbox', checked: !p.name });
+      unknown.addEventListener('change', () => {
+        nameIn.disabled = unknown.checked;
+        if (!unknown.checked) nameIn.focus();
+      });
       const reasonIn = h('input', { value: p.reason || '', maxlength: '200', placeholder: 'Reason', 'aria-label': 'Reason' });
       return h('div', { class: 'ban-pending' },
         h('img', { src: p.photo, alt: `Photo taken by ${p.takenBy}` }),
         h('div', { class: 'stack' },
           h('div', { class: 'small muted' }, `Taken by ${p.takenBy} · ${fmtDateTime(p.takenAt)} · deleted ${fmtDateTime(p.expiresAt)} unless approved`),
-          nameIn, reasonIn,
+          nameIn,
+          h('label', { class: 'check' }, unknown, h('span', null, 'No name: we don’t know who this is')),
+          reasonIn,
           h('div', { class: 'row wrap' },
             h('button', { class: 'btn btn-small btn-primary', onclick: async () => {
               try {
-                await api('POST', `/api/vadmin/banned/pending/${encodeURIComponent(p.id)}/approve`, { name: nameIn.value, reason: reasonIn.value });
+                await api('POST', `/api/vadmin/banned/pending/${encodeURIComponent(p.id)}/approve`, unknown.checked ? { noName: true, reason: reasonIn.value } : { name: nameIn.value, reason: reasonIn.value });
                 toast('Added to the banned list with the photo', 'ok');
                 load();
               } catch (err) {
@@ -438,15 +471,16 @@ function bannedCard() {
       );
     });
     const rows = r.entries.map((b) => h('li', { class: 'ban-row' },
-      b.photo ? h('img', { src: b.photo, class: 'ban-row-photo', alt: `Photo of ${b.name}` }) : null,
+      b.photo ? h('img', { src: b.photo, class: 'ban-row-photo', alt: b.name ? `Photo of ${b.name}` : 'Photo of someone on the banned list' }) : null,
       h('div', null,
-        h('strong', null, b.name), b.reason ? h('span', { class: 'muted' }, ` · ${b.reason}`) : null,
+        b.name ? h('strong', null, b.name) : h('strong', { class: 'muted' }, 'Name unknown'), b.reason ? h('span', { class: 'muted' }, ` · ${b.reason}`) : null,
         h('div', { class: 'small muted' }, `Added by ${b.createdBy} · review by ${fmtDate(b.reviewAt)}`, b.reviewDue ? h('span', { class: 'badge badge-warn' }, ' Review due') : null)
       ),
       h('div', { class: 'row wrap' },
         h('button', { class: 'btn btn-small', onclick: () => act('PUT', b, { renew: true }, 'Renewed for 12 months') }, 'Renew'),
+        !b.name ? h('button', { class: 'btn btn-small btn-primary', onclick: () => nameEntry(b) }, 'Add name') : null,
         r.photos ? h('button', { class: 'btn btn-small', onclick: () => pickPhoto(b) }, b.photo ? '⬆️ Replace photo' : '⬆️ Upload photo') : null,
-        r.photos && b.photo ? h('button', { class: 'btn btn-small btn-ghost-danger', onclick: async () => {
+        r.photos && b.photo && b.name ? h('button', { class: 'btn btn-small btn-ghost-danger', onclick: async () => {
           if (await confirmDialog('Remove this photo?', `${b.name} stays on the banned list; only the photo goes.`, { confirmText: 'Remove photo', danger: true })) {
             try {
               await api('DELETE', `/api/vadmin/banned/${b.id}/photo`);
@@ -458,7 +492,7 @@ function bannedCard() {
           }
         } }, 'Remove photo') : null,
         h('button', { class: 'btn btn-small btn-ghost-danger', onclick: async () => {
-          if (await confirmDialog('Remove from banned list?', `${b.name} will no longer trigger a warning at the door.`, { confirmText: 'Remove', danger: true })) act('DELETE', b, undefined, 'Removed');
+          if (await confirmDialog('Remove from banned list?', `${b.name || 'This person'} will no longer be on your banned list${b.photo ? ', and their photo is deleted' : ''}.`, { confirmText: 'Remove', danger: true })) act('DELETE', b, undefined, 'Removed');
         } }, 'Remove')
       )
     ));

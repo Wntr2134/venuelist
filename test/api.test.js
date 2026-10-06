@@ -1932,3 +1932,38 @@ test('banned photos: off by default; door photo waits in memory for approval, th
   await admin.call('DELETE', `/api/vadmin/banned/${banId}`);
   assert.equal(appDb.prepare('SELECT COUNT(*) AS n FROM banned_photos WHERE banned_id = ?').get(banId).n, 0, 'photo deleted with the entry');
 });
+
+test('banned photos: no name required — nameless entries need a photo, never match a name, and can be named later', async () => {
+  const { c, admin, venue } = await onboard('Nameless Hall');
+  const plain = await onboard('Nameless Off');
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 9)]);
+  const photo = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+  assert.equal((await plain.admin.call('POST', '/api/vadmin/banned', { noName: true, photo })).status, 404, 'needs the photos feature');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+
+  // The door can send a photo with no name.
+  const p = await c.call('POST', '/api/banned/pending', { reason: 'Fighting', photo });
+  assert.equal(p.status, 200, JSON.stringify(p.data));
+  assert.equal((await admin.call('POST', `/api/vadmin/banned/pending/${p.data.id}/approve`, {})).status, 400, 'blank name needs the No name tick');
+  assert.equal((await admin.call('POST', `/api/vadmin/banned/pending/${p.data.id}/approve`, { noName: true })).status, 200);
+  let entry = (await admin.call('GET', '/api/vadmin/banned')).data.entries.find((e) => e.name === '');
+  assert.ok(entry && entry.photo, 'nameless entry with its photo');
+
+  // Never matches a guest by name; shows in the gallery.
+  assert.equal((await c.call('GET', '/api/banned/check?name=Any%20Body')).data.match, false);
+  assert.deepEqual((await c.call('GET', '/api/banned/gallery')).data.map((g) => g.name), ['']);
+  // Its photo is all staff have, so it can't be stripped on its own.
+  assert.equal((await c.call('DELETE', `/api/banned/photo/${entry.id}`, { overridePin: '2468' })).status, 409);
+  assert.equal((await admin.call('DELETE', `/api/vadmin/banned/${entry.id}/photo`)).status, 409);
+
+  // Venue admin adds by hand: no name needs a photo.
+  assert.equal((await admin.call('POST', '/api/vadmin/banned', { noName: true, reason: 'x' })).status, 400);
+  assert.equal((await admin.call('POST', '/api/vadmin/banned', { noName: true, reason: 'Theft', photo })).status, 200);
+  assert.equal((await admin.call('POST', '/api/vadmin/banned', { reason: 'no name, no tick' })).status, 400);
+
+  // Later they find out who it is: name it, and it matches guest lists from then on.
+  assert.equal((await admin.call('PUT', `/api/vadmin/banned/${entry.id}`, { name: 'Max Power' })).status, 200);
+  assert.equal((await c.call('GET', '/api/banned/check?name=Max%20Power')).data.match, true);
+  const log = (await admin.call('GET', '/api/vadmin/banned')).data.log;
+  assert.ok(log.some((l) => l.action === 'named' && /Name unknown → Max Power/.test(l.detail)));
+});

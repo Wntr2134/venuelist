@@ -1518,9 +1518,10 @@ async function bannedGallery() {
   const grid = h('div', { class: 'ban-gallery' });
   const draw = () => put(grid, list.length ? list.map((b) => h('div', { class: 'ban-card' },
     banPhoto(b.photo),
-    h('strong', null, b.name),
+    b.name ? h('strong', null, b.name) : h('strong', { class: 'muted' }, 'Name unknown'),
     b.reason ? h('span', { class: 'small muted' }, b.reason) : null,
-    h('button', {
+    // With no name the photo is the whole entry, so only the venue admin can remove it.
+    b.name ? h('button', {
       class: 'btn btn-small btn-ghost-danger',
       onclick: async () => {
         try {
@@ -1533,7 +1534,7 @@ async function bannedGallery() {
           toast(err.message, 'error');
         }
       },
-    }, 'Remove photo')
+    }, 'Remove photo') : null
   )) : h('div', { class: 'empty' }, 'No photos on the banned list yet.'));
   draw();
   const m = modal('🚫 Banned faces', h('div', { class: 'stack' },
@@ -1566,7 +1567,8 @@ function bannedPhotoForm(name) {
   }
   const form = h('form', { class: 'stack' },
     h('p', { class: 'small muted' }, 'Tell the person you’re taking a photo for the venue’s banned list. It isn’t saved yet: your venue admin has 1 hour to approve it, or it’s deleted.'),
-    field('Full name', h('input', { name: 'name', required: true, maxlength: '120', value: name || '', placeholder: 'First name and surname', autocomplete: 'off' })),
+    field('Full name (if you know it)', h('input', { name: 'name', maxlength: '120', value: name || '', placeholder: 'First name and surname', autocomplete: 'off' }),
+      'Don’t know their name? Leave it blank and send the photo. Your venue admin can add a name later.'),
     field('Reason', h('input', { name: 'reason', maxlength: '200', placeholder: 'e.g. Fighting, Oct 2026', autocomplete: 'off' })),
     cameraInput,
     libraryInput,
