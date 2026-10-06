@@ -1,6 +1,6 @@
 'use strict';
 
-/* global h, put, api, toast, modal, confirmDialog, field, formData, fmtDateTime, fmtDate, shrinkPhoto */
+/* global h, put, api, toast, modal, confirmDialog, field, formData, fmtDateTime, fmtDate, shrinkPhoto, PHOTO_ACCEPT */
 
 // Venue admin portal: /v/<venue>/admin — manager codes, staff access, venue settings, privacy, overrides log.
 
@@ -360,7 +360,7 @@ function bannedCard() {
     };
     // Photos (feature: banned-photos): staff photos waiting for approval, and a photo per entry.
     const pickPhoto = (b) => {
-      const input = h('input', { type: 'file', accept: 'image/*', class: 'visually-hidden' });
+      const input = h('input', { type: 'file', accept: PHOTO_ACCEPT, class: 'visually-hidden' });
       input.addEventListener('change', async () => {
         const file = input.files && input.files[0];
         if (!file) return;
