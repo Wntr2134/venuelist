@@ -532,11 +532,15 @@ function createApp(db, options = {}) {
     return !!v.admin_password_hash || !!db.prepare('SELECT 1 FROM manager_codes WHERE venue_id = ? AND active = 1').get(v.id);
   }
 
+  // Colour themes a venue's pages can use (public/css/styles.css, :root[data-theme]). NULL = standard.
+  const THEMES = ['red'];
+
   function venueOut(v) {
     return {
       id: v.id,
       slug: v.slug,
       name: v.name,
+      theme: THEMES.includes(v.theme) ? v.theme : null,
       hasManagerPin: canOverride(v),
       hasAdmin: !!v.admin_password_hash,
       defaults: { capacity: v.default_capacity ?? null, countGuestlist: !!v.default_count_guestlist },
@@ -1159,8 +1163,13 @@ function createApp(db, options = {}) {
       paid_until: body.paidUntil !== undefined ? (body.paidUntil ? dateStr(body.paidUntil) : null) : v.paid_until,
       billing_notes: body.billingNotes !== undefined ? str(body.billingNotes, 'Billing notes', { max: 500 }) || null : v.billing_notes,
     };
-    db.prepare('UPDATE venues SET name = ?, active = ?, plan = ?, price_aud = ?, paid_until = ?, billing_notes = ? WHERE id = ?')
-      .run(name, active, billing.plan, billing.price_aud, billing.paid_until, billing.billing_notes, v.id);
+    let theme = v.theme;
+    if (body.theme !== undefined) {
+      theme = body.theme || null;
+      if (theme !== null && !THEMES.includes(theme)) throw new HttpError(400, 'Unknown colour theme');
+    }
+    db.prepare('UPDATE venues SET name = ?, active = ?, plan = ?, price_aud = ?, paid_until = ?, billing_notes = ?, theme = ? WHERE id = ?')
+      .run(name, active, billing.plan, billing.price_aud, billing.paid_until, billing.billing_notes, theme, v.id);
     if (!active) hub.closeVenue(v.id); // disabling a venue cuts its live feeds immediately
     return venueOut(ownerVenue(v.id));
   }, { auth: 'owner' });
@@ -2028,8 +2037,10 @@ function createApp(db, options = {}) {
       addedBy: g.addedBy,
       createdAt: g.createdAt,
     }));
+    const venue = venueOfEvent(e.id);
     return {
-      venueName: venueOfEvent(e.id)?.name || 'Venue',
+      venueName: venue?.name || 'Venue',
+      theme: venue && THEMES.includes(venue.theme) ? venue.theme : null,
       event: { name: e.name, date: e.date, doorsTime: e.doors_time, cutoffAt: e.cutoff_at },
       contributor: { name: c.name, listType: c.list_type, allocation: c.allocation },
       used,
@@ -2130,7 +2141,7 @@ function createApp(db, options = {}) {
     // session for this venue — it isn't broadcast to anonymous callers.
     const trusted = (me && me.id === v.id) || (staff && staff.id === v.id);
     return {
-      venue: { name: v.name, slug: v.slug },
+      venue: { name: v.name, slug: v.slug, theme: THEMES.includes(v.theme) ? v.theme : null },
       authed: !!me && me.id === v.id,
       ...(trusted ? { needsSetup: !v.admin_password_hash } : {}),
     };

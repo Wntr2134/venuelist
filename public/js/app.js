@@ -37,6 +37,7 @@ async function boot() {
   state.hasManagerPin = session.venue.hasManagerPin;
   state.defaults = session.venue.defaults || {};
   state.demo = session.venue.demo || null;
+  applyTheme(session.venue.theme);
   document.title = `${session.venue.name} · Guest List`;
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   await promptDeviceName();

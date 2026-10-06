@@ -1779,3 +1779,32 @@ test('every non-public route refuses an unauthenticated request', async () => {
   }
   assert.ok(checked >= 50, `expected to cover the whole protected surface, only checked ${checked}`);
 });
+
+test('colour theme: owner sets it per venue; only that venue\'s pages get it', async () => {
+  const { c, venue, admin } = await onboard('Red Room');
+  const other = await onboard('Amber Hall');
+  const id = venue.id;
+  assert.equal((await c.call('GET', '/api/session')).data.venue.theme, null, 'standard by default');
+
+  assert.equal((await owner.call('PUT', `/api/owner/venues/${id}`, { theme: 'purple' })).status, 400);
+  assert.equal((await client().call('PUT', `/api/owner/venues/${id}`, { theme: 'red' })).status, 401);
+  assert.equal((await c.call('PUT', `/api/owner/venues/${id}`, { theme: 'red' })).status, 401, 'venue staff cannot set it');
+  const r = await owner.call('PUT', `/api/owner/venues/${id}`, { theme: 'red' });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.theme, 'red');
+
+  // The venue's staff app, venue admin and contributor links all see it; other venues don't.
+  assert.equal((await c.call('GET', '/api/session')).data.venue.theme, 'red');
+  assert.equal((await admin.call('GET', `/api/vadmin/session/${venue.slug}`)).data.venue.theme, 'red');
+  assert.equal((await other.c.call('GET', '/api/session')).data.venue.theme, null);
+  const ev = (await c.call('POST', '/api/events', { name: 'Loud Night', date: '2026-10-10', overridePin: '2468' })).data;
+  const contrib = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Promoter' })).data;
+  assert.equal((await client().call('GET', `/api/c/${contrib.token}`)).data.theme, 'red');
+  assert.equal((await owner.call('GET', '/api/owner/venues')).data.venues.find((v) => v.id === id).theme, 'red');
+
+  // Other edits leave it alone; an empty value puts it back to standard.
+  await owner.call('PUT', `/api/owner/venues/${id}`, { name: 'The Red Room' });
+  assert.equal((await c.call('GET', '/api/session')).data.venue.theme, 'red');
+  await owner.call('PUT', `/api/owner/venues/${id}`, { theme: '' });
+  assert.equal((await c.call('GET', '/api/session')).data.venue.theme, null);
+});

@@ -270,6 +270,8 @@ function migrate(db) {
     ['price_aud', 'INTEGER'],
     ['paid_until', 'TEXT'],
     ['billing_notes', 'TEXT'],
+    // Colour theme for the venue's own pages (NULL = the standard Riderly amber). Set by the owner.
+    ['theme', 'TEXT'],
   ]) {
     if (!vCols.includes(col)) db.exec(`ALTER TABLE venues ADD COLUMN ${col} ${def}`);
   }

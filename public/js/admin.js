@@ -187,6 +187,7 @@ function venueCard(v) {
     billingBox(v),
     h('div', { class: 'row wrap' },
       h('button', { class: 'btn btn-small', onclick: () => rename(v) }, 'Rename'),
+      h('button', { class: 'btn btn-small', onclick: () => colours(v) }, v.theme === 'red' ? 'Colours: red' : 'Colours'),
       h('button', { class: 'btn btn-small', onclick: () => toggle(v) }, v.status === 'disabled' ? 'Enable' : 'Disable'),
       h('button', { class: 'btn btn-small btn-ghost-danger', onclick: () => remove(v) }, 'Delete')
     )
@@ -447,6 +448,32 @@ function rename(v) {
   };
   form.addEventListener('submit', submit);
   const m = modal('Rename venue', form, {
+    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, 'Save')],
+  });
+}
+
+// The venue's colour theme: its staff app, door screens, venue admin and contributor links.
+function colours(v) {
+  const select = h('select', { name: 'theme' },
+    h('option', { value: '' }, 'Standard (amber)'),
+    h('option', { value: 'red' }, 'Red')
+  );
+  select.value = v.theme || '';
+  const form = h('form', { class: 'stack' },
+    field('Colour theme', select, 'Changes this venue’s guest list, door screens, venue admin and contributor links. With red, the OUT and delete buttons turn orange so they don’t look like the main buttons.'));
+  const submit = async (e) => {
+    if (e) e.preventDefault();
+    try {
+      await api('PUT', `/api/owner/venues/${v.id}`, { theme: select.value });
+      m.close();
+      toast('Saved', 'ok');
+      renderDashboard();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+  form.addEventListener('submit', submit);
+  const m = modal(`Colours — ${v.name}`, form, {
     actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, 'Save')],
   });
 }
