@@ -38,6 +38,7 @@ async function boot() {
   state.defaults = session.venue.defaults || {};
   state.demo = session.venue.demo || null;
   state.features = new Set(session.venue.features || []);
+  applyTheme(session.venue.theme);
   document.title = `${session.venue.name} · Guest List`;
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   await promptDeviceName();

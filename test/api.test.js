@@ -1850,6 +1850,24 @@ test('new features: off by default, on with early access or for everyone, and a 
   }
 });
 
+test('red colours: off by default; on for one venue reaches its staff app, venue admin and contributor links only', async () => {
+  const { c, venue, admin } = await onboard('Red Room');
+  const other = await onboard('Amber Hall');
+  assert.equal((await c.call('GET', '/api/session')).data.venue.theme, null, 'standard by default');
+  assert.equal((await c.call('PUT', `/api/owner/venues/${venue.id}/features`, { set: { 'red-theme': true } })).status, 401, 'owner only');
+  assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { set: { 'red-theme': true } })).status, 200);
+
+  assert.equal((await c.call('GET', '/api/session')).data.venue.theme, 'red');
+  assert.equal((await admin.call('GET', `/api/vadmin/session/${venue.slug}`)).data.venue.theme, 'red');
+  assert.equal((await other.c.call('GET', '/api/session')).data.venue.theme, null, 'other venues stay amber');
+  const ev = (await c.call('POST', '/api/events', { name: 'Loud Night', date: '2026-10-10', overridePin: '2468' })).data;
+  const contrib = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Promoter' })).data;
+  assert.equal((await client().call('GET', `/api/c/${contrib.token}`)).data.theme, 'red');
+
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { set: { 'red-theme': false } });
+  assert.equal((await c.call('GET', '/api/session')).data.venue.theme, null);
+});
+
 test('banned photos: off by default; door photo waits in memory for approval, then shows on matches and in the gallery', async () => {
   const { c, admin, venue } = await onboard('Photo Hall');
   const other = await onboard('Photo Other');

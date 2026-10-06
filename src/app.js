@@ -558,6 +558,11 @@ function createApp(db, options = {}) {
     return featureStates(v)[key].on;
   }
 
+  // The venue's colour theme (public/css/styles.css, :root[data-theme]). null = the standard amber.
+  function venueTheme(v) {
+    return v && featureByKey.has('red-theme') && feature(v, 'red-theme') ? 'red' : null;
+  }
+
   function venueOut(v) {
     const states = featureStates(v);
     return {
@@ -565,6 +570,7 @@ function createApp(db, options = {}) {
       slug: v.slug,
       name: v.name,
       features: Object.keys(states).filter((k) => states[k].on),
+      theme: venueTheme(v),
       hasManagerPin: canOverride(v),
       hasAdmin: !!v.admin_password_hash,
       defaults: { capacity: v.default_capacity ?? null, countGuestlist: !!v.default_count_guestlist },
@@ -2115,8 +2121,10 @@ function createApp(db, options = {}) {
       addedBy: g.addedBy,
       createdAt: g.createdAt,
     }));
+    const venue = venueOfEvent(e.id);
     return {
-      venueName: venueOfEvent(e.id)?.name || 'Venue',
+      venueName: venue?.name || 'Venue',
+      theme: venueTheme(venue),
       event: { name: e.name, date: e.date, doorsTime: e.doors_time, cutoffAt: e.cutoff_at },
       contributor: { name: c.name, listType: c.list_type, allocation: c.allocation },
       used,
@@ -2217,7 +2225,7 @@ function createApp(db, options = {}) {
     // session for this venue — it isn't broadcast to anonymous callers.
     const trusted = (me && me.id === v.id) || (staff && staff.id === v.id);
     return {
-      venue: { name: v.name, slug: v.slug },
+      venue: { name: v.name, slug: v.slug, theme: venueTheme(v) },
       authed: !!me && me.id === v.id,
       ...(trusted ? { needsSetup: !v.admin_password_hash } : {}),
     };

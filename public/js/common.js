@@ -39,6 +39,12 @@ function put(el, ...children) {
   return el;
 }
 
+// A venue's colour theme (see :root[data-theme] in styles.css). null = the standard colours.
+function applyTheme(theme) {
+  if (theme) document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
+}
+
 function deviceName() {
   try {
     return localStorage.getItem(NAME_KEY) || '';

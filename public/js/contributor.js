@@ -14,6 +14,7 @@ async function load() {
     put(root, h('main', { class: 'center' }, h('div', { class: 'card narrow' }, h('h1', null, 'Link not available'), h('p', null, err.message))));
     return;
   }
+  applyTheme(view.theme);
   document.title = `${view.event.name} · Guest list`;
   draw();
 }

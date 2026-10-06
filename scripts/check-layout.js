@@ -1,7 +1,7 @@
 'use strict';
 
 // Checks every page at phone, iPad and desktop sizes, and saves screenshots to look at.
-//   node --disable-warning=ExperimentalWarning scripts/check-layout.js [outDir]
+//   node --disable-warning=ExperimentalWarning scripts/check-layout.js [outDir] [--theme=red]
 // Needs Playwright (npm i -g playwright): a dev tool, not an app dependency.
 //
 // Flags, per page and screen:
@@ -16,7 +16,9 @@ const { execSync } = require('node:child_process');
 const { startDemo } = require('./demo-seed');
 
 const { chromium } = require(path.join(execSync('npm root -g').toString().trim(), 'playwright'));
-const OUT = process.argv[2] || path.join(require('node:os').tmpdir(), 'vl-layout');
+const args = process.argv.slice(2);
+const THEME = (args.find((a) => a.startsWith('--theme=')) || '').slice('--theme='.length);
+const OUT = args.find((a) => !a.startsWith('--')) || path.join(require('node:os').tmpdir(), 'vl-layout');
 
 const DEVICES = [
   { id: 'phone-360', width: 360, height: 740, touch: true },
@@ -119,6 +121,14 @@ async function main() {
     method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: demo.ownerCookie }, body: JSON.stringify({ name: 'The Corner Hotel' }),
   })).json();
   demo.setupPath = added.setupPath;
+  if (THEME) {
+    // Check a venue colour theme (a feature in src/features.js): switch it on for the demo venue.
+    const owner = { 'Content-Type': 'application/json', Cookie: demo.ownerCookie };
+    const { venues } = await (await fetch(`${demo.base}/api/owner/venues`, { headers: owner })).json();
+    const v = venues.find((x) => x.slug === 'velvet-room');
+    const r = await fetch(`${demo.base}/api/owner/venues/${v.id}/features`, { method: 'PUT', headers: owner, body: JSON.stringify({ set: { [`${THEME}-theme`]: true } }) });
+    if (!r.ok) throw new Error(`Theme "${THEME}": ${(await r.json()).error}`);
+  }
   const browser = await chromium.launch();
   const cookies = {
     staff: { name: 'vl_session', value: demo.cookie.split('=')[1] },

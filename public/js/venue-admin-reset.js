@@ -18,6 +18,7 @@ async function start() {
   } catch (err) {
     return card(h('h1', null, 'Link not valid'), h('p', null, err.message));
   }
+  applyTheme(info.venue.theme);
   const form = h('form', { class: 'stack' },
     field('New venue admin password', h('input', { name: 'password', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' }), 'At least 8 characters. Different from the staff password.'),
     field('Type it again', h('input', { name: 'confirm', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' })),

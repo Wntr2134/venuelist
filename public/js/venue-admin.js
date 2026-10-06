@@ -47,6 +47,7 @@ async function start() {
     return put(root, h('main', { class: 'center' }, h('div', { class: 'card narrow stack' }, h('h1', null, 'Venue not found'), h('p', null, err.message))));
   }
   venueName = s.venue.name;
+  applyTheme(s.venue.theme);
   document.title = `${venueName} · Venue admin`;
   if (s.authed) return dashboard();
   return login(s.venue, s.needsSetup);
