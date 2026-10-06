@@ -36,7 +36,9 @@ New to this repo, or asked to get caught up? Read `docs/onboarding.md` first.
 
 ## Rules that don't bend
 - Guest lists are personal information. No guest names in logs, emails to Riderly, the Riderly
-  API (`/api/v1`), analytics or third parties. The banned list is venue-admin only.
+  API (`/api/v1`), analytics or third parties. The banned list is venue-admin only, except that venues with the `banned-photos` feature let door
+  staff see a matching entry's photo and a logged gallery of photos. Staff compare faces by eye: never add
+  automatic face matching (biometric data under the Privacy Act).
 - Secrets never go in git (`mail.json`, `backup.json` are git-ignored on the server).
 - Times shown to people are Melbourne time; a venue's "day" rolls over at 6am.
 - Plain Australian English in the UI. No model names in commits or code.

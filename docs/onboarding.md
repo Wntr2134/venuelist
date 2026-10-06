@@ -86,7 +86,8 @@ Never use a real venue's guests, the Toff's included, to test or demo changes.
 ## Security rules already built in (keep them true)
 
 - **Guest names are personal information.** Never put them in logs, emails to Riderly, the Riderly
-  API, analytics or third parties. The banned list is venue-admin only.
+  API, analytics or third parties. The banned list is venue-admin only, except that venues with the `banned-photos` feature let door
+  staff see a matching entry's photo and a logged gallery. Never add automatic face matching.
 - **Every mutation must be `Content-Type: application/json`.** This is a cross-site request guard.
 - **Every new route must declare the right `auth`.** A test enumerates every route and fails if a
   non-public one answers an anonymous caller.

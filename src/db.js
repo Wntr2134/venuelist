@@ -104,6 +104,17 @@ CREATE TABLE IF NOT EXISTS banned (
   updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_banned_venue ON banned(venue_id);
+
+-- One photo per banned-list entry (feature: banned-photos). Goes when the entry goes.
+CREATE TABLE IF NOT EXISTS banned_photos (
+  banned_id    INTEGER PRIMARY KEY REFERENCES banned(id) ON DELETE CASCADE,
+  venue_id     INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  mime         TEXT NOT NULL,
+  data         BLOB NOT NULL,
+  created_at   TEXT NOT NULL,
+  created_by   TEXT NOT NULL,
+  approved_by  TEXT
+);
 CREATE TABLE IF NOT EXISTS banned_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
