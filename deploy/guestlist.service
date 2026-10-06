@@ -22,9 +22,22 @@ RestartSec=3
 MemoryMax=300M
 # Database + backups are created owner-only (600/700).
 UMask=0077
+# Sandbox: the app can only write its own data dir, can't gain privileges, and can't see the
+# rest of the box. (No MemoryDenyWriteExecute / SystemCallFilter — those break Node's JIT.)
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
+ProtectSystem=strict
+ReadWritePaths=/srv/guestlist/data
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
 
 [Install]
 WantedBy=multi-user.target

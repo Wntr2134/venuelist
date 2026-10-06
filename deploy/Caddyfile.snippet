@@ -6,6 +6,9 @@ guestlist.riderly.com.au {
 	# :443 on the tailnet IP, so a wildcard :443 bind fails with
 	# "address already in use" on reload.
 	bind 134.199.157.198
+	# Tell browsers to stick to HTTPS for this host and its subdomains (the app sets this too;
+	# this covers anything Caddy serves directly, e.g. an error page).
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 	reverse_proxy 127.0.0.1:5070 {
 		transport http {
 			read_timeout 60s

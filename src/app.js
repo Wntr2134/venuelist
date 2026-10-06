@@ -274,23 +274,50 @@ function checkCapacity(db, event, party, excludeGuestId) {
 
 // ---------- live updates (Server-Sent Events) ----------
 
+const MAX_STREAMS_PER_VENUE = 60;
+const MAX_STREAM_MS = 6 * 3600 * 1000;
+
 function createHub() {
-  const streams = new Map(); // eventId -> Set<res>
+  const streams = new Map(); // eventId -> Set<entry>
+  const entries = new Set(); // every live entry, for per-venue limits and sweeping
+  const drop = (e) => {
+    entries.delete(e);
+    streams.get(e.eventId)?.delete(e);
+    try { e.res.end(); } catch { /* already closed */ }
+  };
   return {
-    add(eventId, res) {
+    add(eventId, res, { venueId, version } = {}) {
+      const entry = { res, eventId, venueId, version, at: Date.now() };
+      // Cap how many streams one venue can hold open, oldest-first, so a venue can't pin memory.
+      const mine = [...entries].filter((e) => e.venueId === venueId);
+      if (mine.length >= MAX_STREAMS_PER_VENUE) drop(mine.sort((a, b) => a.at - b.at)[0]);
       if (!streams.has(eventId)) streams.set(eventId, new Set());
-      streams.get(eventId).add(res);
-      res.on('close', () => streams.get(eventId)?.delete(res));
+      streams.get(eventId).add(entry);
+      entries.add(entry);
+      res.on('close', () => { entries.delete(entry); streams.get(eventId)?.delete(entry); });
     },
     publish(eventId, payload) {
       const set = streams.get(eventId);
       if (!set) return;
       const data = `data: ${JSON.stringify(payload)}\n\n`;
-      for (const res of set) res.write(data);
+      for (const e of set) e.res.write(data);
+    },
+    // Stop every stream for a venue — called when its sessions are revoked (logout-all,
+    // password change, or the venue being disabled), so a live feed can't outlive the login.
+    closeVenue(venueId) {
+      for (const e of [...entries]) if (e.venueId === venueId) drop(e);
+    },
+    // Periodic tidy: close anything past its max age, or whose session is no longer valid.
+    sweep(stillValid) {
+      const now = Date.now();
+      for (const e of [...entries]) {
+        if (now - e.at > MAX_STREAM_MS || (stillValid && !stillValid(e))) drop(e);
+      }
     },
     closeAll() {
-      for (const set of streams.values()) for (const res of set) res.end();
+      for (const e of [...entries]) drop(e);
       streams.clear();
+      entries.clear();
     },
   };
 }
@@ -357,7 +384,8 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
   'Content-Security-Policy':
-    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; "
+    + "base-uri 'none'; form-action 'self'; object-src 'none'; frame-ancestors 'none'",
 };
 
 // Public marketing pages search engines may index; everything else stays out of Google.
@@ -427,15 +455,20 @@ const csvTime = (iso) => (iso ? localTime.format(new Date(iso)).replace(',', '')
 
 function csvCell(v) {
   let s = v === null || v === undefined ? '' : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; // guard against spreadsheet formula injection
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  // Neutralise spreadsheet formulas: anything a tool might evaluate if it leads the cell.
+  if (/^[=+\-@\t\r\n]/.test(s) || /^[\u0000-\u001F]/.test(s)) s = `'${s}`;
+  // Quote on comma, semicolon or tab (either CSV delimiter) and on quotes/newlines, so a cell
+  // can never break out into extra columns.
+  return /[",;\t\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 // Parses pasted lines like "Jane Smith +2, note" or CSV "Jane Smith,2,note".
 function parseImport(text) {
   const rows = [];
-  for (const rawLine of String(text || '').split(/\r?\n/)) {
-    const line = rawLine.trim();
+  // Cap the whole paste and each line before any pattern-matching, so a giant or pathological
+  // line can't make the parse take a long time and hold the server up.
+  for (const rawLine of String(text || '').slice(0, 200000).split(/\r?\n/)) {
+    const line = rawLine.trim().slice(0, 300);
     if (!line) continue;
     const parts = line.split(/\t|,/).map((p) => p.trim());
     let name = parts[0];
@@ -463,6 +496,15 @@ function parseImport(text) {
 function createApp(db, options = {}) {
   const secureCookies = !!options.secureCookies;
   const trustProxy = !!options.trustProxy;
+
+  // Sent on every response. Over HTTPS we add HSTS so browsers refuse to talk to this host over
+  // plain http (which also stops a sibling subdomain downgrading a request to read cookies).
+  const baseSecHeaders = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    ...(secureCookies ? { 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload' } : {}),
+  };
 
   // Behind nginx/Caddy every request comes from 127.0.0.1, so use the client IP the proxy appended.
   function clientIp(req) {
@@ -622,6 +664,10 @@ function createApp(db, options = {}) {
   // (60 per 10 min), so one person's typos can't lock out a whole venue sharing one Wi-Fi.
   const deviceLimiter = auth.createLimiter({ max: 10, windowMs: 10 * 60 * 1000 });
   const networkLimiter = auth.createLimiter({ max: 60, windowMs: 10 * 60 * 1000 });
+  // A backstop per account (not per phone or IP, which a client can both change), so a spread-out
+  // guess at one venue-admin or the owner login is capped however many devices or IPs it comes
+  // from. Only on the high-value logins: the shared staff login must never lock a door out.
+  const accountLimiter = auth.createLimiter({ max: 30, windowMs: 10 * 60 * 1000 });
 
   function deviceId(req) {
     const d = String(req.headers['x-device'] || '');
@@ -644,12 +690,16 @@ function createApp(db, options = {}) {
     networkLimiter.fail(net);
   }
 
-  function limit(req) {
+  function limit(req, account) {
     if (tooMany(req, 'login')) throw new HttpError(429, 'Too many wrong attempts on this phone. Try again in a few minutes.');
+    if (account && accountLimiter.blocked(`login|${account}`)) {
+      throw new HttpError(429, 'Too many wrong attempts for this login. Try again in a few minutes.');
+    }
   }
 
-  function failed(req) {
+  function failed(req, account) {
     recordFail(req, 'login');
+    if (account) accountLimiter.fail(`login|${account}`);
   }
 
   // The venue for a request's session cookie, or null. Sessions die when the venue's
@@ -659,6 +709,8 @@ function createApp(db, options = {}) {
     if (!s) return null;
     const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(s.venueId);
     if (!v || !v.active || !v.password_hash || v.password_version !== s.version) return null;
+    // A one-click session also dies when the API key is rotated or Riderly is disconnected.
+    if (s.sso && s.epoch !== (v.api_epoch || 1)) return null;
     return v;
   }
 
@@ -719,6 +771,7 @@ function createApp(db, options = {}) {
   // Public sign-up on the landing page. Normally lands in the owner's /admin inbox for
   // one-tap approval; with auto-approve on, the venue is live immediately.
   const signupLimiter = auth.createLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
+  const forgotLimiter = auth.createLimiter({ max: 3, windowMs: 60 * 60 * 1000 });
   // Applications from the home page. Riderly is paid, so venues apply and Riderly approves;
   // the approval email carries a setup link where the venue picks its username and passwords.
   const SHOWS_PER_MONTH = ['1–4', '5–10', '11–20', '20+'];
@@ -818,6 +871,14 @@ function createApp(db, options = {}) {
     const v = db.prepare('SELECT * FROM venues WHERE slug = ?').get(slugify(raw));
     const reply = { ok: true, message: 'If that venue has an email on file, we’ve sent it a reset link.' };
     if (!v || !v.active || !v.email || !v.password_hash || !mailConfig()) return reply;
+    // A hard cap per venue (not just per phone/IP), so this can't be used to flood a venue's inbox.
+    if (forgotLimiter.blocked(`forgot|${v.id}`)) return reply;
+    forgotLimiter.fail(`forgot|${v.id}`);
+    // Don't overwrite a link that's still live — that could be one the owner just issued. If one
+    // is already outstanding, we simply don't send another (the venue already has a usable link).
+    const liveAdmin = v.admin_token_expires && Date.parse(v.admin_token_expires) > Date.now();
+    const liveSetup = v.setup_expires_at && Date.parse(v.setup_expires_at) > Date.now();
+    if ((kind === 'admin' && liveAdmin) || (kind === 'staff' && liveSetup)) return reply;
     if (kind === 'admin') {
       const token = crypto.randomBytes(24).toString('base64url');
       db.prepare('UPDATE venues SET admin_token_hash = ?, admin_token_expires = ? WHERE id = ?').run(
@@ -904,6 +965,7 @@ function createApp(db, options = {}) {
       `UPDATE venues SET password_hash = ?, password_version = ?, admin_password_hash = ?, setup_token_hash = NULL,
          setup_expires_at = NULL, setup_at = COALESCE(setup_at, ?), last_login_at = ? WHERE id = ?`
     ).run(auth.hashPassword(staffPw), version, adminHash, t, t, v.id);
+    if (version !== v.password_version) hub.closeVenue(v.id); // a reset logs out old devices' live feeds too
     const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(v.id);
     res.setHeader('Set-Cookie', auth.venueCookie(db, fresh, secureCookies));
     return { ok: true, venue: venueOut(fresh) };
@@ -962,10 +1024,10 @@ function createApp(db, options = {}) {
   }, { auth: 'public' });
 
   route('POST', /^\/api\/owner\/login$/, ({ req, body, res }) => {
-    limit(req);
+    limit(req, 'owner');
     const ok = auth.verifyPassword(str(body.password, 'Password', { max: 200 }), getSetting(db, 'owner_password_hash') || DUMMY_HASH);
     if (!ok || !ownerHasPassword()) {
-      failed(req);
+      failed(req, 'owner');
       throw new HttpError(401, 'Wrong password');
     }
     res.setHeader('Set-Cookie', auth.ownerCookie(db, secureCookies));
@@ -1065,6 +1127,7 @@ function createApp(db, options = {}) {
       `UPDATE venues SET password_hash = ?, password_version = password_version + 1, setup_token_hash = NULL,
          setup_expires_at = NULL, setup_at = COALESCE(setup_at, ?) WHERE id = ?`
     ).run(hash, now(), v.id);
+    hub.closeVenue(v.id);
     return { ok: true, venue: venueOut(ownerVenue(v.id)) };
   }, { auth: 'owner' });
 
@@ -1098,6 +1161,7 @@ function createApp(db, options = {}) {
     };
     db.prepare('UPDATE venues SET name = ?, active = ?, plan = ?, price_aud = ?, paid_until = ?, billing_notes = ? WHERE id = ?')
       .run(name, active, billing.plan, billing.price_aud, billing.paid_until, billing.billing_notes, v.id);
+    if (!active) hub.closeVenue(v.id); // disabling a venue cuts its live feeds immediately
     return venueOut(ownerVenue(v.id));
   }, { auth: 'owner' });
 
@@ -1184,7 +1248,7 @@ function createApp(db, options = {}) {
     return { ...out, backup: backupStatus() };
   }, { auth: 'owner' });
 
-  route('PUT', /^\/api\/owner\/settings$/, ({ body, res }) => {
+  route('PUT', /^\/api\/owner\/settings$/, ({ req, body, res }) => {
     if (body.autoApprove !== undefined) setSetting(db, 'auto_approve', body.autoApprove ? '1' : '0');
     if (body.contactEmail !== undefined) {
       const email = str(body.contactEmail, 'Contact email', { max: 120 });
@@ -1192,7 +1256,9 @@ function createApp(db, options = {}) {
       setSetting(db, 'contact_email', email);
     }
     if (body.newPassword) {
+      limit(req, 'owner-change');
       if (!auth.verifyPassword(str(body.currentPassword, 'Current password', { max: 200 }), getSetting(db, 'owner_password_hash'))) {
+        failed(req, 'owner-change');
         throw new HttpError(401, 'Current password is wrong');
       }
       setSetting(db, 'owner_password_hash', auth.hashPassword(password(body.newPassword, 'New password')));
@@ -1450,7 +1516,7 @@ function createApp(db, options = {}) {
       'X-Accel-Buffering': 'no',
     });
     res.write(`data: ${JSON.stringify({ type: 'hello' })}\n\n`);
-    hub.add(e.id, res);
+    hub.add(e.id, res, { venueId: venue.id, version: venue.password_version });
     const ping = setInterval(() => res.write(': ping\n\n'), 25000);
     req.on('close', () => clearInterval(ping));
     return undefined;
@@ -1872,7 +1938,10 @@ function createApp(db, options = {}) {
     }
     tx(db, () => {
       db.prepare('DELETE FROM guests WHERE id = ?').run(g.id);
-      log(db, { eventId: g.event_id, guest: g, action: 'guest.remove', actor, via: 'venue' });
+      // Deleting a guest is the venue's erase button, so wipe the name from the log too — the
+      // action and who did it stay, the person's name doesn't.
+      db.prepare('UPDATE activity SET guest_name = NULL WHERE guest_id = ?').run(g.id);
+      log(db, { eventId: g.event_id, guest: { id: g.id, name: null }, action: 'guest.remove', actor, via: 'venue' });
     });
     publish(g.event_id, 'guests', { actor, guestId: g.id });
     return { ok: true };
@@ -1944,7 +2013,12 @@ function createApp(db, options = {}) {
 
   function portalView(c) {
     const e = getEvent(db, c.event_id);
-    const guests = listGuests(db, e.id, c.id).map((g) => ({
+    const all = listGuests(db, e.id, c.id);
+    const used = all.reduce((n, g) => n + g.party, 0);
+    const locked = contributorLocked(db, c);
+    // Once the link is locked (disabled, archived, past cutoff, finished, or the venue is off),
+    // keep showing the totals but stop handing back the guests' names and notes.
+    const guests = locked ? [] : all.map((g) => ({
       id: g.id,
       name: g.name,
       plusOnes: g.plusOnes,
@@ -1954,14 +2028,13 @@ function createApp(db, options = {}) {
       addedBy: g.addedBy,
       createdAt: g.createdAt,
     }));
-    const used = guests.reduce((n, g) => n + g.party, 0);
     return {
       venueName: venueOfEvent(e.id)?.name || 'Venue',
       event: { name: e.name, date: e.date, doorsTime: e.doors_time, cutoffAt: e.cutoff_at },
       contributor: { name: c.name, listType: c.list_type, allocation: c.allocation },
       used,
       remaining: c.allocation === null ? null : Math.max(0, c.allocation - used),
-      locked: contributorLocked(db, c),
+      locked,
       guests,
     };
   }
@@ -2026,7 +2099,8 @@ function createApp(db, options = {}) {
     if (g.admitted > 0) throw new HttpError(409, 'This guest has already arrived and can no longer be removed.');
     tx(db, () => {
       db.prepare('DELETE FROM guests WHERE id = ?').run(g.id);
-      log(db, { eventId: c.event_id, guest: g, action: 'guest.remove', actor, via: c.name });
+      db.prepare('UPDATE activity SET guest_name = NULL WHERE guest_id = ?').run(g.id);
+      log(db, { eventId: c.event_id, guest: { id: g.id, name: null }, action: 'guest.remove', actor, via: c.name });
     });
     publish(c.event_id, 'guests', { actor, guestId: g.id });
     return portalView(c);
@@ -2051,30 +2125,29 @@ function createApp(db, options = {}) {
   route('GET', /^\/api\/vadmin\/session\/([A-Za-z0-9_-]+)$/, ({ req, params }) => {
     const v = venueBySlug(params[0]);
     const me = sessionVadmin(req);
-    return { venue: { name: v.name, slug: v.slug }, authed: !!me && me.id === v.id, needsSetup: !v.admin_password_hash };
+    const staff = sessionVenue(req);
+    // Whether the admin password is still unset is only told to someone who already holds a
+    // session for this venue — it isn't broadcast to anonymous callers.
+    const trusted = (me && me.id === v.id) || (staff && staff.id === v.id);
+    return {
+      venue: { name: v.name, slug: v.slug },
+      authed: !!me && me.id === v.id,
+      ...(trusted ? { needsSetup: !v.admin_password_hash } : {}),
+    };
   }, { auth: 'public' });
 
+  // Venue admin logs in with the admin password. A venue that has never set one gets it only
+  // from a Riderly/owner-issued link (the setup link, or an admin-reset link) — never by proving
+  // a manager code here. That keeps a short door PIN from standing in for an admin credential.
   route('POST', /^\/api\/vadmin\/login\/([A-Za-z0-9_-]+)$/, ({ req, params, body, res }) => {
-    limit(req);
     const v = venueBySlug(params[0]);
+    limit(req, `vadmin:${v.id}`);
     if (v.demo) throw new HttpError(403, 'Venue admin isn’t part of the demo. Apply for your venue to get your own.');
-    let ok;
     if (!v.admin_password_hash) {
-      // First time for an older venue: prove you're a manager with an existing code, then choose the admin password.
-      const approver = matchOverride(v, String(body.managerCode || ''));
-      if (!approver) {
-        failed(req);
-        throw new HttpError(401, 'That manager code is wrong. Ask Riderly for a venue admin setup link if you’re stuck.');
-      }
-      db.prepare('UPDATE venues SET admin_password_hash = ?, admin_version = admin_version + 1 WHERE id = ?').run(
-        auth.hashPassword(password(body.newPassword, 'Venue admin password')), v.id
-      );
-      ok = true;
-    } else {
-      ok = auth.verifyPassword(str(body.password, 'Password', { max: 200 }), v.admin_password_hash);
+      throw new HttpError(403, 'This venue’s admin password hasn’t been set up yet. Use the setup link Riderly emailed you, or tap “Email me a setup link” to get one.');
     }
-    if (!ok) {
-      failed(req);
+    if (!auth.verifyPassword(str(body.password, 'Password', { max: 200 }), v.admin_password_hash)) {
+      failed(req, `vadmin:${v.id}`);
       throw new HttpError(401, 'Wrong venue admin password.');
     }
     const fresh = db.prepare('SELECT * FROM venues WHERE id = ?').get(v.id);
@@ -2118,6 +2191,9 @@ function createApp(db, options = {}) {
     const actor = actorFrom(req);
     db.prepare(`INSERT INTO push_subs (venue_id, endpoint, actor, created_at) VALUES (?, ?, ?, ?)
                 ON CONFLICT(endpoint) DO UPDATE SET venue_id = excluded.venue_id, actor = excluded.actor`).run(venue.id, endpoint, actor, now());
+    // Keep at most the newest 50 per venue, so subscriptions can't pile up without bound.
+    db.prepare(`DELETE FROM push_subs WHERE venue_id = ? AND id NOT IN
+                (SELECT id FROM push_subs WHERE venue_id = ? ORDER BY id DESC LIMIT 50)`).run(venue.id, venue.id);
     return { ok: true };
   });
 
@@ -2298,12 +2374,14 @@ function createApp(db, options = {}) {
     const pw = password(body.password, 'New staff password');
     if (auth.verifyPassword(pw, venue.admin_password_hash)) throw new HttpError(400, 'Use a staff password that’s different from the venue admin password.');
     db.prepare('UPDATE venues SET password_hash = ?, password_version = password_version + 1 WHERE id = ?').run(auth.hashPassword(pw), venue.id);
+    hub.closeVenue(venue.id);
     return { ok: true };
   }, { auth: 'vadmin' });
 
   // Logs every staff phone out without changing the password (e.g. a lost phone).
   route('POST', /^\/api\/vadmin\/logout-devices$/, ({ venue }) => {
     db.prepare('UPDATE venues SET password_version = password_version + 1 WHERE id = ?').run(venue.id);
+    hub.closeVenue(venue.id);
     return { ok: true };
   }, { auth: 'vadmin' });
 
@@ -2327,8 +2405,9 @@ function createApp(db, options = {}) {
   }, { auth: 'vadmin' });
 
   route('PUT', /^\/api\/vadmin\/admin-password$/, ({ venue, req, body, res }) => {
+    limit(req, `vadmin:${venue.id}`);
     if (!auth.verifyPassword(str(body.currentPassword, 'Current password', { max: 200 }), venue.admin_password_hash)) {
-      failed(req);
+      failed(req, `vadmin:${venue.id}`);
       throw new HttpError(401, 'Current venue admin password is wrong.');
     }
     db.prepare('UPDATE venues SET admin_password_hash = ?, admin_version = admin_version + 1 WHERE id = ?').run(
@@ -2368,16 +2447,31 @@ function createApp(db, options = {}) {
       banLog(b.venue_id, 'lapsed', `${b.name} (not renewed after review)`, 'Riderly');
     }
     let purged = 0;
-    db.prepare('DELETE FROM applied_ops WHERE created_at < ?').run(new Date(at.getTime() - 7 * 86400000).toISOString());
+    // The door-tap cache can hold guest names in its stored responses; keep it short.
+    db.prepare('DELETE FROM applied_ops WHERE created_at < ?').run(new Date(at.getTime() - 2 * 86400000).toISOString());
+    // The banned-list audit log names people; keep it only about as long as a ban can run.
+    db.prepare('DELETE FROM banned_log WHERE at < ?').run(new Date(at.getTime() - 400 * 86400000).toISOString());
     const venues = db.prepare('SELECT id, retention_days FROM venues WHERE retention_days IS NOT NULL').all();
     for (const v of venues) {
       const cutoff = new Date(at.getTime() - v.retention_days * 86400000).toISOString().slice(0, 10);
-      const events = db.prepare('SELECT id FROM events WHERE venue_id = ? AND date < ? AND purged_at IS NULL').all(v.id, cutoff);
+      // Past the retention window AND not already fully scrubbed — the second clause re-catches a
+      // past show that had new guests added (or was renamed) after an earlier purge.
+      const events = db.prepare(
+        `SELECT id FROM events WHERE venue_id = ? AND date < ? AND (
+           purged_at IS NULL
+           OR EXISTS (SELECT 1 FROM guests g WHERE g.event_id = events.id AND (g.name <> 'Guest (removed)' OR g.notes IS NOT NULL))
+           OR EXISTS (SELECT 1 FROM activity a WHERE a.event_id = events.id AND a.guest_name IS NOT NULL)
+         )`
+      ).all(v.id, cutoff);
       for (const e of events) {
         tx(db, () => {
-          // Counts stay for reporting; names and notes go.
+          // Counts stay for reporting; names and notes go — from the guest rows, the activity
+          // log (names and the free-text detail that can quote them), and the VIP push alerts.
           db.prepare("UPDATE guests SET name = 'Guest (removed)', notes = NULL WHERE event_id = ?").run(e.id);
-          db.prepare('UPDATE activity SET guest_name = NULL WHERE event_id = ?').run(e.id);
+          // Null both the name column and the free-text detail (override reasons can quote a
+          // guest's name). The event.purge note below is written after this, so it survives.
+          db.prepare('UPDATE activity SET guest_name = NULL, detail = NULL WHERE event_id = ?').run(e.id);
+          db.prepare('DELETE FROM push_alerts WHERE event_id = ?').run(e.id);
           db.prepare('UPDATE events SET purged_at = ? WHERE id = ?').run(at.toISOString(), e.id);
           log(db, { eventId: e.id, action: 'event.purge', detail: `guest details removed after ${v.retention_days} days`, actor: 'Riderly', via: 'venue' });
         });
@@ -2402,20 +2496,22 @@ function createApp(db, options = {}) {
 
   function apiVenue(req) {
     const m = String(req.headers.authorization || '').match(/^Bearer\s+(rgl_[A-Za-z0-9_-]{20,80})$/);
+    // Check the key FIRST. A valid key is served even if other (dead) keys from the same Riderly
+    // server have been failing — the limiters only ever gate failed attempts, never good ones.
+    const v = m ? db.prepare('SELECT * FROM venues WHERE api_key_hash = ?').get(hashKey(m[1])) : null;
+    if (v && v.active && v.password_hash) {
+      const last = Date.parse(v.api_key_last_used_at || '') || 0;
+      if (Date.now() - last > 60 * 1000) db.prepare('UPDATE venues SET api_key_last_used_at = ? WHERE id = ?').run(now(), v.id);
+      return v;
+    }
     const hash = m ? hashKey(m[1]) : 'none';
     const keyScope = `api|${clientIp(req)}|${hash.slice(0, 16)}`;
     const netScope = `api|${clientIp(req)}`;
+    if (apiKeyLimiter.blocked(keyScope)) throw new HttpError(429, 'This API key keeps failing. Stop retrying it and reconnect the venue.');
     if (apiNetLimiter.blocked(netScope)) throw new HttpError(429, 'Too many bad API keys from this address. Try again in a few minutes.');
-    const v = m ? db.prepare('SELECT * FROM venues WHERE api_key_hash = ?').get(hash) : null;
-    if (!v || !v.active || !v.password_hash) {
-      if (apiKeyLimiter.blocked(keyScope)) throw new HttpError(429, 'This API key keeps failing. Stop retrying it and reconnect the venue.');
-      apiKeyLimiter.fail(keyScope);
-      apiNetLimiter.fail(netScope);
-      throw new HttpError(401, 'Invalid API key');
-    }
-    const last = Date.parse(v.api_key_last_used_at || '') || 0;
-    if (Date.now() - last > 60 * 1000) db.prepare('UPDATE venues SET api_key_last_used_at = ? WHERE id = ?').run(now(), v.id);
-    return v;
+    apiKeyLimiter.fail(keyScope);
+    apiNetLimiter.fail(netScope);
+    throw new HttpError(401, 'Invalid API key');
   }
 
   function externalId(v) {
@@ -2424,17 +2520,27 @@ function createApp(db, options = {}) {
     return s;
   }
 
+  // decodeURIComponent throws on malformed input (e.g. a stray %); turn that into a clean 400.
+  function decodeExt(raw) {
+    try {
+      return decodeURIComponent(String(raw).replace(/^ext:/, ''));
+    } catch {
+      throw new HttpError(400, 'External ID is not validly encoded');
+    }
+  }
+
   function apiEvent(venue, ref) {
     const e = /^\d+$/.test(ref)
       ? db.prepare('SELECT * FROM events WHERE id = ? AND venue_id = ?').get(Number(ref), venue.id)
-      : db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(externalId(decodeURIComponent(ref.replace(/^ext:/, ''))), venue.id);
+      : db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(externalId(decodeExt(ref)), venue.id);
     if (!e) throw new HttpError(404, 'Show not found');
     return e;
   }
 
   function apiEventOut(e) {
     const st = stats(listGuests(db, e.id));
-    const { headcount, ...rest } = eventOut(e);
+    // Staff-entered notes and the staff member's name stay inside the venue — never sent to Riderly.
+    const { headcount, notes, createdBy, ...rest } = eventOut(e);
     return {
       ...rest,
       door: headcount,
@@ -2468,7 +2574,7 @@ function createApp(db, options = {}) {
 
   // Creates the show the first time, then keeps it in step. Only the fields sent are changed.
   route('PUT', /^\/api\/v1\/events\/ext:([^/]+)$/, ({ venue, params, body }) => {
-    const ext = externalId(decodeURIComponent(params[0]));
+    const ext = externalId(decodeExt(params[0]));
     const e = db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(ext, venue.id);
     const has = (k) => body[k] !== undefined;
     const fields = {
@@ -2515,9 +2621,14 @@ function createApp(db, options = {}) {
   // A cancelled show: deleted if nobody is on its list yet, otherwise archived so no names are lost.
   route('DELETE', /^\/api\/v1\/events\/([^/]+)$/, ({ venue, params }) => {
     const e = apiEvent(venue, params[0]);
+    // Riderly only manages the shows it created. A show the venue made itself (no external id)
+    // is never hard-deleted through the API — archive it at most.
+    if (!e.external_id) throw new HttpError(409, 'This show was created in Guest List, not by Riderly, so it can’t be deleted through the API. Archive it in Guest List instead.');
     const guests = db.prepare('SELECT COUNT(*) AS n FROM guests WHERE event_id = ?').get(e.id).n;
     const contributors = db.prepare('SELECT COUNT(*) AS n FROM contributors WHERE event_id = ?').get(e.id).n;
-    if (guests === 0 && contributors === 0 && !e.head_in) {
+    // Truly empty: no list, no contributor links, and no door activity (live tally or a count
+    // someone typed in). Only then is it safe to remove with no record.
+    if (guests === 0 && contributors === 0 && !e.head_in && !e.head_count) {
       db.prepare('DELETE FROM events WHERE id = ?').run(e.id);
       publish(e.id, 'deleted');
       return { deleted: true, archived: false };
@@ -2557,8 +2668,13 @@ function createApp(db, options = {}) {
     const actor = str(body.name, 'Name', { max: 60 }) || null;
     const token = crypto.randomBytes(24).toString('base64url');
     db.prepare("DELETE FROM sso_tokens WHERE expires_at < ?").run(now());
-    db.prepare('INSERT INTO sso_tokens (token_hash, venue_id, target, actor, expires_at) VALUES (?, ?, ?, ?, ?)')
-      .run(sha256(token), venue.id, target, actor, new Date(Date.now() + 60 * 1000).toISOString());
+    db.prepare('INSERT INTO sso_tokens (token_hash, venue_id, target, actor, epoch, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(sha256(token), venue.id, target, actor, venue.api_epoch || 1, new Date(Date.now() + 60 * 1000).toISOString());
+    // Leave a trace that Riderly handed out a sign-in link (no token, no guest data).
+    if (body.show !== undefined && body.show !== null && body.show !== '') {
+      const e = apiEvent(venue, String(body.show));
+      log(db, { eventId: e.id, action: 'sso.issue', detail: actor ? `one-click link for ${actor}` : 'one-click link', actor: 'Riderly', via: 'venue' });
+    }
     return { url: `${PUBLIC_URL}/sso/${token}`, expiresIn: 60 };
   }, { auth: 'api' });
 
@@ -2574,13 +2690,15 @@ function createApp(db, options = {}) {
 
   route('POST', /^\/api\/vadmin\/api-key$/, ({ venue }) => {
     const key = `rgl_${crypto.randomBytes(24).toString('base64url')}`;
-    db.prepare('UPDATE venues SET api_key_hash = ?, api_key_hint = ?, api_key_created_at = ?, api_key_last_used_at = NULL WHERE id = ?')
+    // Rotating the key bumps the epoch, so any one-click sessions it minted stop working.
+    db.prepare('UPDATE venues SET api_key_hash = ?, api_key_hint = ?, api_key_created_at = ?, api_key_last_used_at = NULL, api_epoch = api_epoch + 1 WHERE id = ?')
       .run(hashKey(key), key.slice(-4), now(), venue.id);
     return { key, ...apiKeyOut(db.prepare('SELECT * FROM venues WHERE id = ?').get(venue.id)) };
   }, { auth: 'vadmin' });
 
   route('DELETE', /^\/api\/vadmin\/api-key$/, ({ venue }) => {
-    db.prepare('UPDATE venues SET api_key_hash = NULL, api_key_hint = NULL, api_key_created_at = NULL, api_key_last_used_at = NULL WHERE id = ?').run(venue.id);
+    // Disconnecting Riderly also revokes the one-click sessions the key granted.
+    db.prepare('UPDATE venues SET api_key_hash = NULL, api_key_hint = NULL, api_key_created_at = NULL, api_key_last_used_at = NULL, api_epoch = api_epoch + 1 WHERE id = ?').run(venue.id);
     return { connected: false };
   }, { auth: 'vadmin' });
 
@@ -2596,9 +2714,18 @@ function createApp(db, options = {}) {
       res.writeHead(302, { ...headers, Location: '/login?expired=1' });
       return res.end();
     }
-    const cookies = [auth.venueCookie(db, v, secureCookies)];
+    // If the key was rotated or disconnected in the 60s since the link was made, don't honour it.
+    if ((row.epoch || 1) !== (v.api_epoch || 1)) {
+      res.writeHead(302, { ...headers, Location: '/login?expired=1' });
+      return res.end();
+    }
+    const cookies = [auth.ssoVenueCookie(db, v, secureCookies)];
     if (row.actor) {
-      cookies.push(`vl_as=${encodeURIComponent(row.actor)}; Path=/app; Max-Age=60; SameSite=Lax${secureCookies ? '; Secure' : ''}`);
+      // Over HTTPS the name rides in a __Host- cookie (host-only, Path=/), which a sibling
+      // subdomain can't set, so it can't silently rename this device in the log.
+      cookies.push(secureCookies
+        ? `__Host-vl_as=${encodeURIComponent(row.actor)}; Path=/; Max-Age=60; SameSite=Lax; Secure`
+        : `vl_as=${encodeURIComponent(row.actor)}; Path=/app; Max-Age=60; SameSite=Lax`);
     }
     res.writeHead(302, { ...headers, 'Set-Cookie': cookies, Location: `/app${row.target}` });
     res.end();
@@ -2607,6 +2734,7 @@ function createApp(db, options = {}) {
   // ----- dispatcher -----
 
   async function handle(req, res) {
+    for (const [k, v] of Object.entries(baseSecHeaders)) res.setHeader(k, v);
     const url = new URL(req.url, 'http://local');
     const pathname = url.pathname;
 
@@ -2634,9 +2762,12 @@ function createApp(db, options = {}) {
         venue = apiVenue(req);
       }
       // Mutations must be JSON: blocks cross-site form posts (CSRF) alongside SameSite cookies.
-      // (API-key calls carry no cookies, so they can't be forged cross-site.)
-      if (mode !== 'api' && req.method !== 'GET' && !(req.headers['content-type'] || '').includes('application/json')) {
-        throw new HttpError(415, 'Expected application/json');
+      // We compare the content type's essence (the bit before any ";"), so a safelisted type
+      // like "text/plain; application/json" — which a cross-site form can send without a CORS
+      // preflight — doesn't sneak past a substring check. (API-key calls carry no cookies.)
+      if (mode !== 'api' && req.method !== 'GET') {
+        const essence = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+        if (essence !== 'application/json') throw new HttpError(415, 'Expected application/json');
       }
       const params = pathname.match(r.pattern).slice(1);
       const body = req.method === 'GET' ? {} : await readJson(req);
@@ -2665,7 +2796,15 @@ function createApp(db, options = {}) {
   const server = http.createServer((req, res) => {
     handle(req, res);
   });
+  // Bound how long a client may take to send its headers and body, so a trickle of bytes can't
+  // tie up a connection (and memory) indefinitely. These limit receiving the request, not the
+  // live-update response, so the event stream is unaffected.
+  server.headersTimeout = 20 * 1000;
+  server.requestTimeout = 30 * 1000;
   server.on('close', () => hub.closeAll());
+  // A read-only view of the route table and each route's auth mode. Used by the test suite to
+  // assert that every non-public route refuses an unauthenticated request. No handler is exposed.
+  server.routes = routes.map((r) => ({ method: r.method, source: r.pattern.source, auth: r.auth || 'venue' }));
   server.purgeExpired = purgeExpired;
   server.billingReminder = billingReminder;
   server.runBackup = runBackup;
@@ -2678,6 +2817,11 @@ function createApp(db, options = {}) {
     const demos = setInterval(() => {
       deleteOldDemos(db);
       billingReminder();
+      // Close live feeds past their max age or whose session is no longer valid.
+      hub.sweep((e) => {
+        const v = db.prepare('SELECT active, password_version FROM venues WHERE id = ?').get(e.venueId);
+        return !!v && !!v.active && v.password_version === e.version;
+      });
     }, 3600 * 1000);
     first.unref();
     daily.unref();

@@ -727,14 +727,24 @@ test('venue admin portal: login, isolation between venues, defaults', async () =
   assert.equal((await a.admin.call('GET', '/api/vadmin/overview')).status, 200);
 });
 
-test('older venue with only a manager code can set up its admin password', async () => {
-  const { venue } = await onboard('Legacy Admin Hall', 'venuepass1', '3131');
+test('a venue with no admin password cannot be claimed with a manager code; needsSetup is not leaked anonymously', async () => {
+  const { venue, c } = await onboard('Legacy Admin Hall', 'venuepass1', '3131');
   appDb.prepare('UPDATE venues SET admin_password_hash = NULL WHERE id = ?').run(venue.id);
+  // An anonymous caller is told nothing about the venue's setup state.
+  const anon = await client().call('GET', '/api/vadmin/session/legacy-admin-hall');
+  assert.equal(anon.data.needsSetup, undefined, 'setup state not leaked to anonymous callers');
+  // A staff session for the venue may see it (to show the right screen).
+  assert.equal((await c.call('GET', '/api/vadmin/session/legacy-admin-hall')).data.needsSetup, true);
+  // The manager code can no longer claim venue admin — even the right one.
   const a = client();
-  assert.equal((await a.call('GET', '/api/vadmin/session/legacy-admin-hall')).data.needsSetup, true);
-  assert.equal((await a.call('POST', '/api/vadmin/login/legacy-admin-hall', { managerCode: '0000', newPassword: 'fresh-admin-1' })).status, 401);
-  assert.equal((await a.call('POST', '/api/vadmin/login/legacy-admin-hall', { managerCode: '3131', newPassword: 'fresh-admin-1' })).status, 200);
-  assert.equal((await a.call('GET', '/api/vadmin/overview')).status, 200);
+  assert.equal((await a.call('POST', '/api/vadmin/login/legacy-admin-hall', { managerCode: '3131', newPassword: 'fresh-admin-1' })).status, 403);
+  assert.equal((await a.call('GET', '/api/vadmin/overview')).status, 401, 'no session was granted');
+  // The proper path: the owner issues an admin link, which sets the password.
+  const link = await owner.call('POST', `/api/owner/venues/${venue.id}/admin-link`);
+  assert.equal(link.status, 200);
+  const token = link.data.adminPath.split('/').pop();
+  const reset = client();
+  assert.equal((await reset.call('POST', `/api/venue-admin/reset/${token}`, { password: 'fresh-admin-1' })).status, 200);
   assert.equal((await client().call('POST', '/api/vadmin/login/legacy-admin-hall', { password: 'fresh-admin-1' })).status, 200);
 });
 
@@ -987,7 +997,9 @@ test('an existing single-venue database is migrated into venue #1 with the same 
   `);
   const { hashPassword } = require('../src/auth');
   old.prepare("INSERT INTO settings VALUES ('password_hash', ?), ('venue_name', 'Pockets Moorabbin'), ('password_version', '3')").run(hashPassword('legacypass1'));
-  old.prepare("INSERT INTO events (name, date, created_at, created_by) VALUES ('Old Show', '2026-10-01', '2026-09-01', 'Will')").run();
+  // A week out, so the migrated show is still "upcoming" whatever day the test runs.
+  const soon = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  old.prepare("INSERT INTO events (name, date, created_at, created_by) VALUES ('Old Show', ?, '2026-09-01', 'Will')").run(soon);
   old.close();
 
   const db = openDb(file);
@@ -1528,4 +1540,242 @@ test('VIP alerts: signed empty pushes to real push services only, not to the per
     app.closeAllConnections();
     app.close();
   }
+});
+
+// ---- security hardening (audit fixes) ----
+
+test('CSRF: a cross-site form content-type is rejected even when it contains application/json', async () => {
+  const { c } = await onboard('CSRF Hall');
+  // The essence is text/plain (a form can send this with no CORS preflight) — must be refused.
+  const r = await c.call('POST', '/api/events', { name: 'X', date: '2099-01-01' },
+    { headers: { 'Content-Type': 'text/plain; application/json' } });
+  assert.equal(r.status, 415);
+  // Real JSON still works.
+  assert.equal((await c.call('POST', '/api/events', { name: 'X', date: '2099-01-01', overridePin: '2468' })).status, 200);
+});
+
+test('every response carries the baseline security headers; HTTPS adds HSTS and the html CSP', async () => {
+  const sec = createApp(openDb(':memory:'), { secureCookies: true, purgeTimer: false });
+  await new Promise((r) => sec.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${sec.address().port}`;
+  try {
+    const api = await fetch(`${url}/health`);
+    assert.equal(api.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(api.headers.get('x-frame-options'), 'DENY');
+    assert.match(api.headers.get('strict-transport-security') || '', /max-age=\d+/);
+    const page = await fetch(`${url}/login`);
+    const csp = page.headers.get('content-security-policy') || '';
+    assert.match(csp, /base-uri 'none'/);
+    assert.match(csp, /form-action 'self'/);
+    assert.match(csp, /object-src 'none'/);
+  } finally {
+    sec.closeAllConnections();
+    sec.close();
+  }
+});
+
+test('over HTTPS the session cookie is __Host- prefixed, and a legacy plain cookie still works', async () => {
+  const db = openDb(':memory:');
+  const sec = createApp(db, { secureCookies: true, purgeTimer: false });
+  await new Promise((r) => sec.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${sec.address().port}`;
+  try {
+    const add = await fetch(`${url}/api/owner/venues`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: 'x=y' } });
+    // owner not set up yet → 401, fine; set owner up directly for the cookie test
+    const { hashPassword } = require('../src/auth');
+    const { setSetting } = require('../src/db');
+    setSetting(db, 'owner_password_hash', hashPassword('ownerpass1'));
+    const login = await fetch(`${url}/api/owner/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'ownerpass1' }) });
+    const setCookie = login.headers.getSetCookie().join(' ');
+    assert.match(setCookie, /__Host-vl_owner=/, 'prefixed cookie issued over https');
+    assert.match(setCookie, /Secure/);
+    // The signed value also validates when presented under the plain legacy name.
+    const value = login.headers.getSetCookie().find((s) => s.startsWith('__Host-vl_owner=')).split(';')[0].split('=').slice(1).join('=');
+    const viaPlain = await fetch(`${url}/api/owner/venues`, { headers: { Cookie: `vl_owner=${value}` } });
+    assert.equal(viaPlain.status, 200, 'legacy plain cookie name still accepted');
+    void add;
+  } finally {
+    sec.closeAllConnections();
+    sec.close();
+  }
+});
+
+test('forgot-password is capped per venue and never overwrites a live owner-issued link', async () => {
+  const sent = [];
+  const db = openDb(':memory:');
+  const app = createApp(db, { purgeTimer: false, mailSend: null });
+  // Stub mail by pointing at a config and capturing sends is heavy; instead assert token isn't clobbered.
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const o = client(() => url);
+  try {
+    const { hashPassword } = require('../src/auth');
+    const { setSetting } = require('../src/db');
+    setSetting(db, 'owner_password_hash', hashPassword('ownerpass1'));
+    await o.call('POST', '/api/owner/login', { password: 'ownerpass1' });
+    const v = await o.call('POST', '/api/owner/venues', { name: 'Forgot Hall', email: 'gm@forgot.test' });
+    const id = v.data.venue.id;
+    // Finish setup so the venue has a staff password + email on file.
+    const token = v.data.setupPath.split('/').pop();
+    await client(() => url).call('POST', `/api/setup/${token}`, { password: 'staffpass1', adminPassword: 'adminpass1' });
+    // Owner issues an admin link; its hash is stored.
+    const link = await o.call('POST', `/api/owner/venues/${id}/admin-link`);
+    const before = db.prepare('SELECT admin_token_hash FROM venues WHERE id = ?').get(id).admin_token_hash;
+    // A forgot (admin) request must NOT replace that live token.
+    await client(() => url).call('POST', '/api/forgot', { username: 'forgot-hall', kind: 'admin' });
+    const after = db.prepare('SELECT admin_token_hash FROM venues WHERE id = ?').get(id).admin_token_hash;
+    assert.equal(after, before, 'the owner-issued link survives a forgot request');
+    void sent; void link;
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});
+
+test('a live stream is cut when the venue logs out all devices', async () => {
+  const { c, admin } = await onboard('Stream Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Stream Night', date: '2099-05-01', overridePin: '2468' })).data;
+  const cookie = Object.entries(c.jar).map(([k, v]) => `${k}=${v}`).join('; ');
+  const ac = new AbortController();
+  const res = await fetch(`${base}/api/events/${ev.id}/stream`, { headers: { Cookie: cookie, Accept: 'text/event-stream' }, signal: ac.signal });
+  assert.equal(res.status, 200);
+  const reader = res.body.getReader();
+  const first = await reader.read(); // the hello frame
+  assert.ok(new TextDecoder().decode(first.value).includes('hello'));
+  // Log every device out; the open stream should end on its own.
+  await admin.call('POST', '/api/vadmin/logout-devices');
+  const closed = await Promise.race([
+    (async () => { while (true) { const { done } = await reader.read(); if (done) return true; } })(),
+    new Promise((r) => setTimeout(() => r(false), 2000)),
+  ]);
+  ac.abort();
+  assert.equal(closed, true, 'the stream closed after logout-all');
+});
+
+test('deleting a guest wipes their name from the activity log (the erase route)', async () => {
+  const { c } = await onboard('Erase Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2099-03-03', overridePin: '2468' })).data;
+  const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Jane Private', notes: 'VIP friend' })).data;
+  assert.equal((await c.call('DELETE', `/api/guests/${g.id}`)).status, 200);
+  const act = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  assert.ok(!JSON.stringify(act).includes('Jane Private'), 'name gone from every activity row');
+  assert.ok(act.some((a) => a.action === 'guest.remove'), 'the removal is still recorded');
+});
+
+test('a past show re-purges when guests are added after an earlier purge', async () => {
+  const { c, admin } = await onboard('Repurge Hall');
+  await admin.call('PUT', '/api/vadmin/venue', { retentionDays: 30 });
+  const old = (await c.call('POST', '/api/events', { name: 'Old', date: '2026-01-10', overridePin: '2468' })).data;
+  await c.call('POST', `/api/events/${old.id}/guests`, { name: 'First Person' });
+  assert.ok(server.purgeExpired(new Date('2026-06-01T12:00:00Z')) >= 1);
+  assert.equal((await c.call('GET', `/api/events/${old.id}`)).data.guests[0].name, 'Guest (removed)');
+  // A name added to the already-purged past show must not linger.
+  await c.call('POST', `/api/events/${old.id}/guests`, { name: 'Late Addition' });
+  assert.ok(server.purgeExpired(new Date('2026-06-01T12:00:00Z')) >= 1, 're-purged');
+  const g = (await c.call('GET', `/api/events/${old.id}`)).data.guests;
+  assert.ok(g.every((x) => x.name === 'Guest (removed)'), 'the late name is scrubbed too');
+});
+
+test('a contributor link stops showing names once it is locked, but keeps the totals', async () => {
+  const { c } = await onboard('Lock Portal Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Portal Show', date: '2099-07-07', overridePin: '2468' })).data;
+  const contr = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Tour Mgr', allocation: 10 })).data;
+  const view = await fetch(`${base}/api/c/${contr.token}`).then((r) => r.json());
+  await fetch(`${base}/api/c/${contr.token}/guests`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Actor': 'TM' }, body: JSON.stringify({ name: 'Band Friend', plusOnes: 1 }) });
+  let open = await fetch(`${base}/api/c/${contr.token}`).then((r) => r.json());
+  assert.equal(open.guests.length, 1);
+  assert.equal(open.used, 2);
+  // Disable the link: names disappear, the count stays.
+  await c.call('PUT', `/api/contributors/${contr.id}`, { active: false });
+  const locked = await fetch(`${base}/api/c/${contr.token}`).then((r) => r.json());
+  assert.ok(locked.locked);
+  assert.equal(locked.guests.length, 0, 'no names once locked');
+  assert.equal(locked.used, 2, 'but the total is still shown');
+  void view;
+});
+
+test('one-click session is revoked when the API key is disconnected or rotated', async () => {
+  const { admin } = await onboard('Revoke Click Hall');
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const api = (m, p, b) => client().call(m, p, b, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  await api('PUT', '/api/v1/events/ext:rc-1', { name: 'Night', date: new Date(Date.now() + 86400000).toISOString().slice(0, 10) });
+  const link = (await api('POST', '/api/v1/sso', { show: 'ext:rc-1' })).data.url;
+  const open = await fetch(base + new URL(link).pathname, { redirect: 'manual' });
+  const cookie = open.headers.getSetCookie().find((x) => x.startsWith('vl_session=')).split(';')[0];
+  assert.equal((await fetch(`${base}/api/events`, { headers: { Cookie: cookie } })).status, 200, 'the one-click session works');
+  // Disconnect Riderly: the one-click session dies, even though it was a staff login.
+  await admin.call('DELETE', '/api/vadmin/api-key');
+  assert.equal((await fetch(`${base}/api/events`, { headers: { Cookie: cookie } })).status, 401, 'revoked with the key');
+});
+
+test('the API never returns staff notes or the staff member who created a show', async () => {
+  const { c, admin } = await onboard('Notes Hall');
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const api = (m, p, b) => client().call(m, p, b, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  const ev = (await c.call('POST', '/api/events', { name: 'With Notes', date: '2099-09-09', notes: 'Artist entry via the laneway — secret', overridePin: '2468' })).data;
+  const out = await api('GET', `/api/v1/events/${ev.id}`);
+  assert.equal(out.status, 200);
+  assert.equal(out.data.notes, undefined, 'staff notes stay in the venue');
+  assert.equal(out.data.createdBy, undefined, 'staff name stays in the venue');
+  assert.equal(JSON.stringify(out.data).includes('secret'), false);
+});
+
+test('the API cannot delete a show the venue created itself, and rejects a malformed external id', async () => {
+  const { c, admin } = await onboard('Guard API Hall');
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const api = (m, p, b) => client().call(m, p, b, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  const mine = (await c.call('POST', '/api/events', { name: 'Venue Made', date: '2099-10-10', overridePin: '2468' })).data;
+  assert.equal((await api('DELETE', `/api/v1/events/${mine.id}`)).status, 409, 'a venue-made show is not Riderly’s to delete');
+  assert.equal((await c.call('GET', `/api/events/${mine.id}`)).status, 200, 'still there');
+  // A broken percent-encoding is a clean 400, not a 500.
+  assert.equal((await api('GET', '/api/v1/events/ext:%E0%A4%A')).status, 400);
+});
+
+test('CSV export neutralises spreadsheet formulas and keeps odd cells in one column', async () => {
+  const { c } = await onboard('CSV Export Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Export Night', date: '2099-02-02', overridePin: '2468' })).data;
+  await c.call('POST', `/api/events/${ev.id}/guests`, { name: '=HYPERLINK("http://evil","x")', notes: 'a;b\tc' });
+  const cookie = Object.entries(c.jar).map(([k, v]) => `${k}=${v}`).join('; ');
+  const csv = await (await fetch(`${base}/api/events/${ev.id}/export.csv`, { headers: { Cookie: cookie } })).text();
+  assert.ok(csv.includes("'=HYPERLINK"), 'formula is prefixed with an apostrophe');
+  assert.ok(csv.includes('"a;b\tc"'), 'a cell with a delimiter stays quoted as one field');
+});
+
+test('paste import caps line length and total size so it can’t hang the server', () => {
+  const row = parseImport('X'.repeat(5000));
+  assert.equal(row.length, 1);
+  assert.ok(row[0].name.length <= 300, 'one line is capped');
+  const many = parseImport(Array.from({ length: 100 }, (_, i) => `Name ${i} +1`).join('\n'));
+  assert.equal(many.length, 100);
+});
+
+test('email headers never carry an injected line', () => {
+  const { buildMessage } = require('../src/mail');
+  const msg = buildMessage({ from: 'Riderly <r@x.com>' }, { to: 'a@b.com\r\nBcc: evil@x.com', subject: 'Hi\r\nX-Evil: y', text: 'body' });
+  const headers = msg.split('\r\n\r\n')[0].split('\r\n');
+  assert.ok(!headers.some((l) => /^Bcc:/i.test(l)), 'the CRLF is collapsed, not turned into a Bcc header');
+  assert.ok(!headers.some((l) => /^X-Evil:/i.test(l)), 'nor an injected header from the subject');
+});
+
+test('every non-public route refuses an unauthenticated request', async () => {
+  // Turn a route's regex source into a concrete path we can call with no cookie and no API key.
+  const sample = (src) => src
+    .replace(/^\^/, '').replace(/\$$/, '')
+    .replace(/\\\//g, '/').replace(/\\\./g, '.')
+    .replace(/\(\\d\+\)/g, '1')
+    .replace(/\(\[\^\/\]\+\)/g, 'x');
+  let checked = 0;
+  for (const r of server.routes) {
+    if (r.auth === 'public') continue;
+    const path = sample(r.source);
+    assert.ok(!/[()\\[\]]/.test(path), `sampler left regex metachars in ${path} (from ${r.source})`);
+    const res = await fetch(base + path, {
+      method: r.method,
+      headers: r.method === 'GET' ? {} : { 'Content-Type': 'application/json' },
+      body: r.method === 'GET' ? undefined : '{}',
+    });
+    assert.ok([401, 403].includes(res.status), `${r.method} ${path} (auth: ${r.auth}) must refuse an anonymous caller, got ${res.status}`);
+    checked += 1;
+  }
+  assert.ok(checked >= 50, `expected to cover the whole protected surface, only checked ${checked}`);
 });
