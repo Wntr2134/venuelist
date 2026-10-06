@@ -6,8 +6,11 @@ product of Riderly (riderly.com.au, the venue manager, "VMT"). Owner: Will.
 New to this repo, or asked to get caught up? Read `docs/onboarding.md` first.
 
 ## How work gets in
-- Work on a branch, open a pull request into `main`. Never push to `main`: only Will merges,
-  and every merge to `main` deploys to production automatically (GitHub Actions).
+- Work on a branch, open a pull request into `main`. Never push to `main` directly. Every merge to
+  `main` deploys to production automatically (GitHub Actions).
+- Who merges: sessions working under Will's own GitHub account (Wntr2134) may merge their own pull
+  request once its `test` check is green, then tell Will it's live. Everyone else's pull requests
+  wait for Will's review and approval (GitHub enforces this: only the repo admin can bypass).
 - Pull requests run the tests (`.github/workflows/test.yml`). Keep them green.
 - Never deploy by hand, never SSH to the droplet, never read or ask for the deploy secrets.
 
