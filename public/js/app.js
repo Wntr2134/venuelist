@@ -1,7 +1,7 @@
 'use strict';
 
 /* global setDeviceName, guestScore, h, clear, put, api, ApiError, toast, modal, confirmDialog, promptDeviceName, currentName,
-   fmtDate, fmtDateTime, fmtTime, toLocalInput, fromLocalInput, field, formData, norm */
+   fmtDate, fmtDateTime, fmtTime, toLocalInput, fromLocalInput, field, formData, norm, withOverride, shrinkPhoto */
 
 const app = document.getElementById('app');
 const state = { venueName: 'Venue', venueSlug: '', stream: null, cleanup: [] };
@@ -552,11 +552,26 @@ function statTiles(s, e) {
 // never the list itself.
 function bannedFlag(g) {
   if (!g.banned) return null;
-  return h('div', { class: 'banned-flag' }, h('strong', null, '⚠ Banned list'), g.banned.reason ? ` · ${g.banned.reason}` : '', ' · get a manager');
+  return h('div', { class: 'banned-flag' },
+    g.banned.photo ? banPhoto(g.banned.photo, 'ban-thumb') : null,
+    h('span', null, h('strong', null, '⚠ Banned list'), g.banned.reason ? ` · ${g.banned.reason}` : '', ' · get a manager'));
 }
 
-function bannedAlert(name, reason) {
+// A banned-list photo (feature: banned-photos). Staff compare by eye; tap to see it bigger.
+function banPhoto(url, cls = 'ban-photo') {
+  return h('img', {
+    src: url, class: cls, alt: 'Photo from the banned list', loading: 'lazy',
+    onclick: (e) => {
+      e.stopPropagation();
+      const m = modal('Banned-list photo', h('img', { src: url, class: 'ban-photo-big', alt: 'Photo from the banned list' }),
+        { actions: [h('button', { class: 'btn btn-primary', onclick: () => m.close() }, 'Close')] });
+    },
+  });
+}
+
+function bannedAlert(name, reason, photo) {
   const m = modal('⚠ Matches your banned list', h('div', { class: 'stack' },
+    photo ? banPhoto(photo, 'ban-photo-big') : null,
     h('p', null, h('strong', null, name), ' matches a name on your venue’s banned list.'),
     reason ? h('p', { class: 'banned-flag' }, `Reason: ${reason}`) : null,
     h('p', { class: 'muted' }, 'Get a manager before letting them in. It may be someone else with the same name.')
@@ -648,7 +663,7 @@ function guestForm(data, g, onDone, { atDoor = false } = {}) {
         : api('POST', `/api/events/${data.event.id}/guests`, { ...body, ...extra }));
       if (!saved) return;
       m.close();
-      if (saved.banned) bannedAlert(saved.name, saved.banned.reason);
+      if (saved.banned) bannedAlert(saved.name, saved.banned.reason, saved.banned.photo);
       else toast(editing ? 'Guest saved' : `${body.name} added`, 'ok');
       onDone();
     } catch (err) {
@@ -1133,7 +1148,10 @@ async function renderDoor(id) {
     banTimer = setTimeout(async () => {
       try {
         const r = await api('GET', `/api/banned/check?name=${encodeURIComponent(name)}`);
-        if (r.match && ui.search.trim() === name) put(banWarn, h('p', { class: 'banned-flag' }, h('strong', null, '⚠ Matches your banned list'), r.reason ? ` · ${r.reason}` : '', '. Get a manager.'));
+        if (r.match && ui.search.trim() === name) {
+          put(banWarn, h('div', { class: 'banned-flag' }, r.photo ? banPhoto(r.photo, 'ban-thumb') : null,
+            h('span', null, h('strong', null, '⚠ Matches your banned list'), r.reason ? ` · ${r.reason}` : '', '. Get a manager.')));
+        }
       } catch {
         /* offline: the check happens again when they're added */
       }
@@ -1194,7 +1212,8 @@ async function renderDoor(id) {
     if (room <= 0) return;
     if (dir === 'in' && g.banned && !g.admitted) {
       const ok = await confirmDialog('⚠ Matches your banned list',
-        `${g.name} matches a name on your banned list${g.banned.reason ? ` (${g.banned.reason})` : ''}. Only let them in once a manager has checked.`,
+        [g.banned.photo ? banPhoto(g.banned.photo, 'ban-photo-big') : null,
+          `${g.name} matches a name on your banned list${g.banned.reason ? ` (${g.banned.reason})` : ''}. Only let them in once a manager has checked.`],
         { confirmText: 'Manager checked, let in', danger: true });
       if (!ok) return;
     }
@@ -1472,6 +1491,10 @@ async function renderDoor(id) {
         search,
         h('button', { class: 'btn', onclick: () => walkUp('') }, '+ Walk-up')
       ),
+      hasFeature('banned-photos') ? h('div', { class: 'row wrap door-ban-tools' },
+        h('button', { class: 'btn btn-small', onclick: () => bannedGallery() }, '🚫 Banned faces'),
+        h('button', { class: 'btn btn-small', onclick: () => bannedPhotoForm(ui.search.trim()) }, '📷 Photo for banned list')
+      ) : null,
       filterBar,
       list
     )
@@ -1479,6 +1502,87 @@ async function renderDoor(id) {
   await load();
   search.focus();
   live(id, load, onMessage);
+}
+
+// ---------- banned list photos (feature: banned-photos) ----------
+
+// Everyone on the banned list who has a photo. Opening it is logged with this device's name.
+async function bannedGallery() {
+  let list;
+  try {
+    list = await api('GET', '/api/banned/gallery');
+  } catch (err) {
+    return handleError(err);
+  }
+  const grid = h('div', { class: 'ban-gallery' });
+  const draw = () => put(grid, list.length ? list.map((b) => h('div', { class: 'ban-card' },
+    banPhoto(b.photo),
+    h('strong', null, b.name),
+    b.reason ? h('span', { class: 'small muted' }, b.reason) : null,
+    h('button', {
+      class: 'btn btn-small btn-ghost-danger',
+      onclick: async () => {
+        try {
+          const r = await withOverride((extra) => api('DELETE', `/api/banned/photo/${b.id}`, extra));
+          if (r === null) return;
+          list = list.filter((x) => x.id !== b.id);
+          toast('Photo removed', 'ok');
+          draw();
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      },
+    }, 'Remove photo')
+  )) : h('div', { class: 'empty' }, 'No photos on the banned list yet.'));
+  draw();
+  const m = modal('🚫 Banned faces', h('div', { class: 'stack' },
+    h('p', { class: 'small muted' }, 'Compare by eye and get a manager if you think it’s them. Removing a photo needs a manager code. Every look is logged.'),
+    grid
+  ), { wide: true, actions: [h('button', { class: 'btn btn-primary', onclick: () => m.close() }, 'Close')] });
+}
+
+// Door staff take a photo; it waits for an hour for the venue admin to approve it, or it's deleted.
+function bannedPhotoForm(name) {
+  let photo = null;
+  const preview = h('div', { class: 'ban-preview' });
+  const fileInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'visually-hidden' });
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    try {
+      photo = await shrinkPhoto(file);
+      put(preview, h('img', { src: photo, class: 'ban-photo-big', alt: 'The photo you just took' }));
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    fileInput.value = '';
+  });
+  const form = h('form', { class: 'stack' },
+    h('p', { class: 'small muted' }, 'Tell the person you’re taking a photo for the venue’s banned list. It isn’t saved yet: your venue admin has 1 hour to approve it, or it’s deleted.'),
+    field('Full name', h('input', { name: 'name', required: true, maxlength: '120', value: name || '', placeholder: 'First name and surname', autocomplete: 'off' })),
+    field('Reason', h('input', { name: 'reason', maxlength: '200', placeholder: 'e.g. Fighting, Oct 2026', autocomplete: 'off' })),
+    fileInput,
+    h('button', { type: 'button', class: 'btn', onclick: () => fileInput.click() }, '📷 Take photo'),
+    preview
+  );
+  const submit = async (e) => {
+    if (e) e.preventDefault();
+    if (!form.reportValidity()) return;
+    if (!photo) return toast('Take the photo first', 'error');
+    const d = formData(form);
+    try {
+      await api('POST', '/api/banned/pending', { name: d.name, reason: d.reason, photo });
+      photo = null;
+      m.close();
+      toast('Sent. Your venue admin has 1 hour to approve it.', 'ok', 5000);
+    } catch (err) {
+      toast(err.message, 'error', 6000);
+    }
+  };
+  form.addEventListener('submit', submit);
+  const m = modal('📷 Photo for the banned list', form, {
+    actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', onclick: submit }, 'Send for approval')],
+  });
 }
 
 // ---------- capacity screen ----------

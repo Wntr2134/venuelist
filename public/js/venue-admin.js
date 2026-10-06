@@ -1,6 +1,6 @@
 'use strict';
 
-/* global h, put, api, toast, modal, confirmDialog, field, formData, fmtDateTime, fmtDate */
+/* global h, put, api, toast, modal, confirmDialog, field, formData, fmtDateTime, fmtDate, shrinkPhoto */
 
 // Venue admin portal: /v/<venue>/admin — manager codes, staff access, venue settings, privacy, overrides log.
 
@@ -357,20 +357,85 @@ function bannedCard() {
         toast(err.message, 'error');
       }
     };
+    // Photos (feature: banned-photos): staff photos waiting for approval, and a photo per entry.
+    const pickPhoto = (b) => {
+      const input = h('input', { type: 'file', accept: 'image/*', class: 'visually-hidden' });
+      input.addEventListener('change', async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        try {
+          const photo = await shrinkPhoto(file);
+          await api('PUT', `/api/vadmin/banned/${b.id}/photo`, { photo });
+          toast('Photo added', 'ok');
+          load();
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      });
+      document.body.append(input);
+      input.click();
+      setTimeout(() => input.remove(), 60000);
+    };
+    const pending = (r.pending || []).map((p) => {
+      const nameIn = h('input', { value: p.name, maxlength: '120', 'aria-label': 'Full name' });
+      const reasonIn = h('input', { value: p.reason || '', maxlength: '200', placeholder: 'Reason', 'aria-label': 'Reason' });
+      return h('div', { class: 'ban-pending' },
+        h('img', { src: p.photo, alt: `Photo taken by ${p.takenBy}` }),
+        h('div', { class: 'stack' },
+          h('div', { class: 'small muted' }, `Taken by ${p.takenBy} · ${fmtDateTime(p.takenAt)} · deleted ${fmtDateTime(p.expiresAt)} unless approved`),
+          nameIn, reasonIn,
+          h('div', { class: 'row wrap' },
+            h('button', { class: 'btn btn-small btn-primary', onclick: async () => {
+              try {
+                await api('POST', `/api/vadmin/banned/pending/${encodeURIComponent(p.id)}/approve`, { name: nameIn.value, reason: reasonIn.value });
+                toast('Added to the banned list with the photo', 'ok');
+                load();
+              } catch (err) {
+                toast(err.message, 'error', 6000);
+              }
+            } }, 'Approve'),
+            h('button', { class: 'btn btn-small btn-ghost-danger', onclick: async () => {
+              try {
+                await api('DELETE', `/api/vadmin/banned/pending/${encodeURIComponent(p.id)}`);
+                toast('Deleted', 'ok');
+                load();
+              } catch (err) {
+                toast(err.message, 'error');
+              }
+            } }, 'Reject')
+          )
+        )
+      );
+    });
     const rows = r.entries.map((b) => h('li', { class: 'ban-row' },
+      b.photo ? h('img', { src: b.photo, class: 'ban-row-photo', alt: `Photo of ${b.name}` }) : null,
       h('div', null,
         h('strong', null, b.name), b.reason ? h('span', { class: 'muted' }, ` · ${b.reason}`) : null,
         h('div', { class: 'small muted' }, `Added by ${b.createdBy} · review by ${fmtDate(b.reviewAt)}`, b.reviewDue ? h('span', { class: 'badge badge-warn' }, ' Review due') : null)
       ),
-      h('div', { class: 'row' },
+      h('div', { class: 'row wrap' },
         h('button', { class: 'btn btn-small', onclick: () => act('PUT', b, { renew: true }, 'Renewed for 12 months') }, 'Renew'),
+        r.photos ? h('button', { class: 'btn btn-small', onclick: () => pickPhoto(b) }, b.photo ? 'New photo' : 'Add photo') : null,
+        r.photos && b.photo ? h('button', { class: 'btn btn-small btn-ghost-danger', onclick: async () => {
+          if (await confirmDialog('Remove this photo?', `${b.name} stays on the banned list; only the photo goes.`, { confirmText: 'Remove photo', danger: true })) {
+            try {
+              await api('DELETE', `/api/vadmin/banned/${b.id}/photo`);
+              toast('Photo removed', 'ok');
+              load();
+            } catch (err) {
+              toast(err.message, 'error');
+            }
+          }
+        } }, 'Remove photo') : null,
         h('button', { class: 'btn btn-small btn-ghost-danger', onclick: async () => {
           if (await confirmDialog('Remove from banned list?', `${b.name} will no longer trigger a warning at the door.`, { confirmText: 'Remove', danger: true })) act('DELETE', b, undefined, 'Removed');
         } }, 'Remove')
       )
     ));
     put(body,
-      intro,
+      r.photos ? h('p', { class: 'muted' }, 'People your venue has refused entry. Door staff see a warning, your reason and the photo when a name matches, and can open a gallery of the photos. Staff can take a photo at the door; it only joins the list if you approve it within an hour. Every look and change is logged below. Each name needs a review every 12 months and drops off a month after that unless you renew it; its photo goes with it.') : intro,
+      pending.length ? h('div', { class: 'stack' }, h('h3', null, `📷 Waiting for approval (${pending.length})`),
+        h('p', { class: 'small muted' }, 'Photos door staff took. They’re only held for an hour: approve one to add it to the banned list, or it’s deleted.'), pending) : null,
       form,
       rows.length ? h('ul', { class: 'ban-list' }, rows) : h('div', { class: 'empty' }, 'No one on the list.'),
       h('details', null, h('summary', null, 'Access log'),
