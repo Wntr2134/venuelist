@@ -299,26 +299,99 @@ function slugPreview(name) {
 
 // ---------- photos ----------
 
-// Shrinks a photo on the phone before it's sent (max 900px, JPEG), so uploads stay small.
-function shrinkPhoto(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, 900 / Math.max(img.naturalWidth, img.naturalHeight));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.naturalWidth * scale);
-      canvas.height = Math.round(img.naturalHeight * scale);
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/jpeg', 0.8));
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('That photo couldn’t be read. Try taking it again.'));
-    };
-    img.src = url;
-  });
+// Photo files people can pick: anything the browser calls an image, plus HEIC/HEIF by name
+// (some pickers don't class those as images).
+const PHOTO_ACCEPT = 'image/*,.heic,.heif,image/heic,image/heif';
+
+// HEIC/HEIF (iPhone photos) by type, name or the file's own header.
+async function looksHeic(file) {
+  if (/^image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '')) return true;
+  const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  const brand = String.fromCharCode(...head.slice(4, 12));
+  return /^ftyp(heic|heix|hevc|hevx|heim|heis|mif1|msf1)/.test(brand);
+}
+
+// Browsers that can't open HEIC (Chrome, Firefox, Android, Windows) decode it here, on the
+// device, with libheif (public/vendor/libheif). Safari never gets this far.
+let libheifReady = null;
+function loadLibheif() {
+  if (!libheifReady) {
+    libheifReady = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/vendor/libheif/libheif.js';
+      s.onload = () => fetch('/vendor/libheif/libheif.wasm', { credentials: 'same-origin' })
+        .then((r) => {
+          if (!r.ok) throw new Error('Couldn’t load the HEIC converter.');
+          return r.arrayBuffer();
+        })
+        .then((wasmBinary) => window.libheif({ wasmBinary }))
+        .then(resolve, reject);
+      s.onerror = () => reject(new Error('Couldn’t load the HEIC converter.'));
+      document.head.append(s);
+    }).catch((err) => {
+      libheifReady = null;
+      throw err;
+    });
+  }
+  return libheifReady;
+}
+
+async function decodeHeic(file) {
+  const lib = await loadLibheif();
+  const images = new lib.HeifDecoder().decode(new Uint8Array(await file.arrayBuffer()));
+  if (!images || !images.length) throw new Error('That HEIC photo couldn’t be read.');
+  const image = images[0];
+  const canvas = document.createElement('canvas');
+  canvas.width = image.get_width();
+  canvas.height = image.get_height();
+  const ctx = canvas.getContext('2d');
+  const data = ctx.createImageData(canvas.width, canvas.height);
+  await new Promise((resolve, reject) => image.display(data, (out) => (out ? resolve() : reject(new Error('That HEIC photo couldn’t be read.')))));
+  ctx.putImageData(data, 0, 0);
+  return canvas;
+}
+
+// Opens any photo the browser (or libheif) can read: JPEG, PNG, WebP, GIF, AVIF, BMP, HEIC...
+async function openPhoto(file) {
+  if (file.size > 40 * 1024 * 1024) throw new Error('That file is too big for a photo (over 40 MB).');
+  try {
+    return await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch {
+    /* not something this browser opens natively: try a data URL, then HEIC */
+  }
+  try {
+    const url = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = url;
+    });
+  } catch {
+    /* fall through */
+  }
+  if (await looksHeic(file)) return decodeHeic(file);
+  throw new Error('That file isn’t a photo this device can open. Try a JPG, PNG or HEIC photo.');
+}
+
+// Shrinks a photo on the device before it's sent (max 900px, JPEG), so uploads stay small and
+// the server only ever stores one simple format.
+async function shrinkPhoto(file) {
+  const src = await openPhoto(file);
+  const w = src.width || src.naturalWidth;
+  const h = src.height || src.naturalHeight;
+  const scale = Math.min(1, 900 / Math.max(w, h));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
+  canvas.getContext('2d').drawImage(src, 0, 0, canvas.width, canvas.height);
+  if (src.close) src.close();
+  return canvas.toDataURL('image/jpeg', 0.8);
 }
 
 // ---------- manager override ----------

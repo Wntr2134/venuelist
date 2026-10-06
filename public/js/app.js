@@ -1,7 +1,7 @@
 'use strict';
 
 /* global setDeviceName, guestScore, h, clear, put, api, ApiError, toast, modal, confirmDialog, promptDeviceName, currentName,
-   fmtDate, fmtDateTime, fmtTime, toLocalInput, fromLocalInput, field, formData, norm, withOverride, shrinkPhoto */
+   fmtDate, fmtDateTime, fmtTime, toLocalInput, fromLocalInput, field, formData, norm, withOverride, shrinkPhoto, PHOTO_ACCEPT */
 
 const app = document.getElementById('app');
 const state = { venueName: 'Venue', venueSlug: '', stream: null, cleanup: [] };
@@ -1546,24 +1546,33 @@ async function bannedGallery() {
 function bannedPhotoForm(name) {
   let photo = null;
   const preview = h('div', { class: 'ban-preview' });
-  const fileInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'visually-hidden' });
-  fileInput.addEventListener('change', async () => {
-    const file = fileInput.files && fileInput.files[0];
-    if (!file) return;
-    try {
-      photo = await shrinkPhoto(file);
-      put(preview, h('img', { src: photo, class: 'ban-photo-big', alt: 'The photo you just took' }));
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-    fileInput.value = '';
-  });
+  // Two pickers: one opens the camera, the other the phone's photos (or files on a computer).
+  const cameraInput = h('input', { type: 'file', accept: PHOTO_ACCEPT, capture: 'environment', class: 'visually-hidden' });
+  const libraryInput = h('input', { type: 'file', accept: PHOTO_ACCEPT, class: 'visually-hidden' });
+  for (const input of [cameraInput, libraryInput]) {
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      put(preview, h('p', { class: 'small muted' }, 'Getting the photo ready…'));
+      try {
+        photo = await shrinkPhoto(file);
+        put(preview, h('img', { src: photo, class: 'ban-photo-big', alt: 'The photo you chose' }));
+      } catch (err) {
+        put(preview);
+        toast(err.message, 'error', 6000);
+      }
+      input.value = '';
+    });
+  }
   const form = h('form', { class: 'stack' },
     h('p', { class: 'small muted' }, 'Tell the person you’re taking a photo for the venue’s banned list. It isn’t saved yet: your venue admin has 1 hour to approve it, or it’s deleted.'),
     field('Full name', h('input', { name: 'name', required: true, maxlength: '120', value: name || '', placeholder: 'First name and surname', autocomplete: 'off' })),
     field('Reason', h('input', { name: 'reason', maxlength: '200', placeholder: 'e.g. Fighting, Oct 2026', autocomplete: 'off' })),
-    fileInput,
-    h('button', { type: 'button', class: 'btn', onclick: () => fileInput.click() }, '📷 Take photo'),
+    cameraInput,
+    libraryInput,
+    h('div', { class: 'row wrap' },
+      h('button', { type: 'button', class: 'btn', onclick: () => cameraInput.click() }, '📷 Take photo'),
+      h('button', { type: 'button', class: 'btn', onclick: () => libraryInput.click() }, '🖼 Choose photo')),
     preview
   );
   const submit = async (e) => {

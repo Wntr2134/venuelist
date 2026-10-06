@@ -377,6 +377,7 @@ const MIME = {
   '.json': 'application/json',
   '.webmanifest': 'application/manifest+json',
   '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm',
   '.txt': 'text/plain; charset=utf-8',
 };
 
@@ -385,7 +386,7 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
   'Content-Security-Policy':
-    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; "
+    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; "
     + "base-uri 'none'; form-action 'self'; object-src 'none'; frame-ancestors 'none'",
 };
 

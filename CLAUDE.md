@@ -21,6 +21,8 @@ New to this repo, or asked to get caught up? Read `docs/onboarding.md` first.
 - Front end: plain JS in `public/js` using the `h()` / `put()` helpers in `common.js`. The CSP
   forbids inline `<script>` and `style="..."` attributes in HTML (use classes; `el.style` is fine).
 - Styles: `public/css/styles.css`, Riderly palette (`--accent` amber, `--in` green, `--gold` VIP).
+- `public/vendor/` holds unmodified third-party browser files (libheif, for HEIC photos on browsers
+  that can't open them). See its README before touching it; don't add more without asking Will.
 
 ## Before you open a PR
 1. `npm test` — all pass. Add a test for anything new (`test/api.test.js` style).
