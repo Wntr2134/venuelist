@@ -594,6 +594,7 @@ function describe(a) {
     case 'guest.remove': return `removed ${n}`;
     case 'guest.checkin': return `checked in ${n} — ${a.detail}`;
     case 'guest.checkout': return `checked out ${n} — ${a.detail}`;
+    case 'guest.undo': return `undid a ${a.detail?.startsWith('check-out') ? 'check-out' : 'check-in'} for ${n} — ${a.detail}`;
     case 'contributor.create': return `added contributor ${a.detail}`;
     case 'contributor.update': return `updated contributor ${a.detail}`;
     case 'contributor.relink': return `issued a new link for ${a.detail}`;
@@ -1492,9 +1493,10 @@ async function renderDoor(id) {
         search,
         h('button', { class: 'btn', onclick: () => walkUp('') }, '+ Walk-up')
       ),
-      hasFeature('banned-photos') ? h('div', { class: 'row wrap door-ban-tools' },
-        h('button', { class: 'btn btn-small', onclick: () => bannedGallery() }, '🚫 Banned faces'),
-        h('button', { class: 'btn btn-small', onclick: () => bannedPhotoForm(ui.search.trim()) }, '📷 Photo for banned list')
+      hasFeature('banned-photos') || hasFeature('door-undo') ? h('div', { class: 'row wrap door-ban-tools' },
+        hasFeature('door-undo') ? h('button', { class: 'btn btn-small', onclick: () => undoList(id, load) }, '↩️ Oops / Undo') : null,
+        hasFeature('banned-photos') ? h('button', { class: 'btn btn-small', onclick: () => bannedGallery() }, '🚫 Banned faces') : null,
+        hasFeature('banned-photos') ? h('button', { class: 'btn btn-small', onclick: () => bannedPhotoForm(ui.search.trim()) }, '📷 Photo for banned list') : null
       ) : null,
       filterBar,
       list
@@ -1503,6 +1505,81 @@ async function renderDoor(id) {
   await load();
   search.focus();
   live(id, load, onMessage);
+}
+
+// ---------- oops / undo at the door (feature: door-undo) ----------
+
+// Recent check-ins and check-outs at this show, from every door device. Undo needs YES typed.
+async function undoList(eventId, reload) {
+  let list;
+  try {
+    list = await api('GET', `/api/events/${eventId}/door-actions`);
+  } catch (err) {
+    return handleError(err);
+  }
+  const box = h('ul', { class: 'undo-list' });
+  const draw = () => put(box, list.length ? list.map((a) => {
+    const what = `${a.direction === 'in' ? '✓ In' : '← Out'}: ${a.name}${a.count > 1 ? ` ×${a.count}` : ''}`;
+    return h('li', { class: `undo-row${a.undoneAt ? ' undone' : ''}` },
+      h('div', null,
+        h('strong', null, what),
+        h('div', { class: 'small muted' }, `${fmtTime(a.at)} · ${a.actor}`,
+          a.undoneAt ? ` · undone by ${a.undoneBy} at ${fmtTime(a.undoneAt)}` : '')
+      ),
+      a.undoneAt ? h('span', { class: 'badge' }, 'Undone') : h('button', {
+        class: 'btn btn-small btn-ghost-danger',
+        onclick: async () => {
+          if (!(await typeYes(a))) return;
+          try {
+            await api('POST', `/api/door-actions/${a.id}/undo`, { confirm: 'YES' });
+            a.undoneAt = new Date().toISOString();
+            a.undoneBy = currentName();
+            toast(`Undone: ${what}`, 'ok');
+            draw();
+            reload();
+          } catch (err) {
+            toast(err.message, 'error', 6000);
+          }
+        },
+      }, 'Undo')
+    );
+  }) : h('li', { class: 'empty' }, 'No check-ins or check-outs in the last 12 hours.'));
+  draw();
+  const m = modal('↩️ Oops / Undo', h('div', { class: 'stack' },
+    h('p', { class: 'small muted' }, 'Tapped the wrong person? Undo puts them back as if it never happened, including the door count. Newest first, from every door device.'),
+    box
+  ), { actions: [h('button', { class: 'btn btn-primary', onclick: () => m.close() }, 'Close')] });
+}
+
+// "Type YES": a second, deliberate step so an undo can't be another mis-tap.
+function typeYes(a) {
+  return new Promise((resolve) => {
+    let done = false;
+    const input = h('input', { autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', placeholder: 'YES', 'aria-label': 'Type YES to confirm' });
+    const go = h('button', { class: 'btn btn-danger', disabled: true, onclick: () => finish(true) }, 'Undo');
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      m.close();
+      resolve(v);
+    };
+    input.addEventListener('input', () => { go.disabled = input.value.trim().toUpperCase() !== 'YES'; });
+    const f = h('form', { class: 'stack' },
+      h('p', null, a.direction === 'in'
+        ? `${a.name}${a.count > 1 ? ` ×${a.count}` : ''} will be taken back off the inside count, as if they were never checked in.`
+        : `${a.name}${a.count > 1 ? ` ×${a.count}` : ''} will be put back inside, as if they were never checked out.`),
+      field('Type YES to confirm', input)
+    );
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!go.disabled) finish(true);
+    });
+    const m = modal(a.direction === 'in' ? 'Undo this check-in?' : 'Undo this check-out?', f, {
+      actions: [h('button', { class: 'btn', onclick: () => finish(false) }, 'Cancel'), go],
+      onClose: () => finish(false),
+    });
+    setTimeout(() => input.focus(), 50);
+  });
 }
 
 // ---------- banned list photos (feature: banned-photos) ----------

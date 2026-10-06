@@ -231,9 +231,9 @@ function stats(guests) {
 }
 
 function log(db, { eventId, guest, action, detail, actor, via }) {
-  db.prepare(
+  return db.prepare(
     'INSERT INTO activity (event_id, guest_id, guest_name, action, detail, actor, via, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(eventId, guest ? guest.id : null, guest ? guest.name : null, action, detail || null, actor, via, now());
+  ).run(eventId, guest ? guest.id : null, guest ? guest.name : null, action, detail || null, actor, via, now()).lastInsertRowid;
 }
 
 // The venue's "day": Melbourne date, rolling over at 6am, so tonight's show is still tonight's
@@ -1701,9 +1701,12 @@ function createApp(db, options = {}) {
     const lists = [...new Set(guests.map((g) => g.listType))].sort();
     const byList = lists.map((t) => ({ listType: t, ...row(guests.filter((g) => g.listType === t)) }));
     const act = (sql) => db.prepare(sql).all(e.id);
-    const checkins = act("SELECT at, detail FROM activity WHERE event_id = ? AND action = 'guest.checkin' ORDER BY id")
+    // Taps that were undone (feature: door-undo) never happened, as far as the report is concerned.
+    const checkins = act(`SELECT at, detail FROM activity WHERE event_id = ? AND action = 'guest.checkin'
+      AND id NOT IN (SELECT activity_id FROM door_actions WHERE undone_at IS NOT NULL AND activity_id IS NOT NULL) ORDER BY id`)
       .map((a) => ({ at: a.at, count: Number((a.detail || '').match(/^(\d+)/)?.[1] || 1) }));
-    const doorIn = act("SELECT at, delta FROM headcount_log WHERE event_id = ? AND source IN ('clicker', 'guestlist') AND delta > 0 ORDER BY id")
+    const doorIn = act(`SELECT at, delta FROM headcount_log WHERE event_id = ? AND source IN ('clicker', 'guestlist') AND delta > 0
+      AND id NOT IN (SELECT headcount_id FROM door_actions WHERE undone_at IS NOT NULL AND headcount_id IS NOT NULL) ORDER BY id`)
       .map((r) => ({ at: r.at, count: r.delta }));
     const overrides = act("SELECT at, actor, detail FROM activity WHERE event_id = ? AND action = 'override' ORDER BY id")
       .map((a) => ({ at: a.at, actor: a.actor, detail: a.detail }));
@@ -2063,11 +2066,14 @@ function createApp(db, options = {}) {
         'UPDATE guests SET inside = ?, admitted = ?, first_in_at = COALESCE(first_in_at, ?), last_move_at = ?, updated_at = ?, updated_by = ? WHERE id = ?'
       ).run(inside, admitted, direction === 'in' ? t : null, t, t, actor, g.id);
       const ev = getEvent(db, g.event_id);
+      let headcountId = null;
+      let headcountDelta = 0;
       if (ev.count_guestlist) {
         if (direction === 'in') ruled(venue, req, body, { eventId: ev.id, actor }, () => checkVenueCapacity(ev, count));
-        bumpHeadcount(db, g.event_id, direction === 'in' ? count : -count, 'guestlist', actor);
+        headcountDelta = bumpHeadcount(db, g.event_id, direction === 'in' ? count : -count, 'guestlist', actor);
+        if (headcountDelta) headcountId = Number(db.prepare('SELECT last_insert_rowid() AS id').get().id);
       }
-      log(db, {
+      const activityId = log(db, {
         eventId: g.event_id,
         guest: g,
         action: direction === 'in' ? 'guest.checkin' : 'guest.checkout',
@@ -2075,6 +2081,11 @@ function createApp(db, options = {}) {
         actor,
         via: 'door',
       });
+      // Kept so a mis-tap can be undone (feature: door-undo).
+      db.prepare(
+        `INSERT INTO door_actions (event_id, guest_id, direction, count, prev_admitted, prev_first_in_at, activity_id,
+           headcount_id, headcount_delta, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(g.event_id, g.id, direction, count, g.admitted, g.first_in_at, Number(activityId), headcountId, headcountDelta, actor, t);
       return { g: getGuest(db, g.id), count };
     });
     const out = guestOut(result.g);
@@ -2092,6 +2103,90 @@ function createApp(db, options = {}) {
 
   route('POST', /^\/api\/guests\/(\d+)\/checkin$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'in'), { idempotent: true });
   route('POST', /^\/api\/guests\/(\d+)\/checkout$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'out'), { idempotent: true });
+
+  // ----- door: undo a mis-tapped check-in or check-out (feature: door-undo) -----
+
+  const UNDO_HOURS = 12;
+
+  function undoOn(venue) {
+    if (!feature(venue, 'door-undo')) throw new HttpError(404, 'Not found');
+  }
+
+  // Recent check-ins and check-outs at this show, from every door device, newest first.
+  route('GET', /^\/api\/events\/(\d+)\/door-actions$/, ({ venue, params }) => {
+    undoOn(venue);
+    const e = evt(venue, params[0]);
+    const since = new Date(Date.now() - UNDO_HOURS * 3600 * 1000).toISOString();
+    return db
+      .prepare(
+        `SELECT d.*, g.name, g.plus_ones FROM door_actions d JOIN guests g ON g.id = d.guest_id
+          WHERE d.event_id = ? AND d.at >= ? ORDER BY d.id DESC LIMIT 50`
+      )
+      .all(e.id, since)
+      .map((d) => ({
+        id: d.id, guestId: d.guest_id, name: d.name, party: 1 + d.plus_ones, direction: d.direction, count: d.count,
+        actor: d.actor, at: d.at, undoneAt: d.undone_at, undoneBy: d.undone_by,
+      }));
+  });
+
+  // Puts the guest, the door count and the night report back as if the tap never happened.
+  route('POST', /^\/api\/door-actions\/(\d+)\/undo$/, ({ venue, req, params, body }) => {
+    undoOn(venue);
+    const actor = actorFrom(req);
+    if (String(body.confirm || '').trim().toUpperCase() !== 'YES') throw new HttpError(400, 'Type YES to confirm the undo.');
+    const result = tx(db, () => {
+      const d = db.prepare('SELECT * FROM door_actions WHERE id = ?').get(Number(params[0]));
+      if (!d) throw new HttpError(404, 'That tap can’t be undone any more.');
+      const e = evt(venue, d.event_id);
+      if (d.undone_at) throw new HttpError(409, `Already undone by ${d.undone_by}.`);
+      if (d.at < new Date(Date.now() - UNDO_HOURS * 3600 * 1000).toISOString()) {
+        throw new HttpError(409, `Only taps from the last ${UNDO_HOURS} hours can be undone.`);
+      }
+      const g = getGuest(db, d.guest_id);
+      const party = 1 + g.plus_ones;
+      let inside;
+      if (d.direction === 'in') {
+        if (g.inside < d.count) throw new HttpError(409, `${g.name} has been checked out since, so there’s nothing to undo. Check the log.`);
+        inside = g.inside - d.count;
+      } else {
+        if (g.inside + d.count > party) throw new HttpError(409, `${g.name} has been checked back in since, so there’s nothing to undo.`);
+        inside = g.inside + d.count;
+      }
+      // "Arrived" only goes back down for a check-in; later real check-ins keep their arrivals.
+      const admitted = d.direction === 'in' ? Math.max(d.prev_admitted, g.admitted - d.count, inside) : Math.max(g.admitted, inside);
+      const firstIn = admitted === 0 && d.prev_first_in_at === null ? null : g.first_in_at;
+      const t = now();
+      db.prepare('UPDATE guests SET inside = ?, admitted = ?, first_in_at = ?, updated_at = ?, updated_by = ? WHERE id = ?')
+        .run(inside, admitted, firstIn, t, actor, g.id);
+      if (d.headcount_delta) {
+        // Take the tap back out of the door count and its in/out totals (not counted as a new in or out).
+        const cur = getEvent(db, e.id);
+        const after = Math.max(0, (cur.head_count || 0) - d.headcount_delta);
+        const back = after - (cur.head_count || 0);
+        db.prepare('UPDATE events SET head_count = ?, head_in = MAX(0, head_in - ?), head_out = MAX(0, head_out - ?) WHERE id = ?')
+          .run(after, Math.max(0, d.headcount_delta), Math.max(0, -d.headcount_delta), e.id);
+        if (back) {
+          db.prepare("INSERT INTO headcount_log (event_id, delta, count_after, source, actor, at) VALUES (?, ?, ?, 'undo', ?, ?)")
+            .run(e.id, back, after, actor, t);
+        }
+      }
+      db.prepare('UPDATE door_actions SET undone_at = ?, undone_by = ? WHERE id = ?').run(t, actor, d.id);
+      const tapped = new Date(d.at).toLocaleTimeString('en-AU', { timeZone: VENUE_TZ, hour: 'numeric', minute: '2-digit' });
+      log(db, {
+        eventId: e.id,
+        guest: g,
+        action: 'guest.undo',
+        detail: `${d.direction === 'in' ? 'check-in' : 'check-out'} ×${d.count} by ${d.actor} at ${tapped} (${inside}/${party} inside now)`,
+        actor,
+        via: 'door',
+      });
+      return { g: getGuest(db, g.id), eventId: e.id };
+    });
+    const out = guestOut(result.g);
+    publish(result.eventId, 'guests', { actor, guestId: out.id });
+    publish(result.eventId, 'count', { headcount: headcountOut(getEvent(db, result.eventId)), actor });
+    return out;
+  });
 
   // ----- contributor portal (token links, no login) -----
 
@@ -2764,6 +2859,7 @@ function createApp(db, options = {}) {
     let purged = 0;
     // The door-tap cache can hold guest names in its stored responses; keep it short.
     db.prepare('DELETE FROM applied_ops WHERE created_at < ?').run(new Date(at.getTime() - 2 * 86400000).toISOString());
+    db.prepare('DELETE FROM door_actions WHERE at < ?').run(new Date(at.getTime() - 2 * 86400000).toISOString());
     // The banned-list audit log names people; keep it only about as long as a ban can run.
     db.prepare('DELETE FROM banned_log WHERE at < ?').run(new Date(at.getTime() - 400 * 86400000).toISOString());
     const venues = db.prepare('SELECT id, retention_days FROM venues WHERE retention_days IS NOT NULL').all();

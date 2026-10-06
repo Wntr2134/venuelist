@@ -984,3 +984,12 @@ small { font-size: max(0.8em, 12px); }
 .ban-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); }
 .ban-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .ban-row:last-child { border-bottom: none; }
+
+/* Oops / undo at the door (feature: door-undo) */
+.undo-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); max-height: 60vh; overflow-y: auto; }
+.undo-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.undo-row:last-child { border-bottom: none; }
+.undo-row > div { min-width: 0; overflow-wrap: anywhere; }
+.undo-row .btn { flex: none; }
+.undo-row.undone strong { text-decoration: line-through; opacity: 0.6; }
+.undo-list .empty { padding: 14px; }

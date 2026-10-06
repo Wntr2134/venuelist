@@ -168,11 +168,32 @@ CREATE TABLE IF NOT EXISTS headcount_log (
   event_id    INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   delta       INTEGER NOT NULL,
   count_after INTEGER NOT NULL,
-  source      TEXT NOT NULL,               -- 'clicker' | 'set' | 'guestlist'
+  source      TEXT NOT NULL,               -- 'clicker' | 'set' | 'guestlist' | 'undo'
   actor       TEXT NOT NULL,
   at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_headcount_event ON headcount_log(event_id, id);
+
+-- Door check-ins and check-outs, so a mis-tap can be undone (feature: door-undo). Holds what the
+-- guest looked like before, plus the activity and headcount_log rows the tap wrote, so an undo can
+-- put everything back and leave those rows out of the night report. No names; kept 2 days.
+CREATE TABLE IF NOT EXISTS door_actions (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id         INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  guest_id         INTEGER NOT NULL REFERENCES guests(id) ON DELETE CASCADE,
+  direction        TEXT NOT NULL,          -- 'in' | 'out'
+  count            INTEGER NOT NULL,
+  prev_admitted    INTEGER NOT NULL,
+  prev_first_in_at TEXT,
+  activity_id      INTEGER,
+  headcount_id     INTEGER,                -- null when the tap didn't change the door count
+  headcount_delta  INTEGER NOT NULL DEFAULT 0,
+  actor            TEXT NOT NULL,
+  at               TEXT NOT NULL,
+  undone_at        TEXT,
+  undone_by        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_door_actions_event ON door_actions(event_id, id);
 
 -- Named manager override codes (e.g. "JT", "Nick"), managed in the venue admin portal.
 CREATE TABLE IF NOT EXISTS manager_codes (

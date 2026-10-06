@@ -1967,3 +1967,60 @@ test('banned photos: no name required — nameless entries need a photo, never m
   const log = (await admin.call('GET', '/api/vadmin/banned')).data.log;
   assert.ok(log.some((l) => l.action === 'named' && /Name unknown → Max Power/.test(l.detail)));
 });
+
+test('oops / undo: off by default; undoing a check-in or check-out puts the guest, door count and report back', async () => {
+  const { c, venue } = await onboard('Oops Hall');
+  const date = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+  const ev = (await c.call('POST', '/api/events', { name: 'Oops night', date, countGuestlist: true, overridePin: '2468' })).data;
+  const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Wrong Person', plusOnes: 1 })).data;
+  const right = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Right Person' })).data;
+  assert.equal((await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 2 })).status, 200);
+  assert.equal((await c.call('GET', `/api/events/${ev.id}/door-actions`)).status, 404, 'off until switched on');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+
+  // Mis-tapped: the whole party of 2 went in; the right person also checked in.
+  await c.call('POST', `/api/guests/${right.id}/checkin`, {});
+  let list = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data;
+  assert.deepEqual(list.map((a) => [a.name, a.direction, a.count]), [['Right Person', 'in', 1], ['Wrong Person', 'in', 2]]);
+  const tap = list[1];
+  assert.equal((await c.call('POST', `/api/door-actions/${tap.id}/undo`, {})).status, 400, 'needs YES typed');
+  assert.equal((await c.call('POST', `/api/door-actions/${tap.id}/undo`, { confirm: 'no' })).status, 400);
+  const other = await onboard('Oops Other');
+  await owner.call('PUT', `/api/owner/venues/${other.venue.id}/features`, { earlyAccess: true });
+  assert.equal((await other.c.call('POST', `/api/door-actions/${tap.id}/undo`, { confirm: 'YES' })).status, 404, 'another venue’s tap');
+
+  const u = await c.call('POST', `/api/door-actions/${tap.id}/undo`, { confirm: 'yes' });
+  assert.equal(u.status, 200, JSON.stringify(u.data));
+  assert.equal(u.data.inside, 0);
+  assert.equal(u.data.admitted, 0, 'not counted as arrived');
+  assert.equal(u.data.firstInAt, null);
+  assert.equal((await c.call('POST', `/api/door-actions/${tap.id}/undo`, { confirm: 'YES' })).status, 409, 'only once');
+  let rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;
+  assert.equal(rep.door.count, 1, 'door count back to just the right person');
+  assert.equal(rep.door.totalIn, 1);
+  assert.equal(rep.door.totalOut, 0, 'an undo is not a check-out');
+  assert.equal(rep.guestlist.arrived, 1);
+  assert.deepEqual(rep.arrivals.checkins.map((x) => x.count), [1], 'undone check-in left out of arrivals');
+  assert.deepEqual(rep.arrivals.doorIn.map((x) => x.count), [1]);
+  list = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data;
+  assert.ok(list.find((a) => a.id === tap.id).undoneAt);
+  const activity = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  assert.ok(activity.some((a) => a.action === 'guest.undo' && /check-in ×2/.test(a.detail)), 'the undo is logged');
+
+  // Mis-tapped OUT: undo puts them back inside, still arrived.
+  const out = (await c.call('POST', `/api/guests/${right.id}/checkout`, {}));
+  assert.equal(out.data.inside, 0);
+  const outTap = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data[0];
+  assert.equal(outTap.direction, 'out');
+  const back = await c.call('POST', `/api/door-actions/${outTap.id}/undo`, { confirm: 'YES' });
+  assert.equal(back.data.inside, 1);
+  assert.equal(back.data.admitted, 1);
+  rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;
+  assert.deepEqual([rep.door.count, rep.door.totalIn, rep.door.totalOut], [1, 1, 0]);
+
+  // Can't undo a check-in once they've been checked out since.
+  await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 1 });
+  const inTap = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data[0];
+  await c.call('POST', `/api/guests/${g.id}/checkout`, { count: 1 });
+  assert.equal((await c.call('POST', `/api/door-actions/${inTap.id}/undo`, { confirm: 'YES' })).status, 409);
+});
