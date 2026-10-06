@@ -331,19 +331,48 @@ function bannedCard() {
     } catch (err) {
       return toast(err.message, 'error');
     }
+    // Optional photo for a new entry (feature: banned-photos): upload from this device.
+    let newPhoto = null;
+    const newPreview = h('div', { class: 'ban-preview' });
+    const uploadInput = h('input', { type: 'file', accept: PHOTO_ACCEPT, class: 'visually-hidden' });
+    uploadInput.addEventListener('change', async () => {
+      const file = uploadInput.files && uploadInput.files[0];
+      if (!file) return;
+      put(newPreview, h('p', { class: 'small muted' }, 'Getting the photo ready…'));
+      try {
+        newPhoto = await shrinkPhoto(file);
+        put(newPreview, h('img', { src: newPhoto, class: 'ban-row-photo', alt: 'Photo to add' }),
+          h('button', { type: 'button', class: 'btn btn-small', onclick: () => { newPhoto = null; put(newPreview); } }, 'Remove'));
+      } catch (err) {
+        newPhoto = null;
+        put(newPreview);
+        toast(err.message, 'error', 6000);
+      }
+      uploadInput.value = '';
+    });
     const form = h('form', { class: 'stack' },
       h('div', { class: 'grid-2' },
         field('Full name', h('input', { name: 'name', required: true, maxlength: '120', placeholder: 'First name and surname' })),
         field('Reason (staff see this)', h('input', { name: 'reason', maxlength: '200', placeholder: 'e.g. Violence, Feb 2026' }))
       ),
+      r.photos ? h('div', { class: 'row wrap ban-upload' }, uploadInput,
+        h('button', { type: 'button', class: 'btn', onclick: () => uploadInput.click() }, '⬆️ Upload photo (optional)'), newPreview) : null,
       h('button', { class: 'btn btn-primary', type: 'submit' }, 'Add to banned list')
     );
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!form.reportValidity()) return;
       try {
-        await api('POST', '/api/vadmin/banned', formData(form));
-        toast('Added', 'ok');
+        const added = await api('POST', '/api/vadmin/banned', formData(form));
+        if (newPhoto) {
+          try {
+            await api('PUT', `/api/vadmin/banned/${added.id}/photo`, { photo: newPhoto });
+          } catch (err) {
+            toast(`Added, but the photo didn’t upload: ${err.message} Use “Upload photo” on the entry to try again.`, 'error', 8000);
+            return load();
+          }
+        }
+        toast(newPhoto ? 'Added with photo' : 'Added', 'ok');
         load();
       } catch (err) {
         toast(err.message, 'error', 6000);
@@ -416,7 +445,7 @@ function bannedCard() {
       ),
       h('div', { class: 'row wrap' },
         h('button', { class: 'btn btn-small', onclick: () => act('PUT', b, { renew: true }, 'Renewed for 12 months') }, 'Renew'),
-        r.photos ? h('button', { class: 'btn btn-small', onclick: () => pickPhoto(b) }, b.photo ? 'New photo' : 'Add photo') : null,
+        r.photos ? h('button', { class: 'btn btn-small', onclick: () => pickPhoto(b) }, b.photo ? '⬆️ Replace photo' : '⬆️ Upload photo') : null,
         r.photos && b.photo ? h('button', { class: 'btn btn-small btn-ghost-danger', onclick: async () => {
           if (await confirmDialog('Remove this photo?', `${b.name} stays on the banned list; only the photo goes.`, { confirmText: 'Remove photo', danger: true })) {
             try {

@@ -1572,7 +1572,7 @@ function bannedPhotoForm(name) {
     libraryInput,
     h('div', { class: 'row wrap' },
       h('button', { type: 'button', class: 'btn', onclick: () => cameraInput.click() }, '📷 Take photo'),
-      h('button', { type: 'button', class: 'btn', onclick: () => libraryInput.click() }, '🖼 Choose photo')),
+      h('button', { type: 'button', class: 'btn', onclick: () => libraryInput.click() }, '⬆️ Upload photo')),
     preview
   );
   const submit = async (e) => {
