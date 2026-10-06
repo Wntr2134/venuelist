@@ -12,6 +12,7 @@ const { loadOffsiteConfig, uploadBackup } = require('./offsite');
 const { seedDemo, deleteOldDemos, DEMO_CODE, DEMO_HOURS } = require('./demo');
 const { findMatch } = require('./banned');
 const push = require('./push');
+const { FEATURES } = require('./features');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const LIST_TYPES = ['Guest', 'Artist', 'Crew', 'Industry', 'Media', 'Venue', 'Door'];
@@ -532,11 +533,38 @@ function createApp(db, options = {}) {
     return !!v.admin_password_hash || !!db.prepare('SELECT 1 FROM manager_codes WHERE venue_id = ? AND active = 1').get(v.id);
   }
 
+  // ----- new features (src/features.js): off by default, on per venue, by early access, or for everyone -----
+
+  const FEATURE_LIST = options.features || FEATURES;
+  const featureByKey = new Map(FEATURE_LIST.map((f) => [f.key, f]));
+  const everyoneOn = (key) => getSetting(db, `feature_all:${key}`) === '1';
+
+  // key -> { on, override } for one venue. A by-hand setting beats everything; otherwise a
+  // feature is on when it's on for everyone, or the venue has early access.
+  function featureStates(v) {
+    const overrides = new Map(db.prepare('SELECT feature_key, enabled FROM venue_features WHERE venue_id = ?').all(v.id)
+      .map((r) => [r.feature_key, !!r.enabled]));
+    const out = {};
+    for (const f of FEATURE_LIST) {
+      const override = overrides.has(f.key) ? overrides.get(f.key) : null;
+      out[f.key] = { on: override ?? (everyoneOn(f.key) || !!v.early_access), override };
+    }
+    return out;
+  }
+
+  // Server-side guard for new behaviour: if (feature(venue, KEY)) { ... }  (KEY = the entry's key, quoted)
+  function feature(v, key) {
+    if (!featureByKey.has(key)) throw new Error(`Unknown feature "${key}": add it to src/features.js`);
+    return featureStates(v)[key].on;
+  }
+
   function venueOut(v) {
+    const states = featureStates(v);
     return {
       id: v.id,
       slug: v.slug,
       name: v.name,
+      features: Object.keys(states).filter((k) => states[k].on),
       hasManagerPin: canOverride(v),
       hasAdmin: !!v.admin_password_hash,
       defaults: { capacity: v.default_capacity ?? null, countGuestlist: !!v.default_count_guestlist },
@@ -1082,6 +1110,7 @@ function createApp(db, options = {}) {
         hasManagerPin: canOverride(v),
         hasAdmin: !!v.admin_password_hash,
         riderlyConnected: !!v.api_key_hash,
+        earlyAccess: !!v.early_access,
         billing: { plan: v.plan, priceAud: v.price_aud, paidUntil: v.paid_until, notes: v.billing_notes, overdue: !!v.paid_until && v.paid_until < venueDay() },
         email: v.email,
         setupLinkActive: !!v.setup_expires_at && Date.parse(v.setup_expires_at) > Date.now(),
@@ -1163,6 +1192,64 @@ function createApp(db, options = {}) {
       .run(name, active, billing.plan, billing.price_aud, billing.paid_until, billing.billing_notes, v.id);
     if (!active) hub.closeVenue(v.id); // disabling a venue cuts its live feeds immediately
     return venueOut(ownerVenue(v.id));
+  }, { auth: 'owner' });
+
+  // New features: the list, who has each one, and the switches.
+  function featureVenues() {
+    return db.prepare('SELECT * FROM venues WHERE demo = 0').all();
+  }
+
+  route('GET', /^\/api\/owner\/features$/, () => {
+    const venues = featureVenues().map((v) => ({ v, states: featureStates(v) }));
+    return {
+      total: FEATURE_LIST.length,
+      earlyAccess: venues.filter((x) => x.v.early_access).map((x) => x.v.name),
+      features: FEATURE_LIST.map((f) => ({
+        key: f.key, name: f.name, what: f.what, added: f.added, by: f.by || null,
+        everyone: everyoneOn(f.key),
+        venuesOn: venues.filter((x) => x.states[f.key].on).map((x) => x.v.name),
+      })),
+    };
+  }, { auth: 'owner' });
+
+  route('PUT', /^\/api\/owner\/features\/([^/]+)$/, ({ params, body }) => {
+    if (!featureByKey.has(params[0])) throw new HttpError(404, 'No such feature');
+    setSetting(db, `feature_all:${params[0]}`, body.everyone ? '1' : '0');
+    return { ok: true };
+  }, { auth: 'owner' });
+
+  route('GET', /^\/api\/owner\/venues\/(\d+)\/features$/, ({ params }) => {
+    const v = ownerVenue(params[0]);
+    const states = featureStates(v);
+    return {
+      earlyAccess: !!v.early_access,
+      features: FEATURE_LIST.map((f) => ({
+        key: f.key, name: f.name, what: f.what, added: f.added,
+        on: states[f.key].on, override: states[f.key].override, everyone: everyoneOn(f.key),
+      })),
+    };
+  }, { auth: 'owner' });
+
+  // { earlyAccess?: bool, set?: { key: true | false | null } } — null puts it back to the default.
+  route('PUT', /^\/api\/owner\/venues\/(\d+)\/features$/, ({ params, body }) => {
+    const v = ownerVenue(params[0]);
+    const set = body.set && typeof body.set === 'object' ? body.set : {};
+    for (const key of Object.keys(set)) {
+      if (!featureByKey.has(key)) throw new HttpError(400, `No such feature: ${key}`);
+      if (set[key] !== null && typeof set[key] !== 'boolean') throw new HttpError(400, `Use true, false or null for ${key}`);
+    }
+    tx(db, () => {
+      if (body.earlyAccess !== undefined) db.prepare('UPDATE venues SET early_access = ? WHERE id = ?').run(body.earlyAccess ? 1 : 0, v.id);
+      for (const [key, val] of Object.entries(set)) {
+        if (val === null) db.prepare('DELETE FROM venue_features WHERE venue_id = ? AND feature_key = ?').run(v.id, key);
+        else {
+          db.prepare(`INSERT INTO venue_features (venue_id, feature_key, enabled, updated_at) VALUES (?, ?, ?, ?)
+                      ON CONFLICT(venue_id, feature_key) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`)
+            .run(v.id, key, val ? 1 : 0, now());
+        }
+      }
+    });
+    return { ok: true };
   }, { auth: 'owner' });
 
   route('DELETE', /^\/api\/owner\/venues\/(\d+)$/, ({ params, body }) => {
@@ -2805,6 +2892,7 @@ function createApp(db, options = {}) {
   // A read-only view of the route table and each route's auth mode. Used by the test suite to
   // assert that every non-public route refuses an unauthenticated request. No handler is exposed.
   server.routes = routes.map((r) => ({ method: r.method, source: r.pattern.source, auth: r.auth || 'venue' }));
+  server.feature = feature;
   server.purgeExpired = purgeExpired;
   server.billingReminder = billingReminder;
   server.runBackup = runBackup;

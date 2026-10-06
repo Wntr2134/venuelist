@@ -37,12 +37,20 @@ async function boot() {
   state.hasManagerPin = session.venue.hasManagerPin;
   state.defaults = session.venue.defaults || {};
   state.demo = session.venue.demo || null;
+  state.features = new Set(session.venue.features || []);
   document.title = `${session.venue.name} · Guest List`;
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   await promptDeviceName();
   window.addEventListener('hashchange', route);
   document.addEventListener('vl:name', () => route());
   route();
+}
+
+// New features (src/features.js) are off unless Riderly has switched them on for this venue.
+// Guard new behaviour with: if (hasFeature(KEY)) { ... }  (KEY = the entry's key, quoted)
+// eslint-disable-next-line no-unused-vars
+function hasFeature(key) {
+  return !!state.features && state.features.has(key);
 }
 
 function teardown() {
