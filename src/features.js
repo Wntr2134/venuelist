@@ -32,6 +32,12 @@ const FEATURES = [
     what: 'Door staff can take a photo of someone being refused entry. It waits in memory for 1 hour for the venue admin to approve (then it joins the banned list) or it is deleted. Door staff see the photo when a name matches, and can open a gallery of banned faces. A manager code can remove a photo. Staff compare by eye only: there is no automatic face matching.',
     added: '2026-10-07',
   },
+  {
+    key: 'door-undo',
+    name: 'Oops / undo at the door',
+    what: 'Door mode gets an “↩️ Oops / Undo” button listing the last 12 hours of check-ins and check-outs from every door device. Staff tap Undo and type YES to reverse a mis-tap: the guest, the door count and the night report go back as if it never happened. Each undo is logged with who did it.',
+    added: '2026-10-07',
+  },
 ];
 
 // Problems with a feature list, as readable strings (empty = fine). Used by the tests.
