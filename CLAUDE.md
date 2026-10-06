@@ -26,6 +26,14 @@ New to this repo, or asked to get caught up? Read `docs/onboarding.md` first.
 3. Phones and iPads matter most: door staff use phones; touch targets 44px, text fields 16px,
    nothing scrolls sideways. iPads in portrait get the phone layout.
 
+## New features ship switched off
+- Anything that changes how the app behaves for venues (new screens, new buttons, changed rules)
+  goes behind a feature flag: add an entry to `src/features.js` (key, name, plain-English `what`,
+  `added` date) in the same PR, and guard the new behaviour with `feature(venue, KEY)` on the server
+  and `hasFeature(KEY)` in `public/js/app.js`. Venues only get it when Will switches it on in /admin
+  (per venue, Early access, or everyone). A test fails if code checks a key that isn't listed.
+- Bug fixes, security fixes and wording tweaks don't need a flag.
+
 ## Rules that don't bend
 - Guest lists are personal information. No guest names in logs, emails to Riderly, the Riderly
   API (`/api/v1`), analytics or third parties. The banned list is venue-admin only.

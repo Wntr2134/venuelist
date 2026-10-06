@@ -1779,3 +1779,73 @@ test('every non-public route refuses an unauthenticated request', async () => {
   }
   assert.ok(checked >= 50, `expected to cover the whole protected surface, only checked ${checked}`);
 });
+
+test('the new-features list is well formed, and code only checks features that are on it', () => {
+  const { FEATURES, validate } = require('../src/features');
+  assert.deepEqual(validate(FEATURES), [], 'fix src/features.js');
+  const known = new Set(FEATURES.map((f) => f.key));
+  const files = [
+    ...fs.readdirSync(path.join(__dirname, '..', 'src')).map((f) => path.join('src', f)),
+    ...fs.readdirSync(path.join(__dirname, '..', 'public', 'js')).map((f) => path.join('public', 'js', f)),
+  ].filter((f) => f.endsWith('.js'));
+  const used = [];
+  for (const f of files) {
+    const text = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    for (const m of text.matchAll(/\b(?:feature\(\s*[\w.]+\s*,|hasFeature\()\s*['"`]([^'"`]+)['"`]/g)) used.push([f, m[1]]);
+  }
+  for (const [f, key] of used) assert.ok(known.has(key), `${f} checks feature "${key}", which isn't in src/features.js`);
+  assert.deepEqual(validate([{ key: 'Bad Key', name: '', what: 'x', added: 'soon' }]).length, 4);
+});
+
+test('new features: off by default, on with early access or for everyone, and a hand-set tick wins', async () => {
+  const feats = [
+    { key: 'shiny-thing', name: 'Shiny thing', what: 'Adds a shiny thing to the door screen.', added: '2026-10-07' },
+    { key: 'other-thing', name: 'Other thing', what: 'Changes another thing for staff.', added: '2026-10-07' },
+  ];
+  const db = openDb(':memory:');
+  const app = createApp(db, { purgeTimer: false, features: feats, setupCode: 'CODE123456' });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const o = client(() => url);
+  try {
+    await o.call('POST', '/api/owner/setup', { password: 'ownerpass1', setupCode: 'CODE123456' });
+    const mk = async (name) => {
+      const r = await o.call('POST', '/api/owner/venues', { name });
+      const staff = client(() => url);
+      await staff.call('POST', `/api/setup/${r.data.setupPath.split('/').pop()}`, { password: 'staffpass1', adminPassword: 'adminpass1' });
+      return { id: r.data.venue.id, staff };
+    };
+    const toff = await mk('The Toff');
+    const ball = await mk('The Ball');
+    const on = async (v) => (await v.staff.call('GET', '/api/session')).data.venue.features;
+
+    assert.deepEqual(await on(toff), [], 'off by default');
+    assert.equal((await toff.staff.call('PUT', `/api/owner/venues/${toff.id}/features`, { earlyAccess: true })).status, 401, 'owner only');
+
+    await o.call('PUT', `/api/owner/venues/${toff.id}/features`, { earlyAccess: true });
+    assert.deepEqual(await on(toff), ['shiny-thing', 'other-thing'], 'early access gets everything');
+    assert.deepEqual(await on(ball), [], 'other venues stay off');
+
+    await o.call('PUT', `/api/owner/venues/${toff.id}/features`, { set: { 'other-thing': false } });
+    assert.deepEqual(await on(toff), ['shiny-thing'], 'a hand-set off beats early access');
+
+    await o.call('PUT', '/api/owner/features/shiny-thing', { everyone: true });
+    assert.deepEqual(await on(ball), ['shiny-thing'], 'on for everyone');
+    await o.call('PUT', `/api/owner/venues/${ball.id}/features`, { set: { 'shiny-thing': false } });
+    assert.deepEqual(await on(ball), [], 'a hand-set off beats everyone');
+    await o.call('PUT', `/api/owner/venues/${ball.id}/features`, { set: { 'shiny-thing': null } });
+    assert.deepEqual(await on(ball), ['shiny-thing'], 'clearing the hand-set tick goes back to the default');
+
+    assert.equal((await o.call('PUT', `/api/owner/venues/${ball.id}/features`, { set: { nope: true } })).status, 400);
+    assert.equal((await o.call('PUT', '/api/owner/features/nope', { everyone: true })).status, 404);
+    const list = (await o.call('GET', '/api/owner/features')).data;
+    assert.deepEqual(list.earlyAccess, ['The Toff']);
+    assert.deepEqual(list.features.find((x) => x.key === 'shiny-thing').venuesOn.sort(), ['The Ball', 'The Toff']);
+    const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(toff.id);
+    assert.equal(app.feature(v, 'shiny-thing'), true);
+    assert.throws(() => app.feature(v, 'not-listed'), /add it to src\/features\.js/);
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});

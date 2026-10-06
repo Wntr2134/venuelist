@@ -142,6 +142,15 @@ CREATE TABLE IF NOT EXISTS sso_tokens (
   expires_at  TEXT NOT NULL
 );
 
+-- New features switched on or off by hand for one venue (overrides early access and "everyone").
+CREATE TABLE IF NOT EXISTS venue_features (
+  venue_id     INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  feature_key  TEXT NOT NULL,
+  enabled      INTEGER NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (venue_id, feature_key)
+);
+
 -- Door clicker: every tap of + / − (or a manual correction), for peak and history.
 CREATE TABLE IF NOT EXISTS headcount_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -264,6 +273,8 @@ function migrate(db) {
     // Bumped whenever the API key is made or revoked, so one-click (SSO) staff sessions minted
     // with the old key stop working the moment Riderly is disconnected or the key is rotated.
     ['api_epoch', 'INTEGER NOT NULL DEFAULT 1'],
+    // 1 = this venue gets every new feature automatically (see src/features.js).
+    ['early_access', 'INTEGER NOT NULL DEFAULT 0'],
     ['demo', 'INTEGER NOT NULL DEFAULT 0'], // a "Try the demo" sandbox, deleted after a few hours
     // Billing, kept by Riderly (invoices go out from Xero; this just tracks who's paid up).
     ['plan', 'TEXT'],
