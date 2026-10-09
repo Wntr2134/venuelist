@@ -284,6 +284,10 @@ function migrate(db) {
     ['external_id', 'TEXT'],
     // 1 = archived because Riderly took the show out of its schedule; it comes back if the show does.
     ['removed_by_riderly', 'INTEGER NOT NULL DEFAULT 0'],
+    // Regular nights (feature: regular-nights): 1 = repeats weekly. 24 hours after the night ends,
+    // next week's copy is made and the contributor links move to it; rolled_to is that copy.
+    ['repeat_weekly', 'INTEGER NOT NULL DEFAULT 0'],
+    ['rolled_to', 'INTEGER'],
   ]) {
     if (!evCols.includes(col)) db.exec(`ALTER TABLE events ADD COLUMN ${col} ${def}`);
   }

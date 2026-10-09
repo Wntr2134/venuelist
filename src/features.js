@@ -38,6 +38,12 @@ const FEATURES = [
     what: 'Door mode gets an “↩️ Oops / Undo” button listing the last 12 hours of check-ins and check-outs from every door device. Staff tap Undo and type YES to reverse a mis-tap: the guest, the door count and the night report go back as if it never happened. Each undo is logged with who did it.',
     added: '2026-10-07',
   },
+  {
+    key: 'regular-nights',
+    name: 'Regular nights (same links every week)',
+    what: 'An event can be set to “Repeat every week” (e.g. Toff Tuesday). 24 hours after the night ends, next week’s copy is made automatically and every contributor link moves to it: same link, fresh empty list. Last week’s guests and report stay on last week’s event. The Contributors tab gets “New links for everyone” and “Clear out links”.',
+    added: '2026-10-09',
+  },
 ];
 
 // Problems with a feature list, as readable strings (empty = fine). Used by the tests.
