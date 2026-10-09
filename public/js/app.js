@@ -1620,7 +1620,7 @@ async function bannedGallery() {
   ), { wide: true, actions: [h('button', { class: 'btn btn-primary', onclick: () => m.close() }, 'Close')] });
 }
 
-// Door staff take a photo; it waits for an hour for the venue admin to approve it, or it's deleted.
+// Door staff take a photo; it waits for 24 hours for the venue admin to approve it, or it's deleted.
 function bannedPhotoForm(name) {
   let photo = null;
   const preview = h('div', { class: 'ban-preview' });
@@ -1643,7 +1643,7 @@ function bannedPhotoForm(name) {
     });
   }
   const form = h('form', { class: 'stack' },
-    h('p', { class: 'small muted' }, 'Tell the person you’re taking a photo for the venue’s banned list. It isn’t saved yet: your venue admin has 1 hour to approve it, or it’s deleted.'),
+    h('p', { class: 'small muted' }, 'Tell the person you’re taking a photo for the venue’s banned list. It isn’t saved yet: your venue admin has 24 hours to approve it, or it’s deleted.'),
     field('Full name (if you know it)', h('input', { name: 'name', maxlength: '120', value: name || '', placeholder: 'First name and surname', autocomplete: 'off' }),
       'Don’t know their name? Leave it blank and send the photo. Your venue admin can add a name later.'),
     field('Reason', h('input', { name: 'reason', maxlength: '200', placeholder: 'e.g. Fighting, Oct 2026', autocomplete: 'off' })),
@@ -1663,7 +1663,7 @@ function bannedPhotoForm(name) {
       await api('POST', '/api/banned/pending', { name: d.name, reason: d.reason, photo });
       photo = null;
       m.close();
-      toast('Sent. Your venue admin has 1 hour to approve it.', 'ok', 5000);
+      toast('Sent. Your venue admin has 24 hours to approve it.', 'ok', 5000);
     } catch (err) {
       toast(err.message, 'error', 6000);
     }

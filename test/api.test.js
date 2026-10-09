@@ -1885,15 +1885,18 @@ test('banned photos: off by default; door photo waits in memory for approval, th
   assert.equal(first.status, 200);
   assert.equal(appDb.prepare('SELECT COUNT(*) AS n FROM banned_photos').get().n, 0, 'nothing saved while it waits');
 
-  // The venue admin sees it waiting; nobody approves it within the hour, so it's gone.
+  // The venue admin sees it waiting; nobody approves it within 24 hours, so it's gone.
   let list = (await admin.call('GET', '/api/vadmin/banned')).data;
   assert.equal(list.pending.length, 1);
   assert.equal(list.pending[0].takenBy, 'Sam (Door 1)');
   const pic = await fetch(base + list.pending[0].photo, { headers: { Cookie: Object.entries(admin.jar).map(([k, v]) => `${k}=${v}`).join('; ') } });
   assert.equal(pic.headers.get('content-type'), 'image/jpeg');
   assert.ok(Buffer.from(await pic.arrayBuffer()).equals(jpeg));
-  server.sweepPendingPhotos(Date.now() + 3601 * 1000);
-  assert.equal((await admin.call('GET', '/api/vadmin/banned')).data.pending.length, 0, 'purged after an hour');
+  assert.ok(Date.parse(list.pending[0].expiresAt) - Date.now() > 23.9 * 3600 * 1000, 'held for 24 hours');
+  server.sweepPendingPhotos(Date.now() + 23 * 3600 * 1000);
+  assert.equal((await admin.call('GET', '/api/vadmin/banned')).data.pending.length, 1, 'still waiting after 23 hours');
+  server.sweepPendingPhotos(Date.now() + 24 * 3600 * 1000 + 1000);
+  assert.equal((await admin.call('GET', '/api/vadmin/banned')).data.pending.length, 0, 'purged after 24 hours');
   assert.equal((await admin.call('POST', `/api/vadmin/banned/pending/${first.data.id}/approve`, {})).status, 404);
 
   // Rejected: deleted.

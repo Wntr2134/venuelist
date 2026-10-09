@@ -2535,10 +2535,12 @@ function createApp(db, options = {}) {
 
   // ----- banned list photos (feature: banned-photos) -----
   // Door staff take a photo; it waits in this server's memory (never the database, never a backup)
-  // for an hour. The venue admin approves it onto the banned list, or it's gone. Staff compare
-  // faces by eye: nothing here does automatic face matching.
+  // for 24 hours. The venue admin approves it onto the banned list, or it's gone. A server restart
+  // (every deploy) also clears it. Staff compare faces by eye: nothing here does automatic face matching.
 
-  const PENDING_MS = 3600 * 1000;
+  const PENDING_MS = 24 * 3600 * 1000;
+  const PENDING_PER_VENUE = 20;
+  const PENDING_TOTAL = 100; // photos are ≤ 700 KB each, so at most ~70 MB of memory
   const pendingPhotos = new Map(); // id -> { venueId, name, reason, mime, data, by, at }
   const sweepPending = (at = Date.now()) => {
     for (const [id, p] of pendingPhotos) if (at - p.at > PENDING_MS) pendingPhotos.delete(id);
@@ -2587,7 +2589,7 @@ function createApp(db, options = {}) {
     return b;
   };
 
-  // Door: take a photo for the banned list. Held for an hour until the venue admin approves it.
+  // Door: take a photo for the banned list. Held for 24 hours until the venue admin approves it.
   route('POST', /^\/api\/banned\/pending$/, ({ venue, req, body }) => {
     photosOn(venue);
     const actor = actorFrom(req);
@@ -2595,13 +2597,13 @@ function createApp(db, options = {}) {
     const reason = str(body.reason, 'Reason', { max: 200 }) || null;
     const img = imageFrom(body.photo);
     sweepPending();
-    if (pendingFor(venue).length >= 10) throw new HttpError(429, 'There are already 10 photos waiting. Ask your venue admin to approve or reject them first.');
-    if (pendingPhotos.size >= 60) throw new HttpError(503, 'Too many photos are waiting right now. Try again in a little while.');
+    if (pendingFor(venue).length >= PENDING_PER_VENUE) throw new HttpError(429, `There are already ${PENDING_PER_VENUE} photos waiting. Ask your venue admin to approve or reject them first.`);
+    if (pendingPhotos.size >= PENDING_TOTAL) throw new HttpError(503, 'Too many photos are waiting right now. Try again in a little while.');
     const id = crypto.randomBytes(12).toString('base64url');
     pendingPhotos.set(id, { venueId: venue.id, name, reason, mime: img.mime, data: img.data, by: actor, at: Date.now() });
     banLog(venue.id, 'photo taken, waiting for approval', shownName(name), actor);
     db.prepare('INSERT INTO push_alerts (venue_id, event_id, title, body, at) VALUES (?, NULL, ?, ?, ?)')
-      .run(venue.id, '📷 Banned-list photo waiting', 'Your venue admin has an hour to approve it, or it’s deleted.', now());
+      .run(venue.id, '📷 Banned-list photo waiting', 'Your venue admin has 24 hours to approve it, or it’s deleted.', now());
     pushToManagers(venue, actor);
     return { id, expiresAt: new Date(Date.now() + PENDING_MS).toISOString() };
   });

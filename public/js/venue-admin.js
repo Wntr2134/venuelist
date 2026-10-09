@@ -497,9 +497,9 @@ function bannedCard() {
       )
     ));
     put(body,
-      r.photos ? h('p', { class: 'muted' }, 'People your venue has refused entry. Door staff see a warning, your reason and the photo when a name matches, and can open a gallery of the photos. Staff can take a photo at the door; it only joins the list if you approve it within an hour. Every look and change is logged below. Each name needs a review every 12 months and drops off a month after that unless you renew it; its photo goes with it.') : intro,
+      r.photos ? h('p', { class: 'muted' }, 'People your venue has refused entry. Door staff see a warning, your reason and the photo when a name matches, and can open a gallery of the photos. Staff can take a photo at the door; it only joins the list if you approve it within 24 hours. Every look and change is logged below. Each name needs a review every 12 months and drops off a month after that unless you renew it; its photo goes with it.') : intro,
       pending.length ? h('div', { class: 'stack' }, h('h3', null, `📷 Waiting for approval (${pending.length})`),
-        h('p', { class: 'small muted' }, 'Photos door staff took. They’re only held for an hour: approve one to add it to the banned list, or it’s deleted.'), pending) : null,
+        h('p', { class: 'small muted' }, 'Photos door staff took. They’re only held for 24 hours: approve one to add it to the banned list, or it’s deleted.'), pending) : null,
       form,
       rows.length ? h('ul', { class: 'ban-list' }, rows) : h('div', { class: 'empty' }, 'No one on the list.'),
       h('details', null, h('summary', null, 'Access log'),
