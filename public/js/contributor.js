@@ -85,7 +85,9 @@ function draw() {
           h('div', { class: 'stat' }, h('div', { class: 'stat-value' }, v.used), h('div', { class: 'stat-label' }, 'heads on your list')),
           h('div', { class: 'stat stat-accent' }, h('div', { class: 'stat-value' }, alloc === null ? '∞' : v.remaining), h('div', { class: 'stat-label' }, alloc === null ? 'no limit' : `left of ${alloc}`))
         ),
-        v.event.cutoffAt && !locked ? h('p', { class: 'muted small' }, `List closes ${fmtDateTime(v.event.cutoffAt)}.`) : null
+        v.event.cutoffAt && !locked ? h('p', { class: 'muted small' }, `List closes ${fmtDateTime(v.event.cutoffAt)}.`) : null,
+        v.link === 'weekly' ? h('p', { class: 'small' }, '📌 This link stays the same every week. Bookmark it: after each night it moves on to next week with a fresh list.') : null,
+        v.link === 'tonight' ? h('p', { class: 'muted small' }, 'This link is for this night only.') : null
       ),
       locked ? h('div', { class: 'notice' }, '🔒 ', locked, ' Contact the venue if you need changes.') : form,
       h('div', { class: 'card' },

@@ -255,7 +255,7 @@ function eventForm(existing) {
     field('Notes for door staff', h('textarea', { name: 'notes', rows: '3', maxlength: '2000' }, e.notes || '')),
     hasFeature('regular-nights') ? h('label', { class: 'check check-top' }, h('input', { type: 'checkbox', name: 'repeatWeekly', checked: !!e.repeatWeekly }),
       h('span', null, '🔁 Repeat every week (e.g. Toff Tuesday)',
-        h('small', { class: 'muted block' }, 'Contributor links stay the same every week. 24 hours after the night ends, next week’s copy is made and the links move to it with a fresh, empty list. This week’s guests and report stay here.'))) : null
+        h('small', { class: 'muted block' }, '24 hours after the night ends, next week’s copy is made. Contributor links ticked 📌 Permanent move to it with a fresh, empty list; one-off links are erased. This week’s guests and report stay here.'))) : null
   );
   const submit = async (ev) => {
     if (ev) ev.preventDefault();
@@ -412,6 +412,7 @@ async function renderEvent(id, tab) {
 
   // --- contributors tab ---
   function contributorsTab() {
+    const weeklyNight = hasFeature('regular-nights') && data.event.repeatWeekly;
     const cards = data.contributors.map((c) => {
       const link = `${location.origin}/c/${c.token}`;
       const alloc = c.allocation === null ? '∞' : c.allocation;
@@ -421,6 +422,8 @@ async function renderEvent(id, tab) {
           h('div', null,
             h('h3', null, c.name, c.active ? null : h('span', { class: 'badge' }, 'Link disabled')),
             h('span', { class: `badge badge-type t-${c.listType.toLowerCase()}` }, c.listType),
+            weeklyNight && !data.event.rolledTo ? (c.permanent ? h('span', { class: 'badge badge-permanent' }, '📌 Permanent')
+              : h('span', { class: 'badge' }, `One-off · ends ${fmtDate(data.event.rollsOn)}`)) : null,
             c.notes ? h('span', { class: 'muted small' }, ` ${c.notes}`) : null
           ),
           h('div', { class: 'alloc' }, h('strong', null, `${c.stats.expected}/${alloc}`), h('small', null, 'heads used'))
@@ -760,7 +763,11 @@ function contributorForm(data, c, onDone) {
       field('Their guests go on', typeSelect),
       field('Allocation (heads)', h('input', { name: 'allocation', type: 'number', min: '0', value: c ? c.allocation ?? '' : '', placeholder: 'Unlimited' }), 'Includes plus-ones. Blank = unlimited.')
     ),
-    field('Internal note', h('input', { name: 'notes', maxlength: '500', value: c ? c.notes || '' : '', placeholder: 'Only visible to venue staff' }))
+    field('Internal note', h('input', { name: 'notes', maxlength: '500', value: c ? c.notes || '' : '', placeholder: 'Only visible to venue staff' })),
+    hasFeature('regular-nights') && data.event.repeatWeekly ? h('label', { class: 'check check-top' },
+      h('input', { type: 'checkbox', name: 'permanent', checked: !!(c && c.permanent) }),
+      h('span', null, '📌 Permanent link',
+        h('small', { class: 'muted block' }, 'Stays the same every week and never expires. Leave unticked for a one-off link that’s erased when this night refreshes.'))) : null
   );
   const submit = async (ev) => {
     if (ev) ev.preventDefault();
@@ -1006,7 +1013,7 @@ async function toggleContributor(c, onDone) {
 
 function regularNote(e) {
   if (e.rolledTo) return 'This night has moved on: its contributor links now point to next week’s copy. This week’s guests and report stay here.';
-  return `Repeats every week. At 6am on ${fmtDate(e.rollsOn)}, next week’s copy is made and these same links move to it with a fresh, empty list.`;
+  return `Repeats every week. At 6am on ${fmtDate(e.rollsOn)}, next week’s copy is made. 📌 Permanent links move to it with a fresh, empty list; one-off links are erased.`;
 }
 
 async function relinkAll(data, reload) {
@@ -1043,6 +1050,7 @@ async function clearOutLinks(data, reload) {
           `${l.thisWeek} guest${l.thisWeek === 1 ? '' : 's'} this week`,
           l.lastWeek === null ? '' : ` · ${l.lastWeek} last week`,
           l.thisWeek > 0 ? ' · has guests, so it can’t be removed' : '',
+          l.permanent ? ' · 📌 permanent' : ' · one-off',
           l.active ? '' : ' · link disabled'))) };
   });
   const removeTicked = async () => {

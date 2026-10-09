@@ -999,3 +999,4 @@ small { font-size: max(0.8em, 12px); }
 .regular-banner { border-color: rgba(240, 180, 80, 0.5); }
 .clear-list { max-height: 55vh; overflow-y: auto; }
 .clear-row { min-height: 44px; }
+.badge-permanent { border-color: var(--accent); color: var(--accent); }

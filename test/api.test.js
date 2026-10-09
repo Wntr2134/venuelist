@@ -2044,10 +2044,16 @@ test('regular nights: same links every week; the night rolls over 24 hours after
   assert.equal(ev.repeatWeekly, true);
   assert.equal(ev.rollsOn, day(-1));
 
-  const dj = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'DJ Jess', allocation: 10 })).data;
+  const dj = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'DJ Jess', allocation: 10, permanent: true })).data;
+  assert.equal(dj.permanent, true);
   const promo = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Promoter Max' })).data;
-  const off = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Old Crew' })).data;
+  assert.equal(promo.permanent, false, 'one-off unless ticked');
+  assert.equal((await c.call('PUT', `/api/contributors/${promo.id}`, { permanent: true })).data.permanent, true);
+  const off = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Old Crew', permanent: true })).data;
   await c.call('PUT', `/api/contributors/${off.id}`, { active: false });
+  const guestDj = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Guest DJ (one-off)' })).data;
+  assert.equal((await client().call('GET', `/api/c/${guestDj.token}`)).data.link, 'tonight');
+  assert.equal((await client().call('GET', `/api/c/${dj.token}`)).data.link, 'weekly');
   await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Last Week Guest', contributorId: dj.id });
 
   // Opening a link rolls the night over on the spot: same link, next week's show, empty list.
@@ -2062,13 +2068,15 @@ test('regular nights: same links every week; the night rolls over 24 hours after
   const old = (await c.call('GET', `/api/events/${ev.id}`)).data;
   assert.ok(old.event.rolledTo);
   assert.equal(old.guests.length, 1, 'last week keeps its guests');
-  assert.ok(old.contributors.every((x) => ![dj.token, promo.token, off.token].includes(x.token)), 'old event’s links retired');
+  assert.ok(old.contributors.every((x) => ![dj.token, promo.token, off.token, guestDj.token].includes(x.token)), 'old event’s links retired');
+  assert.equal((await pub.call('GET', `/api/c/${guestDj.token}`)).status, 404, 'one-off link erased when the night refreshed');
+  assert.equal(old.contributors.length, 4, 'last week still lists every contributor for its report');
   const next = (await c.call('GET', `/api/events/${old.event.rolledTo}`)).data;
   assert.equal(next.event.name, 'Toff Tuesday');
   assert.equal(next.event.repeatWeekly, true);
   assert.equal(next.event.cutoffAt, `${day(4)}T08:00:00.000Z`, 'cutoff moves with the date');
-  assert.deepEqual(next.contributors.map((x) => [x.name, x.token, x.active]).sort(),
-    [['DJ Jess', dj.token, true], ['Old Crew', off.token, false], ['Promoter Max', promo.token, true]]);
+  assert.deepEqual(next.contributors.map((x) => [x.name, x.token, x.active, x.permanent]).sort(),
+    [['DJ Jess', dj.token, true, true], ['Old Crew', off.token, false, true], ['Promoter Max', promo.token, true, true]]);
   assert.equal(next.guests.length, 0);
   // The old report still counts last week's guest against DJ Jess.
   const rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;

@@ -146,6 +146,7 @@ function contributorOut(c) {
     token: c.token,
     active: !!c.active,
     notes: c.notes,
+    permanent: !!c.permanent,
     createdAt: c.created_at,
     createdBy: c.created_by,
   };
@@ -1889,6 +1890,7 @@ function createApp(db, options = {}) {
         now(),
         actor
       );
+    if (body.permanent && feature(venue, 'regular-nights')) db.prepare('UPDATE contributors SET permanent = 1 WHERE id = ?').run(Number(info.lastInsertRowid));
     const c = getContributor(db, Number(info.lastInsertRowid));
     log(db, { eventId: e.id, action: 'contributor.create', detail: c.name, actor, via: 'venue' });
     publish(e.id, 'contributors');
@@ -1912,6 +1914,9 @@ function createApp(db, options = {}) {
     db.prepare('UPDATE contributors SET name = ?, list_type = ?, allocation = ?, active = ?, notes = ? WHERE id = ?').run(
       next.name, next.list_type, next.allocation, next.active, next.notes, c.id
     );
+    if (body.permanent !== undefined && feature(venue, 'regular-nights')) {
+      db.prepare('UPDATE contributors SET permanent = ? WHERE id = ?').run(body.permanent ? 1 : 0, c.id);
+    }
     log(db, { eventId: c.event_id, action: 'contributor.update', detail: next.name, actor, via: 'venue' });
     publish(c.event_id, 'contributors');
     return contributorOut(getContributor(db, c.id));
@@ -1938,8 +1943,9 @@ function createApp(db, options = {}) {
 
   // ----- regular nights: same links every week (feature: regular-nights) -----
   // 24 hours after a weekly night ends (6am Melbourne time, two days after its date), next
-  // week's copy is made and each contributor link moves to it: same link, fresh empty list. Last
-  // week keeps its guests, contributors and report; its contributors just get retired links.
+  // week's copy is made and each permanent contributor link moves to it: same link, fresh empty
+  // list. One-off links (not ticked permanent) are erased. Last week keeps its guests,
+  // contributors and report; its contributors just get retired links.
 
   function rollDue(e, at = Date.now()) {
     if (!e.repeat_weekly || e.rolled_to || e.archived) return false;
@@ -1972,14 +1978,15 @@ function createApp(db, options = {}) {
       let moved = 0;
       for (const c of db.prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY id').all(e.id)) {
         const token = c.token;
-        db.prepare('UPDATE contributors SET token = ? WHERE id = ?').run(newToken(), c.id); // retire it here first
+        db.prepare('UPDATE contributors SET token = ? WHERE id = ?').run(newToken(), c.id); // retire it here
+        if (!c.permanent) continue; // a one-off link ends with its night
         const same = db.prepare('SELECT id FROM contributors WHERE event_id = ? AND name = ? COLLATE NOCASE').get(target.id, c.name);
         if (same) {
-          db.prepare('UPDATE contributors SET token = ? WHERE id = ?').run(token, same.id);
+          db.prepare('UPDATE contributors SET token = ?, permanent = 1 WHERE id = ?').run(token, same.id);
         } else {
           db.prepare(
-            `INSERT INTO contributors (event_id, name, list_type, allocation, token, active, notes, created_at, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Regular night')`
+            `INSERT INTO contributors (event_id, name, list_type, allocation, token, active, notes, permanent, created_at, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 'Regular night')`
           ).run(target.id, c.name, c.list_type, c.allocation, token, c.active, c.notes, new Date(at).toISOString());
         }
         moved += 1;
@@ -2041,7 +2048,7 @@ function createApp(db, options = {}) {
     return {
       lastWeek: prev ? prev.date : null,
       links: db.prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY name COLLATE NOCASE').all(e.id).map((c) => ({
-        id: c.id, name: c.name, active: !!c.active, thisWeek: heads(e.id, c.name), lastWeek: prev ? heads(prev.id, c.name) : null,
+        id: c.id, name: c.name, active: !!c.active, permanent: !!c.permanent, thisWeek: heads(e.id, c.name), lastWeek: prev ? heads(prev.id, c.name) : null,
       })),
     };
   });
@@ -2357,6 +2364,8 @@ function createApp(db, options = {}) {
       theme: venueTheme(venue),
       event: { name: e.name, date: e.date, doorsTime: e.doors_time, cutoffAt: e.cutoff_at },
       contributor: { name: c.name, listType: c.list_type, allocation: c.allocation },
+      // Regular nights: 'weekly' = this link stays the same every week; 'tonight' = this night only.
+      link: e.repeat_weekly && venue && feature(venue, 'regular-nights') ? (c.permanent ? 'weekly' : 'tonight') : null,
       used,
       remaining: c.allocation === null ? null : Math.max(0, c.allocation - used),
       locked,
