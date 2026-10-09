@@ -284,10 +284,18 @@ function migrate(db) {
     ['external_id', 'TEXT'],
     // 1 = archived because Riderly took the show out of its schedule; it comes back if the show does.
     ['removed_by_riderly', 'INTEGER NOT NULL DEFAULT 0'],
+    // Regular nights (feature: regular-nights): 1 = repeats weekly. 24 hours after the night ends,
+    // next week's copy is made and the contributor links move to it; rolled_to is that copy.
+    ['repeat_weekly', 'INTEGER NOT NULL DEFAULT 0'],
+    ['rolled_to', 'INTEGER'],
   ]) {
     if (!evCols.includes(col)) db.exec(`ALTER TABLE events ADD COLUMN ${col} ${def}`);
   }
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external ON events(venue_id, external_id) WHERE external_id IS NOT NULL');
+
+  // Regular nights: 1 = this contributor's link carries on to next week; 0 = this night only.
+  const cCols = db.prepare('PRAGMA table_info(contributors)').all().map((c) => c.name);
+  if (!cCols.includes('permanent')) db.exec('ALTER TABLE contributors ADD COLUMN permanent INTEGER NOT NULL DEFAULT 0');
 
   // Applications (the home page form): a bit more about the venue, no logins.
   const arCols = db.prepare('PRAGMA table_info(access_requests)').all().map((c) => c.name);

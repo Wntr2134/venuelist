@@ -29,7 +29,7 @@ const FEATURES = [
   {
     key: 'banned-photos',
     name: 'Banned list photos',
-    what: 'Door staff can take a photo of someone being refused entry. It waits in memory for 1 hour for the venue admin to approve (then it joins the banned list) or it is deleted. Door staff see the photo when a name matches, and can open a gallery of banned faces. A manager code can remove a photo. Staff compare by eye only: there is no automatic face matching.',
+    what: 'Door staff can take a photo of someone being refused entry. It waits in memory for 24 hours for the venue admin to approve (then it joins the banned list) or it is deleted. Door staff see the photo when a name matches, and can open a gallery of banned faces. A manager code can remove a photo. Staff compare by eye only: there is no automatic face matching.',
     added: '2026-10-07',
   },
   {
@@ -37,6 +37,12 @@ const FEATURES = [
     name: 'Oops / undo at the door',
     what: 'Door mode gets an “↩️ Oops / Undo” button listing the last 12 hours of check-ins and check-outs from every door device. Staff tap Undo and type YES to reverse a mis-tap: the guest, the door count and the night report go back as if it never happened. Each undo is logged with who did it.',
     added: '2026-10-07',
+  },
+  {
+    key: 'regular-nights',
+    name: 'Regular nights (same links every week)',
+    what: 'An event can be set to “Repeat every week” (e.g. Toff Tuesday). 24 hours after the night ends, next week’s copy is made automatically and each contributor link ticked “Permanent” moves to it: same link, fresh empty list. Unticked links are one-offs, erased when the night refreshes. Last week’s guests and report stay on last week’s event. The Contributors tab gets “New links for everyone” and “Clear out links”.',
+    added: '2026-10-09',
   },
 ];
 

@@ -993,3 +993,10 @@ small { font-size: max(0.8em, 12px); }
 .undo-row .btn { flex: none; }
 .undo-row.undone strong { text-decoration: line-through; opacity: 0.6; }
 .undo-list .empty { padding: 14px; }
+
+/* Regular nights (feature: regular-nights) */
+.badge-weekly { margin-left: 8px; font-size: 0.75rem; vertical-align: middle; }
+.regular-banner { border-color: rgba(240, 180, 80, 0.5); }
+.clear-list { max-height: 55vh; overflow-y: auto; }
+.clear-row { min-height: 44px; }
+.badge-permanent { border-color: var(--accent); color: var(--accent); }

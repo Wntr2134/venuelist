@@ -1885,15 +1885,18 @@ test('banned photos: off by default; door photo waits in memory for approval, th
   assert.equal(first.status, 200);
   assert.equal(appDb.prepare('SELECT COUNT(*) AS n FROM banned_photos').get().n, 0, 'nothing saved while it waits');
 
-  // The venue admin sees it waiting; nobody approves it within the hour, so it's gone.
+  // The venue admin sees it waiting; nobody approves it within 24 hours, so it's gone.
   let list = (await admin.call('GET', '/api/vadmin/banned')).data;
   assert.equal(list.pending.length, 1);
   assert.equal(list.pending[0].takenBy, 'Sam (Door 1)');
   const pic = await fetch(base + list.pending[0].photo, { headers: { Cookie: Object.entries(admin.jar).map(([k, v]) => `${k}=${v}`).join('; ') } });
   assert.equal(pic.headers.get('content-type'), 'image/jpeg');
   assert.ok(Buffer.from(await pic.arrayBuffer()).equals(jpeg));
-  server.sweepPendingPhotos(Date.now() + 3601 * 1000);
-  assert.equal((await admin.call('GET', '/api/vadmin/banned')).data.pending.length, 0, 'purged after an hour');
+  assert.ok(Date.parse(list.pending[0].expiresAt) - Date.now() > 23.9 * 3600 * 1000, 'held for 24 hours');
+  server.sweepPendingPhotos(Date.now() + 23 * 3600 * 1000);
+  assert.equal((await admin.call('GET', '/api/vadmin/banned')).data.pending.length, 1, 'still waiting after 23 hours');
+  server.sweepPendingPhotos(Date.now() + 24 * 3600 * 1000 + 1000);
+  assert.equal((await admin.call('GET', '/api/vadmin/banned')).data.pending.length, 0, 'purged after 24 hours');
   assert.equal((await admin.call('POST', `/api/vadmin/banned/pending/${first.data.id}/approve`, {})).status, 404);
 
   // Rejected: deleted.
@@ -2023,4 +2026,79 @@ test('oops / undo: off by default; undoing a check-in or check-out puts the gues
   const inTap = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data[0];
   await c.call('POST', `/api/guests/${g.id}/checkout`, { count: 1 });
   assert.equal((await c.call('POST', `/api/door-actions/${inTap.id}/undo`, { confirm: 'YES' })).status, 409);
+});
+
+test('regular nights: same links every week; the night rolls over 24 hours after it ends, keeping last week’s list', async () => {
+  const { c, venue } = await onboard('Weekly Hall');
+  // The venue's day (Melbourne, rolling over at 6am), n days from today: what the server uses.
+  const melb = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = melb.format(new Date(Date.now() - 6 * 3600e3));
+  const day = (n) => new Date(Date.parse(`${today}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
+  const lastTue = day(-3);
+  // Feature off: the flag is ignored.
+  let ev = (await c.call('POST', '/api/events', { name: 'Toff Tuesday', date: lastTue, repeatWeekly: true, overridePin: '2468' })).data;
+  assert.equal(ev.repeatWeekly, false, 'off until switched on');
+  assert.equal((await c.call('POST', `/api/events/${ev.id}/contributors/relink-all`)).status, 404);
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+  ev = (await c.call('PUT', `/api/events/${ev.id}`, { repeatWeekly: true, cutoffAt: `${lastTue}T08:00:00.000Z` })).data;
+  assert.equal(ev.repeatWeekly, true);
+  assert.equal(ev.rollsOn, day(-1));
+
+  const dj = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'DJ Jess', allocation: 10, permanent: true })).data;
+  assert.equal(dj.permanent, true);
+  const promo = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Promoter Max' })).data;
+  assert.equal(promo.permanent, false, 'one-off unless ticked');
+  assert.equal((await c.call('PUT', `/api/contributors/${promo.id}`, { permanent: true })).data.permanent, true);
+  const off = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Old Crew', permanent: true })).data;
+  await c.call('PUT', `/api/contributors/${off.id}`, { active: false });
+  const guestDj = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Guest DJ (one-off)' })).data;
+  assert.equal((await client().call('GET', `/api/c/${guestDj.token}`)).data.link, 'tonight');
+  assert.equal((await client().call('GET', `/api/c/${dj.token}`)).data.link, 'weekly');
+  await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Last Week Guest', contributorId: dj.id });
+
+  // Opening a link rolls the night over on the spot: same link, next week's show, empty list.
+  const pub = client();
+  const view = (await pub.call('GET', `/api/c/${dj.token}`)).data;
+  assert.equal(view.event.date, day(4));
+  assert.equal(view.locked, null);
+  assert.equal(view.guests.length, 0, 'fresh list');
+  assert.equal(view.contributor.allocation, 10, 'allocation carried over');
+  assert.equal(server.rollRegularNights(), 0, 'already rolled');
+
+  const old = (await c.call('GET', `/api/events/${ev.id}`)).data;
+  assert.ok(old.event.rolledTo);
+  assert.equal(old.guests.length, 1, 'last week keeps its guests');
+  assert.ok(old.contributors.every((x) => ![dj.token, promo.token, off.token, guestDj.token].includes(x.token)), 'old event’s links retired');
+  assert.equal((await pub.call('GET', `/api/c/${guestDj.token}`)).status, 404, 'one-off link erased when the night refreshed');
+  assert.equal(old.contributors.length, 4, 'last week still lists every contributor for its report');
+  const next = (await c.call('GET', `/api/events/${old.event.rolledTo}`)).data;
+  assert.equal(next.event.name, 'Toff Tuesday');
+  assert.equal(next.event.repeatWeekly, true);
+  assert.equal(next.event.cutoffAt, `${day(4)}T08:00:00.000Z`, 'cutoff moves with the date');
+  assert.deepEqual(next.contributors.map((x) => [x.name, x.token, x.active, x.permanent]).sort(),
+    [['DJ Jess', dj.token, true, true], ['Old Crew', off.token, false, true], ['Promoter Max', promo.token, true, true]]);
+  assert.equal(next.guests.length, 0);
+  // The old report still counts last week's guest against DJ Jess.
+  const rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;
+  assert.equal(rep.byContributor.find((x) => x.name === 'DJ Jess').entries, 1);
+
+  // Clear out: usage shows this week and last week.
+  const usage = (await c.call('GET', `/api/events/${next.event.id}/contributors/usage`)).data;
+  assert.equal(usage.lastWeek, lastTue);
+  assert.deepEqual(usage.links.map((l) => [l.name, l.thisWeek, l.lastWeek]), [['DJ Jess', 0, 1], ['Old Crew', 0, 0], ['Promoter Max', 0, 0]]);
+
+  // New links for everyone: old ones stop working.
+  const r = (await c.call('POST', `/api/events/${next.event.id}/contributors/relink-all`)).data;
+  assert.equal(r.relinked, 3);
+  assert.equal((await pub.call('GET', `/api/c/${dj.token}`)).status, 404);
+  const fresh = (await c.call('GET', `/api/events/${next.event.id}`)).data.contributors.find((x) => x.name === 'DJ Jess');
+  assert.equal((await pub.call('GET', `/api/c/${fresh.token}`)).status, 200);
+
+  // The hourly sweep rolls nights nobody opened; turning repeat off stops it.
+  const other = (await c.call('POST', '/api/events', { name: 'Sunday Session', date: day(-2), repeatWeekly: true, overridePin: '2468' })).data;
+  const stop = (await c.call('POST', '/api/events', { name: 'One-off', date: day(-2), repeatWeekly: true, overridePin: '2468' })).data;
+  await c.call('PUT', `/api/events/${stop.id}`, { repeatWeekly: false });
+  assert.equal(server.rollRegularNights(), 1);
+  assert.ok((await c.call('GET', `/api/events/${other.id}`)).data.event.rolledTo);
+  assert.equal((await c.call('GET', `/api/events/${stop.id}`)).data.event.rolledTo, null);
 });

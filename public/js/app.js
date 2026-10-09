@@ -219,7 +219,7 @@ function eventCard(e, today) {
     h('a', { class: 'event-card-main', href: `#/event/${e.id}` },
       h('div', { class: 'event-date' }, isToday ? h('span', { class: 'badge badge-live' }, 'TONIGHT') : null, fmtDate(e.date), e.doorsTime ? ` · Doors ${e.doorsTime}` : ''),
       e.removedByRiderly ? h('div', { class: 'small muted' }, 'Removed from the Riderly schedule') : null,
-      h('h3', null, e.name),
+      h('h3', null, e.name, e.repeatWeekly ? h('span', { class: 'badge badge-weekly' }, '🔁 Weekly') : null),
       h('div', { class: 'event-meta' },
         h('span', null, `${e.expected} on list`),
         h('span', null, `${e.guestCount} entries`),
@@ -252,7 +252,10 @@ function eventForm(existing) {
       h('label', { class: 'check check-top' }, h('input', { type: 'checkbox', name: 'countGuestlist', checked: !!e.countGuestlist }),
         h('span', null, 'Guest list check-ins also add to the door count', h('small', { class: 'muted block' }, 'Leave off if someone’s clicking everyone through the door.')))
     ),
-    field('Notes for door staff', h('textarea', { name: 'notes', rows: '3', maxlength: '2000' }, e.notes || ''))
+    field('Notes for door staff', h('textarea', { name: 'notes', rows: '3', maxlength: '2000' }, e.notes || '')),
+    hasFeature('regular-nights') ? h('label', { class: 'check check-top' }, h('input', { type: 'checkbox', name: 'repeatWeekly', checked: !!e.repeatWeekly }),
+      h('span', null, '🔁 Repeat every week (e.g. Toff Tuesday)',
+        h('small', { class: 'muted block' }, '24 hours after the night ends, next week’s copy is made. Contributor links ticked 📌 Permanent move to it with a fresh, empty list; one-off links are erased. This week’s guests and report stay here.'))) : null
   );
   const submit = async (ev) => {
     if (ev) ev.preventDefault();
@@ -409,6 +412,7 @@ async function renderEvent(id, tab) {
 
   // --- contributors tab ---
   function contributorsTab() {
+    const weeklyNight = hasFeature('regular-nights') && data.event.repeatWeekly;
     const cards = data.contributors.map((c) => {
       const link = `${location.origin}/c/${c.token}`;
       const alloc = c.allocation === null ? '∞' : c.allocation;
@@ -418,20 +422,22 @@ async function renderEvent(id, tab) {
           h('div', null,
             h('h3', null, c.name, c.active ? null : h('span', { class: 'badge' }, 'Link disabled')),
             h('span', { class: `badge badge-type t-${c.listType.toLowerCase()}` }, c.listType),
+            weeklyNight && !data.event.rolledTo ? (c.permanent ? h('span', { class: 'badge badge-permanent' }, '📌 Permanent')
+              : h('span', { class: 'badge' }, `One-off · ends ${fmtDate(data.event.rollsOn)}`)) : null,
             c.notes ? h('span', { class: 'muted small' }, ` ${c.notes}`) : null
           ),
           h('div', { class: 'alloc' }, h('strong', null, `${c.stats.expected}/${alloc}`), h('small', null, 'heads used'))
         ),
         c.allocation ? h('div', { class: 'bar' }, h('div', { class: 'bar-fill', style: `width:${pct}%` })) : null,
         h('div', { class: 'muted small' }, `${c.stats.guests} entries · ${c.stats.admitted} arrived · ${c.stats.inside} inside`),
-        h('div', { class: 'linkbox' },
+        data.event.rolledTo ? h('div', { class: 'muted small' }, 'Their link has moved to next week’s night.') : h('div', { class: 'linkbox' },
           h('input', { readonly: true, value: link, onclick: (ev) => ev.target.select() }),
           h('button', { class: 'btn btn-small', onclick: () => copy(link) }, 'Copy link')
         ),
         h('div', { class: 'row wrap' },
           h('button', { class: 'btn btn-small', onclick: () => contributorForm(data, c, load) }, 'Edit'),
           h('button', { class: 'btn btn-small', onclick: () => toggleContributor(c, load) }, c.active ? 'Disable link' : 'Enable link'),
-          h('button', { class: 'btn btn-small', onclick: () => relink(c, load) }, 'New link'),
+          data.event.rolledTo ? null : h('button', { class: 'btn btn-small', onclick: () => relink(c, load) }, 'New link'),
           h('button', {
             class: 'btn btn-small',
             onclick: () => {
@@ -443,7 +449,17 @@ async function renderEvent(id, tab) {
         )
       );
     });
+    const night = data.event;
+    const weekly = hasFeature('regular-nights') && (night.repeatWeekly || night.rolledTo);
     return h('div', { class: 'stack' },
+      weekly ? h('div', { class: 'card stack regular-banner' },
+        h('strong', null, '🔁 Regular night'),
+        h('p', { class: 'small' }, regularNote(night)),
+        night.rolledTo ? h('div', { class: 'row' }, h('a', { class: 'btn btn-primary', href: `#/event/${night.rolledTo}/contributors` }, 'Open next week →'))
+          : h('div', { class: 'row wrap' },
+            h('button', { class: 'btn', onclick: () => relinkAll(data, load) }, 'New links for everyone'),
+            h('button', { class: 'btn', onclick: () => clearOutLinks(data, load) }, 'Clear out links'))
+      ) : null,
       h('div', { class: 'toolbar' },
         h('p', { class: 'muted' }, 'Contributors are artists, tour managers, promoters or staff who can add guests to this show. Each gets a private link — no account needed. Their spots count against their allocation.'),
         h('div', { class: 'row wrap' },
@@ -486,6 +502,8 @@ async function renderEvent(id, tab) {
           h('dt', null, 'Venue capacity'), h('dd', null, e.venueCapacity ? `${e.venueCapacity} (door counter)` : 'Not set'),
           h('dt', null, 'Door count'), h('dd', null, e.countGuestlist ? 'Clicker + guest list check-ins' : 'Clicker only'),
           h('dt', null, 'Door notes'), h('dd', null, e.notes || '—'),
+          e.repeatWeekly || e.rolledTo ? h('dt', null, 'Repeats') : null,
+          e.repeatWeekly || e.rolledTo ? h('dd', null, regularNote(e)) : null,
           h('dt', null, 'Created'), h('dd', null, `${fmtDateTime(e.createdAt)} by ${e.createdBy}`)
         ),
         h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', onclick: () => eventForm(e) }, 'Edit details'))
@@ -607,6 +625,8 @@ function describe(a) {
     case 'event.update': return 'updated event details';
     case 'event.archive': return 'archived the event';
     case 'event.unarchive': return 'restored the event';
+    case 'event.repeat': return a.detail === 'repeats every week' ? 'set it to repeat every week' : 'stopped it repeating every week';
+    case 'event.rolled': return `regular night: ${a.detail}`;
     default: return a.action;
   }
 }
@@ -743,7 +763,11 @@ function contributorForm(data, c, onDone) {
       field('Their guests go on', typeSelect),
       field('Allocation (heads)', h('input', { name: 'allocation', type: 'number', min: '0', value: c ? c.allocation ?? '' : '', placeholder: 'Unlimited' }), 'Includes plus-ones. Blank = unlimited.')
     ),
-    field('Internal note', h('input', { name: 'notes', maxlength: '500', value: c ? c.notes || '' : '', placeholder: 'Only visible to venue staff' }))
+    field('Internal note', h('input', { name: 'notes', maxlength: '500', value: c ? c.notes || '' : '', placeholder: 'Only visible to venue staff' })),
+    hasFeature('regular-nights') && data.event.repeatWeekly ? h('label', { class: 'check check-top' },
+      h('input', { type: 'checkbox', name: 'permanent', checked: !!(c && c.permanent) }),
+      h('span', null, '📌 Permanent link',
+        h('small', { class: 'muted block' }, 'Stays the same every week and never expires. Leave unticked for a one-off link that’s erased when this night refreshes.'))) : null
   );
   const submit = async (ev) => {
     if (ev) ev.preventDefault();
@@ -983,6 +1007,72 @@ async function toggleContributor(c, onDone) {
   } catch (err) {
     handleError(err);
   }
+}
+
+// ---------- regular nights (feature: regular-nights) ----------
+
+function regularNote(e) {
+  if (e.rolledTo) return 'This night has moved on: its contributor links now point to next week’s copy. This week’s guests and report stay here.';
+  return `Repeats every week. At 6am on ${fmtDate(e.rollsOn)}, next week’s copy is made. 📌 Permanent links move to it with a fresh, empty list; one-off links are erased.`;
+}
+
+async function relinkAll(data, reload) {
+  const n = data.contributors.length;
+  if (!n) return toast('No contributors yet.', 'info');
+  const ok = await confirmDialog('New links for everyone?',
+    `All ${n} contributor link${n === 1 ? '' : 's'} stop working straight away and each gets a new one. Guests already added stay. Send everyone their new link; it then stays the same every week again.`,
+    { confirmText: 'Issue new links', danger: true });
+  if (!ok) return;
+  try {
+    const r = await api('POST', `/api/events/${data.event.id}/contributors/relink-all`);
+    toast(`${r.relinked} new link${r.relinked === 1 ? '' : 's'} issued. Copy them from the cards.`, 'ok', 5000);
+    reload();
+  } catch (err) {
+    handleError(err);
+  }
+}
+
+// Pick links to remove; ones nobody used this week or last week come pre-ticked.
+async function clearOutLinks(data, reload) {
+  let u;
+  try {
+    u = await api('GET', `/api/events/${data.event.id}/contributors/usage`);
+  } catch (err) {
+    return handleError(err);
+  }
+  if (!u.links.length) return toast('No contributors yet.', 'info');
+  const rows = u.links.map((l) => {
+    const unused = l.thisWeek === 0 && (l.lastWeek === null || l.lastWeek === 0);
+    const box = h('input', { type: 'checkbox', checked: unused, disabled: l.thisWeek > 0 });
+    return { l, box, el: h('label', { class: 'check clear-row' }, box,
+      h('span', null, h('strong', null, l.name),
+        h('small', { class: 'muted block' },
+          `${l.thisWeek} guest${l.thisWeek === 1 ? '' : 's'} this week`,
+          l.lastWeek === null ? '' : ` · ${l.lastWeek} last week`,
+          l.thisWeek > 0 ? ' · has guests, so it can’t be removed' : '',
+          l.permanent ? ' · 📌 permanent' : ' · one-off',
+          l.active ? '' : ' · link disabled'))) };
+  });
+  const removeTicked = async () => {
+    const picked = rows.filter((r) => r.box.checked && !r.box.disabled);
+    if (!picked.length) return toast('Nothing ticked.', 'info');
+    m.close();
+    let removed = 0;
+    for (const r of picked) {
+      try {
+        await api('DELETE', `/api/contributors/${r.l.id}`);
+        removed += 1;
+      } catch (err) {
+        toast(`${r.l.name}: ${err.message}`, 'error', 6000);
+      }
+    }
+    toast(`Removed ${removed} link${removed === 1 ? '' : 's'}`, 'ok');
+    reload();
+  };
+  const m = modal('Clear out links', h('div', { class: 'stack' },
+    h('p', { class: 'small muted' }, `Removed links stop working and won’t carry on to next week. Ticked: links nobody has used this week${u.lastWeek ? ` or last week (${fmtDate(u.lastWeek)})` : ''}.`),
+    h('div', { class: 'stack clear-list' }, rows.map((r) => r.el))
+  ), { actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-danger', onclick: removeTicked }, 'Remove ticked')] });
 }
 
 async function relink(c, onDone) {
@@ -1620,7 +1710,7 @@ async function bannedGallery() {
   ), { wide: true, actions: [h('button', { class: 'btn btn-primary', onclick: () => m.close() }, 'Close')] });
 }
 
-// Door staff take a photo; it waits for an hour for the venue admin to approve it, or it's deleted.
+// Door staff take a photo; it waits for 24 hours for the venue admin to approve it, or it's deleted.
 function bannedPhotoForm(name) {
   let photo = null;
   const preview = h('div', { class: 'ban-preview' });
@@ -1643,7 +1733,7 @@ function bannedPhotoForm(name) {
     });
   }
   const form = h('form', { class: 'stack' },
-    h('p', { class: 'small muted' }, 'Tell the person you’re taking a photo for the venue’s banned list. It isn’t saved yet: your venue admin has 1 hour to approve it, or it’s deleted.'),
+    h('p', { class: 'small muted' }, 'Tell the person you’re taking a photo for the venue’s banned list. It isn’t saved yet: your venue admin has 24 hours to approve it, or it’s deleted.'),
     field('Full name (if you know it)', h('input', { name: 'name', maxlength: '120', value: name || '', placeholder: 'First name and surname', autocomplete: 'off' }),
       'Don’t know their name? Leave it blank and send the photo. Your venue admin can add a name later.'),
     field('Reason', h('input', { name: 'reason', maxlength: '200', placeholder: 'e.g. Fighting, Oct 2026', autocomplete: 'off' })),
@@ -1663,7 +1753,7 @@ function bannedPhotoForm(name) {
       await api('POST', '/api/banned/pending', { name: d.name, reason: d.reason, photo });
       photo = null;
       m.close();
-      toast('Sent. Your venue admin has 1 hour to approve it.', 'ok', 5000);
+      toast('Sent. Your venue admin has 24 hours to approve it.', 'ok', 5000);
     } catch (err) {
       toast(err.message, 'error', 6000);
     }

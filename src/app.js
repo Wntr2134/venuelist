@@ -98,7 +98,16 @@ function eventOut(e) {
     externalId: e.external_id ?? null,
     removedByRiderly: !!e.removed_by_riderly,
     over: showIsOver(e.date),
+    // Regular nights: links move to next week's copy at 6am Melbourne time on rollsOn.
+    repeatWeekly: !!e.repeat_weekly,
+    rollsOn: e.repeat_weekly && !e.rolled_to ? addDays(e.date, 2) : null,
+    rolledTo: e.rolled_to ?? null,
   };
+}
+
+// YYYY-MM-DD plus n days (calendar arithmetic, no time zones involved).
+function addDays(date, n) {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 }
 
 function headcountOut(e) {
@@ -137,6 +146,7 @@ function contributorOut(c) {
     token: c.token,
     active: !!c.active,
     notes: c.notes,
+    permanent: !!c.permanent,
     createdAt: c.created_at,
     createdBy: c.created_by,
   };
@@ -1492,12 +1502,15 @@ function createApp(db, options = {}) {
       )
       .run(...values);
     const id = Number(info.lastInsertRowid);
+    if (body.repeatWeekly && feature(venue, 'regular-nights')) db.prepare('UPDATE events SET repeat_weekly = 1 WHERE id = ?').run(id);
     log(db, { eventId: id, action: 'event.create', detail: approver ? `approved by ${approver}` : null, actor, via: 'venue' });
     return eventOut(getEvent(db, id));
   });
 
   route('GET', /^\/api\/events\/(\d+)$/, ({ venue, params }) => {
-    const e = evt(venue, params[0]);
+    let e = evt(venue, params[0]);
+    // An overdue regular night moves its links on as soon as anyone looks at it.
+    if (rollDue(e) && rollEvent(e)) e = getEvent(db, e.id);
     const contributors = db
       .prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY name COLLATE NOCASE')
       .all(e.id)
@@ -1537,6 +1550,8 @@ function createApp(db, options = {}) {
          removed_by_riderly = CASE WHEN ? = 0 THEN 0 ELSE removed_by_riderly END WHERE id = ?`
     ).run(next.name, next.date, next.doors_time, next.capacity, next.cutoff_at, next.notes, next.archived,
       next.venue_capacity, next.count_guestlist, next.tickets_sold, next.tickets_scanned, next.archived, e.id);
+    const repeatChanged = body.repeatWeekly !== undefined && feature(venue, 'regular-nights') && !!body.repeatWeekly !== !!e.repeat_weekly;
+    if (repeatChanged) db.prepare('UPDATE events SET repeat_weekly = ? WHERE id = ?').run(body.repeatWeekly ? 1 : 0, e.id);
     if (next.venue_capacity !== e.venue_capacity) {
       publish(e.id, 'count', { headcount: headcountOut(getEvent(db, e.id)), actor });
     }
@@ -1544,6 +1559,9 @@ function createApp(db, options = {}) {
     const ticketNote = next.tickets_sold !== e.tickets_sold || next.tickets_scanned !== e.tickets_scanned
       ? `tickets: ${next.tickets_sold ?? '—'} sold, ${next.tickets_scanned ?? '—'} scanned` : null;
     log(db, { eventId: e.id, action, detail: ticketNote, actor, via: 'venue' });
+    if (repeatChanged) {
+      log(db, { eventId: e.id, action: 'event.repeat', detail: body.repeatWeekly ? 'repeats every week' : 'no longer repeats', actor, via: 'venue' });
+    }
     publish(e.id, 'event');
     return eventOut(getEvent(db, e.id));
   });
@@ -1872,6 +1890,7 @@ function createApp(db, options = {}) {
         now(),
         actor
       );
+    if (body.permanent && feature(venue, 'regular-nights')) db.prepare('UPDATE contributors SET permanent = 1 WHERE id = ?').run(Number(info.lastInsertRowid));
     const c = getContributor(db, Number(info.lastInsertRowid));
     log(db, { eventId: e.id, action: 'contributor.create', detail: c.name, actor, via: 'venue' });
     publish(e.id, 'contributors');
@@ -1895,6 +1914,9 @@ function createApp(db, options = {}) {
     db.prepare('UPDATE contributors SET name = ?, list_type = ?, allocation = ?, active = ?, notes = ? WHERE id = ?').run(
       next.name, next.list_type, next.allocation, next.active, next.notes, c.id
     );
+    if (body.permanent !== undefined && feature(venue, 'regular-nights')) {
+      db.prepare('UPDATE contributors SET permanent = ? WHERE id = ?').run(body.permanent ? 1 : 0, c.id);
+    }
     log(db, { eventId: c.event_id, action: 'contributor.update', detail: next.name, actor, via: 'venue' });
     publish(c.event_id, 'contributors');
     return contributorOut(getContributor(db, c.id));
@@ -1917,6 +1939,118 @@ function createApp(db, options = {}) {
     log(db, { eventId: c.event_id, action: 'contributor.delete', detail: c.name, actor, via: 'venue' });
     publish(c.event_id, 'contributors');
     return { ok: true };
+  });
+
+  // ----- regular nights: same links every week (feature: regular-nights) -----
+  // 24 hours after a weekly night ends (6am Melbourne time, two days after its date), next
+  // week's copy is made and each permanent contributor link moves to it: same link, fresh empty
+  // list. One-off links (not ticked permanent) are erased. Last week keeps its guests,
+  // contributors and report; its contributors just get retired links.
+
+  function rollDue(e, at = Date.now()) {
+    if (!e.repeat_weekly || e.rolled_to || e.archived) return false;
+    if (venueDay(at) < addDays(e.date, 2)) return false;
+    const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(e.venue_id);
+    return !!v && !!v.active && feature(v, 'regular-nights');
+  }
+
+  function rollEvent(e, at = Date.now()) {
+    return tx(db, () => {
+      const fresh = getEvent(db, e.id);
+      if (!rollDue(fresh, at)) return null;
+      // Next week, or the next one still to come if the server missed a few weeks.
+      let date = addDays(e.date, 7);
+      while (date < venueDay(at)) date = addDays(date, 7);
+      const shift = (Date.parse(`${date}T00:00:00Z`) - Date.parse(`${e.date}T00:00:00Z`));
+      let target = db.prepare('SELECT * FROM events WHERE venue_id = ? AND date = ? AND name = ? COLLATE NOCASE AND archived = 0')
+        .get(e.venue_id, date, e.name);
+      if (target) {
+        db.prepare('UPDATE events SET repeat_weekly = 1 WHERE id = ?').run(target.id);
+      } else {
+        const info = db.prepare(
+          `INSERT INTO events (venue_id, name, date, doors_time, capacity, cutoff_at, notes, created_at, created_by,
+             venue_capacity, count_guestlist, repeat_weekly) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Regular night', ?, ?, 1)`
+        ).run(e.venue_id, e.name, date, e.doors_time, e.capacity,
+          e.cutoff_at ? new Date(Date.parse(e.cutoff_at) + shift).toISOString() : null,
+          e.notes, new Date(at).toISOString(), e.venue_capacity, e.count_guestlist);
+        target = getEvent(db, Number(info.lastInsertRowid));
+      }
+      let moved = 0;
+      for (const c of db.prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY id').all(e.id)) {
+        const token = c.token;
+        db.prepare('UPDATE contributors SET token = ? WHERE id = ?').run(newToken(), c.id); // retire it here
+        if (!c.permanent) continue; // a one-off link ends with its night
+        const same = db.prepare('SELECT id FROM contributors WHERE event_id = ? AND name = ? COLLATE NOCASE').get(target.id, c.name);
+        if (same) {
+          db.prepare('UPDATE contributors SET token = ?, permanent = 1 WHERE id = ?').run(token, same.id);
+        } else {
+          db.prepare(
+            `INSERT INTO contributors (event_id, name, list_type, allocation, token, active, notes, permanent, created_at, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 'Regular night')`
+          ).run(target.id, c.name, c.list_type, c.allocation, token, c.active, c.notes, new Date(at).toISOString());
+        }
+        moved += 1;
+      }
+      db.prepare('UPDATE events SET rolled_to = ? WHERE id = ?').run(target.id, e.id);
+      log(db, { eventId: e.id, action: 'event.rolled', detail: `links moved to ${target.date}`, actor: 'Riderly', via: 'venue' });
+      log(db, { eventId: target.id, action: 'event.rolled', detail: `${moved} link${moved === 1 ? '' : 's'} carried over from ${e.date}`, actor: 'Riderly', via: 'venue' });
+      return target;
+    });
+  }
+
+  function rollRegularNights(at = Date.now()) {
+    let n = 0;
+    const due = db.prepare('SELECT * FROM events WHERE repeat_weekly = 1 AND rolled_to IS NULL AND archived = 0 AND date <= ?')
+      .all(addDays(venueDay(at), -2));
+    for (const e of due) {
+      try {
+        const target = rollEvent(e, at);
+        if (target) {
+          n += 1;
+          publish(e.id, 'event');
+          publish(target.id, 'contributors');
+        }
+      } catch (err) {
+        console.error(`regular night ${e.id} didn't roll over: ${err.message}`);
+      }
+    }
+    return n;
+  }
+
+  function regularOn(venue) {
+    if (!feature(venue, 'regular-nights')) throw new HttpError(404, 'Not found');
+  }
+
+  // Links passed around too much: every contributor on this night gets a fresh link at once.
+  route('POST', /^\/api\/events\/(\d+)\/contributors\/relink-all$/, ({ venue, req, params }) => {
+    regularOn(venue);
+    const actor = actorFrom(req);
+    const e = evt(venue, params[0]);
+    const n = tx(db, () => {
+      const list = db.prepare('SELECT id FROM contributors WHERE event_id = ?').all(e.id);
+      for (const c of list) db.prepare('UPDATE contributors SET token = ? WHERE id = ?').run(newToken(), c.id);
+      if (list.length) log(db, { eventId: e.id, action: 'contributor.relink', detail: `all ${list.length} links`, actor, via: 'venue' });
+      return list.length;
+    });
+    publish(e.id, 'contributors');
+    return { relinked: n };
+  });
+
+  // For "Clear out links": guests on each link this week and last week, so unused ones stand out.
+  route('GET', /^\/api\/events\/(\d+)\/contributors\/usage$/, ({ venue, params }) => {
+    regularOn(venue);
+    const e = evt(venue, params[0]);
+    const prev = db.prepare('SELECT id, date FROM events WHERE rolled_to = ?').get(e.id);
+    const heads = (eventId, name) => db.prepare(
+      `SELECT COUNT(g.id) AS n FROM contributors c LEFT JOIN guests g ON g.contributor_id = c.id
+        WHERE c.event_id = ? AND c.name = ? COLLATE NOCASE`
+    ).get(eventId, name).n;
+    return {
+      lastWeek: prev ? prev.date : null,
+      links: db.prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY name COLLATE NOCASE').all(e.id).map((c) => ({
+        id: c.id, name: c.name, active: !!c.active, permanent: !!c.permanent, thisWeek: heads(e.id, c.name), lastWeek: prev ? heads(prev.id, c.name) : null,
+      })),
+    };
   });
 
   // ----- guests (venue side) -----
@@ -2195,8 +2329,15 @@ function createApp(db, options = {}) {
   }
 
   function contributorByToken(token) {
-    const c = db.prepare('SELECT * FROM contributors WHERE token = ?').get(token);
+    let c = db.prepare('SELECT * FROM contributors WHERE token = ?').get(token);
     if (!c) throw new HttpError(404, 'This link is not valid. Ask the venue for a new one.');
+    // A regular night whose time is up moves on to next week the moment someone opens a link,
+    // rather than waiting for the hourly sweep.
+    const e = getEvent(db, c.event_id);
+    if (rollDue(e)) {
+      rollEvent(e);
+      c = db.prepare('SELECT * FROM contributors WHERE token = ?').get(token) || c;
+    }
     return c;
   }
 
@@ -2223,6 +2364,8 @@ function createApp(db, options = {}) {
       theme: venueTheme(venue),
       event: { name: e.name, date: e.date, doorsTime: e.doors_time, cutoffAt: e.cutoff_at },
       contributor: { name: c.name, listType: c.list_type, allocation: c.allocation },
+      // Regular nights: 'weekly' = this link stays the same every week; 'tonight' = this night only.
+      link: e.repeat_weekly && venue && feature(venue, 'regular-nights') ? (c.permanent ? 'weekly' : 'tonight') : null,
       used,
       remaining: c.allocation === null ? null : Math.max(0, c.allocation - used),
       locked,
@@ -2535,10 +2678,12 @@ function createApp(db, options = {}) {
 
   // ----- banned list photos (feature: banned-photos) -----
   // Door staff take a photo; it waits in this server's memory (never the database, never a backup)
-  // for an hour. The venue admin approves it onto the banned list, or it's gone. Staff compare
-  // faces by eye: nothing here does automatic face matching.
+  // for 24 hours. The venue admin approves it onto the banned list, or it's gone. A server restart
+  // (every deploy) also clears it. Staff compare faces by eye: nothing here does automatic face matching.
 
-  const PENDING_MS = 3600 * 1000;
+  const PENDING_MS = 24 * 3600 * 1000;
+  const PENDING_PER_VENUE = 20;
+  const PENDING_TOTAL = 100; // photos are ≤ 700 KB each, so at most ~70 MB of memory
   const pendingPhotos = new Map(); // id -> { venueId, name, reason, mime, data, by, at }
   const sweepPending = (at = Date.now()) => {
     for (const [id, p] of pendingPhotos) if (at - p.at > PENDING_MS) pendingPhotos.delete(id);
@@ -2587,7 +2732,7 @@ function createApp(db, options = {}) {
     return b;
   };
 
-  // Door: take a photo for the banned list. Held for an hour until the venue admin approves it.
+  // Door: take a photo for the banned list. Held for 24 hours until the venue admin approves it.
   route('POST', /^\/api\/banned\/pending$/, ({ venue, req, body }) => {
     photosOn(venue);
     const actor = actorFrom(req);
@@ -2595,13 +2740,13 @@ function createApp(db, options = {}) {
     const reason = str(body.reason, 'Reason', { max: 200 }) || null;
     const img = imageFrom(body.photo);
     sweepPending();
-    if (pendingFor(venue).length >= 10) throw new HttpError(429, 'There are already 10 photos waiting. Ask your venue admin to approve or reject them first.');
-    if (pendingPhotos.size >= 60) throw new HttpError(503, 'Too many photos are waiting right now. Try again in a little while.');
+    if (pendingFor(venue).length >= PENDING_PER_VENUE) throw new HttpError(429, `There are already ${PENDING_PER_VENUE} photos waiting. Ask your venue admin to approve or reject them first.`);
+    if (pendingPhotos.size >= PENDING_TOTAL) throw new HttpError(503, 'Too many photos are waiting right now. Try again in a little while.');
     const id = crypto.randomBytes(12).toString('base64url');
     pendingPhotos.set(id, { venueId: venue.id, name, reason, mime: img.mime, data: img.data, by: actor, at: Date.now() });
     banLog(venue.id, 'photo taken, waiting for approval', shownName(name), actor);
     db.prepare('INSERT INTO push_alerts (venue_id, event_id, title, body, at) VALUES (?, NULL, ?, ?, ?)')
-      .run(venue.id, '📷 Banned-list photo waiting', 'Your venue admin has an hour to approve it, or it’s deleted.', now());
+      .run(venue.id, '📷 Banned-list photo waiting', 'Your venue admin has 24 hours to approve it, or it’s deleted.', now());
     pushToManagers(venue, actor);
     return { id, expiresAt: new Date(Date.now() + PENDING_MS).toISOString() };
   });
@@ -3219,18 +3364,23 @@ function createApp(db, options = {}) {
   server.feature = feature;
   server.sweepPendingPhotos = sweepPending;
   server.purgeExpired = purgeExpired;
+  server.rollRegularNights = rollRegularNights;
   server.billingReminder = billingReminder;
   server.runBackup = runBackup;
   if (backupOpts && backupOpts.schedule !== false) {
     server.on('close', scheduleBackups(runBackup, backupDue, { log: mailLog }));
   }
   if (options.purgeTimer !== false) {
-    const first = setTimeout(() => purgeExpired(), 30 * 1000);
+    const first = setTimeout(() => {
+      purgeExpired();
+      rollRegularNights();
+    }, 30 * 1000);
     const daily = setInterval(() => purgeExpired(), 24 * 3600 * 1000);
     const demos = setInterval(() => {
       deleteOldDemos(db);
       billingReminder();
       sweepPending();
+      rollRegularNights();
       // Close live feeds past their max age or whose session is no longer valid.
       hub.sweep((e) => {
         const v = db.prepare('SELECT active, password_version FROM venues WHERE id = ?').get(e.venueId);
