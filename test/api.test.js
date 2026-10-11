@@ -2199,3 +2199,59 @@ test('oops / undo: a door walk-up can be taken off again, and a removed guest br
   await owner.call('PUT', `/api/owner/venues/${plain.venue.id}/features`, { earlyAccess: true });
   assert.ok(!(await plain.c.call('GET', `/api/events/${pev.id}/door-actions`)).data.some((a) => a.kind === 'remove'));
 });
+
+test('double-ups: the same name twice on one night is flagged for staff, with who added each', async () => {
+  const { c, venue } = await onboard('Double Hall');
+  const ev = (await c.call('POST', '/api/events', { name: 'Two of them', date: soon('2026-11-21'), overridePin: '2468' })).data;
+  const jess = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Promoter Jess' })).data;
+  const max = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Promoter Max' })).data;
+  await client().call('POST', `/api/c/${jess.token}/guests`, { name: 'Zoë Smith' });
+  let added = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'zoe  smith.' })).data;
+  assert.equal(added.double, undefined, 'off until switched on');
+  assert.ok(!(await c.call('GET', `/api/events/${ev.id}`)).data.guests.some((g) => g.double));
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+
+  await client().call('POST', `/api/c/${max.token}/guests`, { name: 'Other Person' });
+  const guests = (await c.call('GET', `/api/events/${ev.id}`)).data.guests;
+  const zoes = guests.filter((g) => g.double);
+  assert.equal(zoes.length, 2, 'case, accents, punctuation and spaces ignored');
+  assert.deepEqual(zoes.map((g) => g.double.others.map((o) => o.via)).sort(), [['Promoter Jess'], ['Venue']]);
+  assert.equal(guests.find((g) => g.name === 'Other Person').double, undefined);
+  // Adding a third copy gives a heads-up straight away.
+  added = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'ZOE SMITH', atDoor: true })).data;
+  assert.equal(added.double.count, 3);
+  // A contributor never learns who else is on the list.
+  const portal = (await client().call('GET', `/api/c/${max.token}`)).data;
+  assert.ok(!JSON.stringify(portal).includes('double') && !JSON.stringify(portal).toLowerCase().includes('zo'));
+});
+
+test('week on week: a regular night’s report lines up the last 5 weeks and each contributor', async () => {
+  const { c, venue } = await onboard('Weekly Report Hall');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+  const melb = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = melb.format(new Date(Date.now() - 6 * 3600e3));
+  const day = (n) => new Date(Date.parse(`${today}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
+  // Three weeks of the same night: create two past weeks, roll them on.
+  const w1 = (await c.call('POST', '/api/events', { name: 'Toff Tuesday', date: day(-17), repeatWeekly: true, overridePin: '2468' })).data;
+  const dj = (await c.call('POST', `/api/events/${w1.id}/contributors`, { name: 'DJ Jess', permanent: true })).data;
+  const g1 = (await c.call('POST', `/api/events/${w1.id}/guests`, { name: 'A One', plusOnes: 1, contributorId: dj.id })).data;
+  await c.call('POST', `/api/guests/${g1.id}/checkin`, { count: 2 });
+  assert.equal(server.rollRegularNights(), 1);
+  let cur = (await c.call('GET', `/api/events/${w1.id}`)).data.event.rolledTo;
+  // That rolled straight to the next date still to come; backdate it a week to make a run of weeks.
+  const djNow = (await c.call('GET', `/api/events/${cur}`)).data.contributors.find((x) => x.name === 'DJ Jess');
+  appDb.prepare('UPDATE events SET date = ? WHERE id = ?').run(day(-10), cur); // (opening it now would roll it on)
+  await c.call('POST', `/api/events/${cur}/guests`, { name: 'B Two', contributorId: djNow.id });
+  assert.equal(server.rollRegularNights(), 1);
+  const w2 = cur;
+  cur = (await c.call('GET', `/api/events/${w2}`)).data.event.rolledTo;
+
+  const w = (await c.call('GET', `/api/events/${cur}/weekly`)).data;
+  assert.equal(w.weeks.length, 3);
+  assert.deepEqual(w.weeks.map((x) => [x.listed, x.arrived]), [[0, 0], [1, 0], [2, 2]]);
+  const jess = w.contributors.find((x) => x.name === 'DJ Jess');
+  assert.deepEqual(jess.weeks, [{ listed: 0, arrived: 0 }, { listed: 1, arrived: 0 }, { listed: 2, arrived: 2 }]);
+  const off = await onboard('Weekly Report Off');
+  const oev = (await off.c.call('POST', '/api/events', { name: 'X', date: soon('2026-11-21'), overridePin: '2468' })).data;
+  assert.equal((await off.c.call('GET', `/api/events/${oev.id}/weekly`)).status, 404, 'off until switched on');
+});

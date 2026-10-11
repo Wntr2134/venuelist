@@ -1000,3 +1000,15 @@ small { font-size: max(0.8em, 12px); }
 .clear-list { max-height: 55vh; overflow-y: auto; }
 .clear-row { min-height: 44px; }
 .badge-permanent { border-color: var(--accent); color: var(--accent); }
+
+/* Double-ups (feature: double-ups) */
+.double-flag { margin-top: 6px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(var(--out-rgb), 0.45); background: rgba(var(--out-rgb), 0.1); color: var(--text); font-size: 0.85rem; overflow-wrap: anywhere; }
+.double-notice { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 0.95rem; }
+
+/* Week on week (feature: week-on-week) */
+.weekly-now td { font-weight: 600; }
+.weekly-table td, .weekly-table th { white-space: nowrap; }
+.weekly-table th, .weekly-table td { padding: 8px 6px; font-size: 0.85rem; }
+.weekly-table th:first-child, .weekly-table td:first-child { padding-left: 12px; }
+.report-table.weekly-table { min-width: 0; }
+.weekly-table th { letter-spacing: 0; font-size: 0.72rem; }
