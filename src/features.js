@@ -44,6 +44,18 @@ const FEATURES = [
     what: 'An event can be set to “Repeat every week” (e.g. Toff Tuesday). 24 hours after the night ends, next week’s copy is made automatically and each contributor link ticked “Permanent” moves to it: same link, fresh empty list. Unticked links are one-offs, erased when the night refreshes. Last week’s guests and report stay on last week’s event. The Contributors tab gets “New links for everyone” and “Clear out links”.',
     added: '2026-10-09',
   },
+  {
+    key: 'double-ups',
+    name: 'Double-up warning',
+    what: 'When the same name is on a night’s list more than once (e.g. two promoters both add them), staff see “⚠ On the list twice” with who added each, in the guest list and at the door. The guest list gets a “Double-ups” filter, and adding a name that’s already there shows a heads-up. Contributors never see other contributors’ guests.',
+    added: '2026-10-11',
+  },
+  {
+    key: 'week-on-week',
+    name: 'Week on week (regular nights)',
+    what: 'The Report tab of a weekly night shows the last 5 weeks side by side: guests listed, arrived and no-shows, door count, and each contributor’s listed vs arrived per week.',
+    added: '2026-10-11',
+  },
 ];
 
 // Problems with a feature list, as readable strings (empty = fine). Used by the tests.

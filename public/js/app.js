@@ -343,6 +343,7 @@ async function renderEvent(id, tab) {
   function guestsTab() {
     const q = ui.search.trim();
     const rows = data.guests.filter((g) => {
+      if (ui.contributor === 'double') return !!g.double && (!q || guestScore(q, g) > 0);
       if (ui.contributor === 'venue' && g.contributorId) return false;
       if (ui.contributor !== 'all' && ui.contributor !== 'venue' && String(g.contributorId) !== ui.contributor) return false;
       return !q || guestScore(q, g) > 0;
@@ -367,9 +368,11 @@ async function renderEvent(id, tab) {
     },
       h('option', { value: 'all' }, 'All contributors'),
       h('option', { value: 'venue' }, 'Venue (direct)'),
+      hasFeature('double-ups') ? h('option', { value: 'double' }, '⚠ Double-ups') : null,
       data.contributors.map((c) => h('option', { value: String(c.id) }, c.name))
     );
     filter.value = ui.contributor;
+    const doubles = new Set(data.guests.filter((g) => g.double).map((g) => g.name.toLowerCase().trim())).size;
 
     const table = rows.length
       ? h('div', { class: 'table-wrap' },
@@ -380,7 +383,8 @@ async function renderEvent(id, tab) {
               h('td', null,
                 h('div', { class: 'guest-name' }, g.vip ? h('span', { class: 'badge badge-vip' }, 'VIP') : null, g.name, g.plusOnes ? h('span', { class: 'plus' }, `+${g.plusOnes}`) : null),
                 g.notes ? h('div', { class: 'muted small' }, g.notes) : null,
-                bannedFlag(g)
+                bannedFlag(g),
+                doubleFlag(g)
               ),
               h('td', null, h('span', { class: `badge badge-type t-${g.listType.toLowerCase()}` }, g.listType), h('div', { class: 'muted small' }, g.contributorName || 'Venue')),
               h('td', { class: 'small' }, h('span', { class: 'cell-label' }, 'Added by '), g.addedBy, h('div', { class: 'muted' }, fmtDateTime(g.createdAt))),
@@ -396,6 +400,9 @@ async function renderEvent(id, tab) {
       : h('div', { class: 'empty' }, data.guests.length ? 'No guests match.' : 'No guests yet. Add some, or share contributor links so artists and promoters can add their own.');
 
     return h('div', { class: 'stack' },
+      doubles && ui.contributor !== 'double' ? h('div', { class: 'double-flag double-notice' },
+        h('span', null, h('strong', null, `⚠ ${doubles} name${doubles === 1 ? ' is' : 's are'} on the list more than once.`), ' Usually two contributors adding the same person.'),
+        h('button', { class: 'btn btn-small', onclick: () => { ui.contributor = 'double'; draw(); } }, 'Show them')) : null,
       h('div', { class: 'toolbar' },
         search,
         filter,
@@ -570,6 +577,15 @@ function statTiles(s, e) {
 
 // A guest whose name matches the venue's banned list: staff see the warning and the reason,
 // never the list itself.
+// Double-ups (feature: double-ups): the same name is on tonight's list more than once.
+function doubleFlag(g) {
+  if (!g.double) return null;
+  const via = [...new Set(g.double.others.map((o) => o.via))].join(', ');
+  return h('div', { class: 'double-flag' },
+    h('strong', null, g.double.count > 2 ? `⚠ On the list ${g.double.count} times` : '⚠ On the list twice'),
+    ` · also via ${via}. Check it’s not the same person.`);
+}
+
 function bannedFlag(g) {
   if (!g.banned) return null;
   return h('div', { class: 'banned-flag' },
@@ -687,6 +703,7 @@ function guestForm(data, g, onDone, { atDoor = false } = {}) {
       if (!saved) return;
       m.close();
       if (saved.banned) bannedAlert(saved.name, saved.banned.reason, saved.banned.photo);
+      else if (!editing && saved.double) toast(`${body.name} added. Heads-up: that name is already on the list via ${[...new Set(saved.double.others.map((o) => o.via))].join(', ')}.`, 'error', 7000);
       else toast(editing ? 'Guest saved' : `${body.name} added`, 'ok');
       onDone();
     } catch (err) {
@@ -921,6 +938,7 @@ function reportView(id, r) {
       )
     ),
     r.purged ? h('p', { class: 'muted small' }, 'Guest names were removed after the venue’s privacy period — counts are kept.') : null,
+    hasFeature('week-on-week') && (e.repeatWeekly || e.rolledTo) ? weeklySection(id) : null,
     h('h3', null, 'Door count'),
     h('div', { class: 'stats' },
       tile('Peak inside', door.peak, door.capacity ? `capacity ${door.capacity}` : 'no capacity set'),
@@ -951,6 +969,31 @@ function reportView(id, r) {
       ? h('ul', { class: 'activity' }, r.overrides.map((o) => h('li', null, h('span', { class: 'time' }, fmtDateTime(o.at)), h('span', { class: 'who' }, o.actor), h('span', { class: 'what' }, o.detail))))
       : h('p', { class: 'muted' }, 'None — no rules were broken or changed.'),
   ];
+}
+
+// Week on week (feature: week-on-week): this regular night next to the 4 before it.
+function weeklySection(id) {
+  const box = h('div', { class: 'stack weekly' }, h('h3', null, '🔁 Week on week'), h('div', { class: 'muted small' }, 'Loading…'));
+  const short = (d) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const wrap = (cols, rows) => h('div', { class: 'table-wrap' }, h('table', { class: 'table report-table weekly-table' },
+    h('thead', null, h('tr', null, cols.map((c) => h('th', null, c)))), h('tbody', null, rows)));
+  api('GET', `/api/events/${id}/weekly`).then((w) => {
+    if (w.weeks.length < 2) {
+      return put(box, h('h3', null, '🔁 Week on week'), h('p', { class: 'muted small' }, 'Comparisons show up here from next week, once this night has repeated.'));
+    }
+    const [now, last] = w.weeks;
+    const diff = now.arrived - last.arrived;
+    put(box,
+      h('h3', null, '🔁 Week on week'),
+      h('p', { class: 'small' }, `Guest list arrivals: ${now.arrived} this week vs ${last.arrived} last week (${diff === 0 ? 'no change' : `${diff > 0 ? '+' : ''}${diff}`}). This week is in bold.`),
+      wrap(['Week', 'Listed', 'Arrived', 'No-show', 'Door in'], w.weeks.map((x, i) => h('tr', i === 0 ? { class: 'weekly-now' } : null,
+        h('td', null, short(x.date)), h('td', null, x.listed), h('td', null, x.arrived), h('td', null, x.noShow), h('td', null, x.doorIn)))),
+      w.contributors.length ? h('p', { class: 'muted small' }, 'Each contributor: arrived / listed, per week. Newest on the left.') : null,
+      w.contributors.length ? wrap(['Contributor', ...w.weeks.map((x) => short(x.date))], w.contributors.map((c) => h('tr', null,
+        h('td', null, c.name), c.weeks.map((x) => h('td', null, x ? `${x.arrived} / ${x.listed}` : '—'))))) : null
+    );
+  }).catch((err) => put(box, h('h3', null, '🔁 Week on week'), h('p', { class: 'muted small' }, err.message)));
+  return box;
 }
 
 // Moshtix (or any ticketing) totals, typed in after the night, compared with the door count.
@@ -1291,7 +1334,8 @@ async function renderDoor(id) {
           g.admitted && g.lastInBy ? h('span', { class: 'small muted checked-by' }, ` · in by ${g.lastInBy}`) : null
         ),
         g.notes ? h('div', { class: 'door-note' }, g.notes) : null,
-        bannedFlag(g)
+        bannedFlag(g),
+                doubleFlag(g)
       ),
       h('div', { class: 'door-actions' },
         h('button', { class: 'btn btn-out', disabled: g.inside === 0, onclick: () => doMove(g, 'out') }, 'OUT'),

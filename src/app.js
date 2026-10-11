@@ -1515,7 +1515,7 @@ function createApp(db, options = {}) {
       .prepare('SELECT * FROM contributors WHERE event_id = ? ORDER BY name COLLATE NOCASE')
       .all(e.id)
       .map(contributorOut);
-    const guests = flagBanned(venue, listGuests(db, e.id));
+    const guests = flagDoubles(venue, flagBanned(venue, listGuests(db, e.id)));
     for (const c of contributors) {
       const mine = guests.filter((g) => g.contributorId === c.id);
       c.stats = stats(mine);
@@ -1834,6 +1834,35 @@ function createApp(db, options = {}) {
     return r;
   });
 
+  // Week on week (feature: week-on-week): this regular night and up to 4 weeks before it.
+  route('GET', /^\/api\/events\/(\d+)\/weekly$/, ({ venue, params }) => {
+    if (!feature(venue, 'week-on-week')) throw new HttpError(404, 'Not found');
+    const chain = [evt(venue, params[0])];
+    while (chain.length < 5) {
+      const prev = db.prepare('SELECT * FROM events WHERE rolled_to = ? AND venue_id = ?').get(chain[chain.length - 1].id, venue.id);
+      if (!prev) break;
+      chain.push(prev);
+    }
+    const reports = chain.map((e) => ({ e, r: reportFor(e) }));
+    const names = [];
+    for (const { r } of reports) {
+      for (const c of r.byContributor) if (!names.some((n) => n.toLowerCase() === c.name.toLowerCase())) names.push(c.name);
+    }
+    return {
+      weeks: reports.map(({ e, r }) => ({
+        eventId: e.id, date: e.date, listed: r.guestlist.heads, arrived: r.guestlist.arrived, noShow: r.guestlist.noShow,
+        doorIn: r.door.totalIn, peak: r.door.peak,
+      })),
+      contributors: names.map((name) => ({
+        name,
+        weeks: reports.map(({ r }) => {
+          const c = r.byContributor.find((x) => x.name.toLowerCase() === name.toLowerCase());
+          return c ? { listed: c.heads, arrived: c.arrived } : null;
+        }),
+      })),
+    };
+  });
+
   route('POST', /^\/api\/events\/(\d+)\/report\/email$/, async ({ venue, req, params }) => {
     actorFrom(req);
     const e = evt(venue, params[0]);
@@ -2102,7 +2131,13 @@ function createApp(db, options = {}) {
       return g;
     });
     publish(e.id, 'guests', { actor, guestId: g.id });
-    return flagBanned(venue, [guestOut(g)])[0];
+    const added = flagBanned(venue, [guestOut(g)])[0];
+    if (feature(venue, 'double-ups')) {
+      // Heads-up when this name is already on tonight's list.
+      const same = flagDoubles(venue, listGuests(db, e.id)).find((x) => x.id === g.id);
+      if (same && same.double) added.double = same.double;
+    }
+    return added;
   });
 
   route('POST', /^\/api\/events\/(\d+)\/guests\/import$/, ({ venue, req, params, body }) => {
@@ -2648,6 +2683,31 @@ function createApp(db, options = {}) {
   function banPhotoUrl(venue, banId, base = '/api/banned/photo') {
     if (!feature(venue, 'banned-photos')) return null;
     return db.prepare('SELECT 1 FROM banned_photos WHERE banned_id = ? AND venue_id = ?').get(banId, venue.id) ? `${base}/${banId}` : null;
+  }
+
+  // Double-ups (feature: double-ups): the same name on one night's list more than once. Names
+  // are compared ignoring case, accents, punctuation and extra spaces.
+  const nameKey = (n) => String(n || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  function flagDoubles(venue, guests) {
+    if (!feature(venue, 'double-ups')) return guests;
+    const groups = new Map();
+    for (const g of guests) {
+      const k = nameKey(g.name);
+      if (!k) continue;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(g);
+    }
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      for (const g of list) {
+        g.double = {
+          count: list.length,
+          others: list.filter((x) => x !== g).map((x) => ({ id: x.id, via: x.contributorName || (x.addedVia === 'door' ? 'Door' : 'Venue') })),
+        };
+      }
+    }
+    return guests;
   }
 
   function flagBanned(venue, guests) {
