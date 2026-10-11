@@ -45,6 +45,11 @@ const owner = client();
 
 // Creates a venue as the owner, completes its setup link (staff + venue admin password), then the
 // venue admin adds a manager code named "Manager". Returns logged-in staff and venue-admin clients.
+// Test shows are written with 2026 dates. soon() moves each one the same distance into the
+// future, so tests never break because a show date has quietly passed.
+const SHIFT_DAYS = Math.max(0, Math.ceil((Date.now() + 30 * 86400e3 - Date.parse('2026-10-01T00:00:00Z')) / 86400e3));
+const soon = (d) => new Date(Date.parse(`${d}T00:00:00Z`) + SHIFT_DAYS * 86400e3).toISOString().slice(0, 10);
+
 async function onboard(name, pw = 'venuepass1', pin = '2468') {
   const r = await owner.call('POST', '/api/owner/venues', { name });
   assert.equal(r.status, 200, JSON.stringify(r.data));
@@ -150,7 +155,7 @@ test('owner and venue sessions cannot use each other’s API', async () => {
 
 test('mutations require a device name and JSON', async () => {
   const { c } = await onboard('Name Check Hall');
-  const r = await c.call('POST', '/api/events', { name: 'X', date: '2026-10-01' }, { actor: '' });
+  const r = await c.call('POST', '/api/events', { name: 'X', date: soon('2026-10-01') }, { actor: '' });
   assert.equal(r.status, 400);
   assert.match(r.data.error, /name/i);
   const cookie = Object.entries(c.jar).map(([k, v]) => `${k}=${v}`).join('; ');
@@ -166,7 +171,7 @@ test('venues are isolated from each other', async () => {
   const a = await onboard('Isolation A');
   const b = await onboard('Isolation B');
 
-  const ev = (await a.c.call('POST', '/api/events', { name: 'A show', date: '2026-10-10', overridePin: '2468' })).data;
+  const ev = (await a.c.call('POST', '/api/events', { name: 'A show', date: soon('2026-10-10'), overridePin: '2468' })).data;
   const contrib = (await a.c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'A promoter' })).data;
   const guest = (await a.c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Secret Guest' })).data;
 
@@ -195,7 +200,7 @@ test('venues are isolated from each other', async () => {
   }
 
   // B can't attach A's contributor to its own event either.
-  const bEv = (await b.c.call('POST', '/api/events', { name: 'B show', date: '2026-10-10', overridePin: '2468' })).data;
+  const bEv = (await b.c.call('POST', '/api/events', { name: 'B show', date: soon('2026-10-10'), overridePin: '2468' })).data;
   const r = await b.c.call('POST', `/api/events/${bEv.id}/guests`, { name: 'X', contributorId: contrib.id });
   assert.equal(r.status, 404);
 
@@ -207,7 +212,7 @@ test('venues are isolated from each other', async () => {
 
 test('full flow: contributor link, allocations, door check in/out, attribution', async () => {
   const { c } = await onboard('Flow Hall');
-  let r = await c.call('POST', '/api/events', { name: 'Big Band', date: '2026-10-10', doorsTime: '19:30', overridePin: '2468' }, { actor: 'Will' });
+  let r = await c.call('POST', '/api/events', { name: 'Big Band', date: soon('2026-10-10'), doorsTime: '19:30', overridePin: '2468' }, { actor: 'Will' });
   const eventId = r.data.id;
   assert.equal(r.data.createdBy, 'Will');
 
@@ -281,11 +286,11 @@ test('full flow: contributor link, allocations, door check in/out, attribution',
 
 test('cutoff, guest-list cap, paste import, CSV formula guard', async () => {
   const { c } = await onboard('Rules Hall');
-  let r = await c.call('POST', '/api/events', { name: 'Past cutoff', date: '2026-10-11', cutoffAt: new Date(Date.now() - 60000).toISOString(), overridePin: '2468' });
+  let r = await c.call('POST', '/api/events', { name: 'Past cutoff', date: soon('2026-10-11'), cutoffAt: new Date(Date.now() - 60000).toISOString(), overridePin: '2468' });
   const token = (await c.call('POST', `/api/events/${r.data.id}/contributors`, { name: 'Promoter' })).data.token;
   assert.match((await client().call('GET', `/api/c/${token}`)).data.locked, /cutoff/);
 
-  r = await c.call('POST', '/api/events', { name: 'Small', date: '2026-10-12', capacity: 2, overridePin: '2468' });
+  r = await c.call('POST', '/api/events', { name: 'Small', date: soon('2026-10-12'), capacity: 2, overridePin: '2468' });
   assert.equal((await c.call('POST', `/api/events/${r.data.id}/guests`, { name: 'A', plusOnes: 1 })).status, 200);
   assert.equal((await c.call('POST', `/api/events/${r.data.id}/guests`, { name: 'B' })).data.code, 'override');
 
@@ -294,7 +299,7 @@ test('cutoff, guest-list cap, paste import, CSV formula guard', async () => {
     { name: 'Alex', plusOnes: 1, notes: 'photographer' },
     { name: 'Sam Lee', plusOnes: 0, notes: 'bring ID' },
   ]);
-  r = await c.call('POST', '/api/events', { name: 'Import', date: '2026-10-13', overridePin: '2468' });
+  r = await c.call('POST', '/api/events', { name: 'Import', date: soon('2026-10-13'), overridePin: '2468' });
   assert.equal((await c.call('POST', `/api/events/${r.data.id}/guests/import`, { text: 'A +1\nB\nC, 2', listType: 'Media' })).data.added, 3);
 
   await c.call('POST', `/api/events/${r.data.id}/guests`, { name: '=HYPERLINK("x")' });
@@ -342,7 +347,7 @@ test('owner reset link: old password works until used, then all devices are logg
 
 test('disabling a venue locks staff and contributor links; enabling restores', async () => {
   const { c, venue } = await onboard('Disable Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-10-20', overridePin: '2468' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: soon('2026-10-20'), overridePin: '2468' })).data;
   const token = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'TM' })).data.token;
 
   await owner.call('PUT', `/api/owner/venues/${venue.id}`, { active: false });
@@ -357,7 +362,7 @@ test('disabling a venue locks staff and contributor links; enabling restores', a
 
 test('deleting a venue needs its ID typed and removes all its data', async () => {
   const { c, venue } = await onboard('Delete Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-10-20', overridePin: '2468' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: soon('2026-10-20'), overridePin: '2468' })).data;
   const token = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'TM' })).data.token;
   await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Gone Soon' });
 
@@ -458,7 +463,7 @@ test('owner can choose a username when adding a venue', async () => {
 
 test('door counter: shared +/−, never below zero, peak and totals', async () => {
   const { c } = await onboard('Counter Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Gig', date: '2026-10-30', venueCapacity: 3, overridePin: '2468' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Gig', date: soon('2026-10-30'), venueCapacity: 3, overridePin: '2468' })).data;
   assert.equal(ev.headcount.capacity, 3);
   let r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1 }, { actor: 'Sam' });
   r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 2 }, { actor: 'Alex' });
@@ -480,7 +485,7 @@ test('manager override: confirm before any codes exist, a named code after', asy
   const saved = appDb.prepare('SELECT admin_password_hash FROM venues WHERE id = ?').get(venue.id).admin_password_hash;
   appDb.prepare('UPDATE venues SET admin_password_hash = NULL WHERE id = ?').run(venue.id);
   appDb.prepare('DELETE FROM manager_codes WHERE venue_id = ?').run(venue.id);
-  const ev = (await c.call('POST', '/api/events', { name: 'Full', date: '2026-10-31', venueCapacity: 2 })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Full', date: soon('2026-10-31'), venueCapacity: 2 })).data;
   await c.call('POST', `/api/events/${ev.id}/count`, { delta: 2 });
   let r = await c.call('POST', `/api/events/${ev.id}/count`, { delta: 1 });
   assert.equal(r.data.code, 'confirm');
@@ -537,7 +542,7 @@ test('manager override: confirm before any codes exist, a named code after', asy
 });
 test('guest list check-ins count toward capacity only when switched on', async () => {
   const { c } = await onboard('Combined Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-11-01', venueCapacity: 2, overridePin: '2468' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: soon('2026-11-01'), venueCapacity: 2, overridePin: '2468' })).data;
   const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Pat', plusOnes: 2 })).data;
   let r = await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 1 });
   assert.equal((await c.call('GET', `/api/events/${ev.id}`)).data.event.headcount.count, 0, 'off by default');
@@ -586,18 +591,18 @@ test('owner can reset the staff password or the venue admin password — separat
   assert.equal((await staff.call('GET', '/api/events')).status, 401);
   const again = client();
   assert.equal((await again.call('POST', '/api/login', { username: 'direct-hall', password: 'newpass456' })).status, 200);
-  const ev = (await again.call('POST', '/api/events', { name: 'X', date: '2026-11-02', overridePin: '1111' })).data;
+  const ev = (await again.call('POST', '/api/events', { name: 'X', date: soon('2026-11-02'), overridePin: '1111' })).data;
   assert.ok(ev.id, 'manager code survives a password reset');
 });
 test('creating an event needs the manager PIN once the venue has one', async () => {
   const { c, venue } = await onboard('Create Hall', 'venuepass1', '5151');
-  let r = await c.call('POST', '/api/events', { name: 'Unapproved', date: '2026-11-05' });
+  let r = await c.call('POST', '/api/events', { name: 'Unapproved', date: soon('2026-11-05') });
   assert.equal(r.status, 403);
   assert.equal(r.data.code, 'override');
-  assert.equal((await c.call('POST', '/api/events', { name: 'Bad', date: '2026-11-05', overridePin: '0000' })).status, 403);
-  r = await c.call('POST', '/api/events', { name: '', date: '2026-11-05' });
+  assert.equal((await c.call('POST', '/api/events', { name: 'Bad', date: soon('2026-11-05'), overridePin: '0000' })).status, 403);
+  r = await c.call('POST', '/api/events', { name: '', date: soon('2026-11-05') });
   assert.equal(r.status, 400, 'bad input is rejected before asking for the PIN');
-  r = await c.call('POST', '/api/events', { name: 'Approved', date: '2026-11-05', overridePin: '5151' }, { actor: 'Sam' });
+  r = await c.call('POST', '/api/events', { name: 'Approved', date: soon('2026-11-05'), overridePin: '5151' }, { actor: 'Sam' });
   assert.equal(r.status, 200);
   const act = (await c.call('GET', `/api/events/${r.data.id}/activity`)).data;
   assert.ok(act.some((a) => a.action === 'event.create' && a.actor === 'Sam' && a.detail === 'approved by Manager'));
@@ -606,12 +611,12 @@ test('creating an event needs the manager PIN once the venue has one', async () 
   // A venue with no admin password or codes yet can still create events.
   appDb.prepare('UPDATE venues SET admin_password_hash = NULL WHERE id = ?').run(venue.id);
   appDb.prepare('DELETE FROM manager_codes WHERE venue_id = ?').run(venue.id);
-  assert.equal((await c.call('POST', '/api/events', { name: 'No PIN yet', date: '2026-11-06' })).status, 200);
+  assert.equal((await c.call('POST', '/api/events', { name: 'No PIN yet', date: soon('2026-11-06') })).status, 200);
 });
 
 test('removing a guest who has already arrived needs a manager', async () => {
   const { c } = await onboard('Remove Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-11-10', overridePin: '2468' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: soon('2026-11-10'), overridePin: '2468' })).data;
   const waiting = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Not Here Yet' })).data;
   const arrived = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Already In' })).data;
   await c.call('POST', `/api/guests/${arrived.id}/checkin`, {});
@@ -714,10 +719,10 @@ test('venue admin portal: login, isolation between venues, defaults', async () =
   assert.equal((await a.admin.call('PUT', '/api/vadmin/venue', { email: 'nope' })).status, 400);
   const d = (await a.c.call('GET', '/api/session')).data.venue.defaults;
   assert.deepEqual(d, { capacity: 450, countGuestlist: true });
-  let ev = (await a.c.call('POST', '/api/events', { name: 'Default', date: '2026-12-01', overridePin: '2468' })).data;
+  let ev = (await a.c.call('POST', '/api/events', { name: 'Default', date: soon('2026-12-01'), overridePin: '2468' })).data;
   assert.equal(ev.venueCapacity, 450);
   assert.equal(ev.countGuestlist, true);
-  ev = (await a.c.call('POST', '/api/events', { name: 'Custom', date: '2026-12-02', venueCapacity: 120, countGuestlist: false, overridePin: '2468' })).data;
+  ev = (await a.c.call('POST', '/api/events', { name: 'Custom', date: soon('2026-12-02'), venueCapacity: 120, countGuestlist: false, overridePin: '2468' })).data;
   assert.equal(ev.venueCapacity, 120);
   assert.equal(ev.countGuestlist, false);
 
@@ -785,7 +790,7 @@ test('an older single manager PIN becomes a manager code called "Manager"', () =
 
 test('offline taps: a retried sync with the same op id is applied only once', async () => {
   const { c } = await onboard('Offline Hall');
-  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: '2026-11-20', overridePin: '2468' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Show', date: soon('2026-11-20'), overridePin: '2468' })).data;
   const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Pat', plusOnes: 3 })).data;
   const h1 = { headers: { 'X-Op-Id': 'op-aaaaaaaaaaaa', 'X-Op-At': '2026-11-20T10:00:00Z' } };
   const first = await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 2 }, h1);
@@ -801,7 +806,7 @@ test('offline taps: a retried sync with the same op id is applied only once', as
   assert.ok(act.some((a) => /tapped while offline/.test(a.detail || '')));
   // Another venue can't replay (or read) this venue's op ids.
   const other = await onboard('Offline Other');
-  const ev2 = (await other.c.call('POST', '/api/events', { name: 'X', date: '2026-11-20', overridePin: '2468' })).data;
+  const ev2 = (await other.c.call('POST', '/api/events', { name: 'X', date: soon('2026-11-20'), overridePin: '2468' })).data;
   const o = await other.c.call('POST', `/api/events/${ev2.id}/count`, { delta: 1 }, h2);
   assert.equal(o.data.count, 1);
 });
@@ -910,8 +915,8 @@ test('email: sign-up alert, approval email, forgot password links, test email', 
 
 test('copy contributors from another show; night report', async () => {
   const { c } = await onboard('Report Hall');
-  const last = (await c.call('POST', '/api/events', { name: 'Last Friday', date: '2026-10-02', overridePin: '2468' })).data;
-  const tonight = (await c.call('POST', '/api/events', { name: 'Tonight', date: '2026-10-09', venueCapacity: 100, overridePin: '2468' })).data;
+  const last = (await c.call('POST', '/api/events', { name: 'Last Friday', date: soon('2026-10-02'), overridePin: '2468' })).data;
+  const tonight = (await c.call('POST', '/api/events', { name: 'Tonight', date: soon('2026-10-09'), venueCapacity: 100, overridePin: '2468' })).data;
   await c.call('POST', `/api/events/${last.id}/contributors`, { name: 'Headliner TM', listType: 'Artist', allocation: 20 });
   await c.call('POST', `/api/events/${last.id}/contributors`, { name: 'Promoter Jess', allocation: 10 });
   await c.call('POST', `/api/events/${tonight.id}/contributors`, { name: 'promoter jess' });
@@ -1220,7 +1225,7 @@ test('Riderly connection: API key, show sync and totals without guest names', as
 
   // Push a show in, then update it; unknown shows need a name and date.
   assert.equal((await call(key, 'PUT', '/api/v1/events/ext:show-1', { name: 'No date' })).status, 400);
-  let r = await call(key, 'PUT', '/api/v1/events/ext:show-1', { name: 'Riderly Night', date: '2026-11-06', doorsTime: '19:30', venueCapacity: 300 });
+  let r = await call(key, 'PUT', '/api/v1/events/ext:show-1', { name: 'Riderly Night', date: soon('2026-11-06'), doorsTime: '19:30', venueCapacity: 300 });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.created, true);
   const id = r.data.event.id;
@@ -1239,7 +1244,7 @@ test('Riderly connection: API key, show sync and totals without guest names', as
   await c.call('POST', `/api/events/${id}/count`, { delta: 6 });
 
   // Totals come back; guest names never do.
-  const list = await call(key, 'GET', '/api/v1/events?from=2026-11-01&to=2026-11-30');
+  const list = await call(key, 'GET', `/api/v1/events?from=${soon('2026-11-01')}&to=${soon('2026-11-30')}`);
   assert.equal(list.data.events.length, 1);
   assert.equal(list.data.events[0].guestlist.arrived, 2);
   const rep = await call(key, 'GET', '/api/v1/events/ext:show-1/report');
@@ -1260,7 +1265,7 @@ test('Riderly connection: API key, show sync and totals without guest names', as
   r = await call(key, 'DELETE', '/api/v1/events/ext:show-1');
   assert.deepEqual(r.data, { deleted: false, archived: true });
   assert.equal((await c.call('GET', `/api/events/${id}`)).data.event.archived, true);
-  await call(key, 'PUT', '/api/v1/events/ext:show-2', { name: 'Empty', date: '2026-11-07' });
+  await call(key, 'PUT', '/api/v1/events/ext:show-2', { name: 'Empty', date: soon('2026-11-07') });
   assert.deepEqual((await call(key, 'DELETE', '/api/v1/events/ext:show-2')).data, { deleted: true, archived: false });
 
   // A new key replaces the old one; disconnecting stops it.
@@ -1860,7 +1865,7 @@ test('red colours: off by default; on for one venue reaches its staff app, venue
   assert.equal((await c.call('GET', '/api/session')).data.venue.theme, 'red');
   assert.equal((await admin.call('GET', `/api/vadmin/session/${venue.slug}`)).data.venue.theme, 'red');
   assert.equal((await other.c.call('GET', '/api/session')).data.venue.theme, null, 'other venues stay amber');
-  const ev = (await c.call('POST', '/api/events', { name: 'Loud Night', date: '2026-10-10', overridePin: '2468' })).data;
+  const ev = (await c.call('POST', '/api/events', { name: 'Loud Night', date: soon('2026-10-10'), overridePin: '2468' })).data;
   const contrib = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Promoter' })).data;
   assert.equal((await client().call('GET', `/api/c/${contrib.token}`)).data.theme, 'red');
 
@@ -2101,4 +2106,96 @@ test('regular nights: same links every week; the night rolls over 24 hours after
   assert.equal(server.rollRegularNights(), 1);
   assert.ok((await c.call('GET', `/api/events/${other.id}`)).data.event.rolledTo);
   assert.equal((await c.call('GET', `/api/events/${stop.id}`)).data.event.rolledTo, null);
+});
+
+test('banned photos: a waiting photo survives a restart but never goes into a backup', async () => {
+  const { backupNow } = require('../src/backup');
+  const { c, admin, venue } = await onboard('Restart Hall');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 7)]);
+  const p = await c.call('POST', '/api/banned/pending', { name: 'Waiting Person', photo: `data:image/jpeg;base64,${jpeg.toString('base64')}` });
+  assert.equal(p.status, 200);
+
+  // A second app on the same database (what a deploy's restart looks like) still has it.
+  const restarted = createApp(appDb, { purgeTimer: false });
+  try {
+    await new Promise((r) => restarted.listen(0, '127.0.0.1', r));
+    const cookie = Object.entries(admin.jar).map(([k, v]) => `${k}=${v}`).join('; ');
+    const r = await fetch(`http://127.0.0.1:${restarted.address().port}/api/vadmin/banned`, { headers: { Cookie: cookie } });
+    const list = await r.json();
+    assert.ok(list.pending.some((x) => x.id === p.data.id), 'still waiting after a restart');
+  } finally {
+    restarted.closeAllConnections();
+    restarted.close();
+  }
+
+  // The backup copy has the table, empty, and no trace of the photo bytes.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-pending-'));
+  try {
+    const file = backupNow(appDb, dir, 30, new Date());
+    const copy = new DatabaseSync(file);
+    assert.equal(copy.prepare('SELECT COUNT(*) AS n FROM banned_pending').get().n, 0);
+    copy.close();
+    assert.ok(!fs.readFileSync(file).includes(jpeg.subarray(4, 200)), 'photo bytes not in the backup file');
+    assert.ok(appDb.prepare('SELECT COUNT(*) AS n FROM banned_pending').get().n >= 1, 'live database untouched');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal((await admin.call('DELETE', `/api/vadmin/banned/pending/${p.data.id}`)).status, 200);
+});
+
+test('oops / undo: a door walk-up can be taken off again, and a removed guest brought back for 12 hours', async () => {
+  const { c, venue } = await onboard('Oops Two Hall');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+  const ev = (await c.call('POST', '/api/events', { name: 'Undo night', date: soon('2026-11-15'), overridePin: '2468' })).data;
+  const tm = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'TM' })).data;
+
+  // Walk-up added at the door by mistake.
+  const walk = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Wrong Walkup', plusOnes: 1, atDoor: true })).data;
+  await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Venue Add' }); // not a door walk-up: not listed
+  let list = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data;
+  assert.deepEqual(list.map((a) => [a.kind, a.name, a.count]), [['add', 'Wrong Walkup', 2]]);
+  // Checked in since: undo the check-in first.
+  await c.call('POST', `/api/guests/${walk.id}/checkin`, { count: 1 });
+  list = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data;
+  const addTap = list.find((a) => a.kind === 'add');
+  assert.equal((await c.call('POST', `/api/door-actions/${addTap.id}/undo`, { confirm: 'YES' })).status, 409);
+  await c.call('POST', `/api/door-actions/${list.find((a) => a.direction === 'in').id}/undo`, { confirm: 'YES' });
+  const u = await c.call('POST', `/api/door-actions/${addTap.id}/undo`, { confirm: 'YES' });
+  assert.equal(u.status, 200, JSON.stringify(u.data));
+  let guests = (await c.call('GET', `/api/events/${ev.id}`)).data.guests;
+  assert.ok(!guests.some((g) => g.name === 'Wrong Walkup'), 'walk-up taken off');
+  let activity = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  assert.ok(!JSON.stringify(activity).includes('Wrong Walkup'), 'their name is erased from the log, like any removal');
+
+  // A guest removed by mistake comes back exactly as they were.
+  const keep = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Keep Me', plusOnes: 2, contributorId: tm.id, notes: 'Side door', vip: true })).data;
+  await c.call('POST', `/api/guests/${keep.id}/checkin`, { count: 1 });
+  assert.equal((await c.call('DELETE', `/api/guests/${keep.id}`, { overridePin: '2468' })).status, 200);
+  activity = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  assert.ok(!JSON.stringify(activity).includes('Keep Me'), 'erased from the log while removed (including the manager-code note)');
+  assert.equal(appDb.prepare("SELECT COUNT(*) AS n FROM guests WHERE name = 'Keep Me'").get().n, 0, 'not kept in the database');
+  list = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data;
+  const rem = list.find((a) => a.kind === 'remove');
+  assert.equal(rem.name, 'Keep Me');
+  assert.equal((await c.call('POST', `/api/door-actions/removed/${rem.id}/undo`, {})).status, 400, 'needs YES');
+  const other = await onboard('Oops Two Other');
+  await owner.call('PUT', `/api/owner/venues/${other.venue.id}/features`, { earlyAccess: true });
+  assert.equal((await other.c.call('POST', `/api/door-actions/removed/${rem.id}/undo`, { confirm: 'YES' })).status, 404, 'another venue');
+  const back = await c.call('POST', `/api/door-actions/removed/${rem.id}/undo`, { confirm: 'YES' });
+  assert.equal(back.status, 200, JSON.stringify(back.data));
+  assert.equal(back.data.id, keep.id);
+  assert.deepEqual([back.data.name, back.data.plusOnes, back.data.contributorId, back.data.notes, back.data.vip, back.data.inside, back.data.admitted],
+    ['Keep Me', 2, tm.id, 'Side door', true, 1, 1]);
+  assert.equal((await c.call('POST', `/api/door-actions/removed/${rem.id}/undo`, { confirm: 'YES' })).status, 409, 'only once');
+  activity = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  assert.ok(activity.some((a) => a.action === 'guest.checkin' && a.guestName === 'Keep Me'), 'their history has their name again');
+
+  // Feature off: removals aren't held at all.
+  const plain = await onboard('Oops Two Plain');
+  const pev = (await plain.c.call('POST', '/api/events', { name: 'P', date: soon('2026-11-15'), overridePin: '2468' })).data;
+  const pg = (await plain.c.call('POST', `/api/events/${pev.id}/guests`, { name: 'Gone For Good' })).data;
+  await plain.c.call('DELETE', `/api/guests/${pg.id}`);
+  await owner.call('PUT', `/api/owner/venues/${plain.venue.id}/features`, { earlyAccess: true });
+  assert.ok(!(await plain.c.call('GET', `/api/events/${pev.id}/door-actions`)).data.some((a) => a.kind === 'remove'));
 });

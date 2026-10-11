@@ -115,6 +115,19 @@ CREATE TABLE IF NOT EXISTS banned_photos (
   created_by   TEXT NOT NULL,
   approved_by  TEXT
 );
+-- Door photos waiting up to 24 hours for the venue admin to approve them (feature: banned-photos).
+-- Kept here so a restart or deploy doesn't lose them; every backup copy has this table emptied
+-- (see backup.js), and rows are deleted (secure_delete) once approved, rejected or expired.
+CREATE TABLE IF NOT EXISTS banned_pending (
+  id         TEXT PRIMARY KEY,
+  venue_id   INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL DEFAULT '',
+  reason     TEXT,
+  mime       TEXT NOT NULL,
+  data       BLOB NOT NULL,
+  taken_by   TEXT NOT NULL,
+  taken_at   INTEGER NOT NULL          -- ms since epoch
+);
 CREATE TABLE IF NOT EXISTS banned_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   venue_id    INTEGER NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
@@ -181,7 +194,7 @@ CREATE TABLE IF NOT EXISTS door_actions (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id         INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   guest_id         INTEGER NOT NULL REFERENCES guests(id) ON DELETE CASCADE,
-  direction        TEXT NOT NULL,          -- 'in' | 'out'
+  direction        TEXT NOT NULL,          -- 'in' | 'out' | 'add' (a walk-up added at the door)
   count            INTEGER NOT NULL,
   prev_admitted    INTEGER NOT NULL,
   prev_first_in_at TEXT,
