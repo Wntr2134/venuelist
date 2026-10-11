@@ -402,6 +402,7 @@ async function renderEvent(id, tab) {
         h('div', { class: 'row' },
           h('button', { class: 'btn btn-primary', onclick: () => guestForm(data, null, load) }, '+ Add guest'),
           h('button', { class: 'btn', onclick: () => importForm(data, load) }, 'Paste list'),
+          hasFeature('door-undo') ? h('button', { class: 'btn', onclick: () => undoList(id, load) }, '↩️ Oops / Undo') : null,
           h('a', { class: 'btn', href: `/api/events/${id}/export.csv` }, 'Export CSV'),
           h('a', { class: 'btn btn-accent', href: `#/door/${id}` }, 'Door mode →')
         )
@@ -745,7 +746,7 @@ async function removeGuest(g, onDone) {
   try {
     const r = await withOverride((extra) => api('DELETE', `/api/guests/${g.id}`, extra));
     if (!r) return;
-    toast('Removed', 'ok');
+    toast(hasFeature('door-undo') ? 'Removed. Changed your mind? Use ↩️ Oops / Undo.' : 'Removed', 'ok', hasFeature('door-undo') ? 5000 : 3200);
     onDone();
   } catch (err) {
     handleError(err);
@@ -1609,7 +1610,8 @@ async function undoList(eventId, reload) {
   }
   const box = h('ul', { class: 'undo-list' });
   const draw = () => put(box, list.length ? list.map((a) => {
-    const what = `${a.direction === 'in' ? '✓ In' : '← Out'}: ${a.name}${a.count > 1 ? ` ×${a.count}` : ''}`;
+    const label = { in: '✓ In', out: '← Out', add: '➕ Walk-up', remove: '🗑 Removed' }[a.direction] || a.direction;
+    const what = `${label}: ${a.name}${a.count > 1 ? ` ×${a.count}` : ''}`;
     return h('li', { class: `undo-row${a.undoneAt ? ' undone' : ''}` },
       h('div', null,
         h('strong', null, what),
@@ -1621,7 +1623,7 @@ async function undoList(eventId, reload) {
         onclick: async () => {
           if (!(await typeYes(a))) return;
           try {
-            await api('POST', `/api/door-actions/${a.id}/undo`, { confirm: 'YES' });
+            await api('POST', a.kind === 'remove' ? `/api/door-actions/removed/${encodeURIComponent(a.id)}/undo` : `/api/door-actions/${a.id}/undo`, { confirm: 'YES' });
             a.undoneAt = new Date().toISOString();
             a.undoneBy = currentName();
             toast(`Undone: ${what}`, 'ok');
@@ -1633,10 +1635,10 @@ async function undoList(eventId, reload) {
         },
       }, 'Undo')
     );
-  }) : h('li', { class: 'empty' }, 'No check-ins or check-outs in the last 12 hours.'));
+  }) : h('li', { class: 'empty' }, 'Nothing to undo from the last 12 hours.'));
   draw();
   const m = modal('↩️ Oops / Undo', h('div', { class: 'stack' },
-    h('p', { class: 'small muted' }, 'Tapped the wrong person? Undo puts them back as if it never happened, including the door count. Newest first, from every door device.'),
+    h('p', { class: 'small muted' }, 'Tapped the wrong person, added a walk-up by mistake, or removed someone you shouldn’t have? Undo puts it back as if it never happened, including the door count. Newest first, from every device. Removed guests can only be brought back for 12 hours, and not after a server update.'),
     box
   ), { actions: [h('button', { class: 'btn btn-primary', onclick: () => m.close() }, 'Close')] });
 }
@@ -1655,16 +1657,19 @@ function typeYes(a) {
     };
     input.addEventListener('input', () => { go.disabled = input.value.trim().toUpperCase() !== 'YES'; });
     const f = h('form', { class: 'stack' },
-      h('p', null, a.direction === 'in'
-        ? `${a.name}${a.count > 1 ? ` ×${a.count}` : ''} will be taken back off the inside count, as if they were never checked in.`
-        : `${a.name}${a.count > 1 ? ` ×${a.count}` : ''} will be put back inside, as if they were never checked out.`),
+      h('p', null, {
+        in: `${a.name}${a.count > 1 ? ` ×${a.count}` : ''} will be taken back off the inside count, as if they were never checked in.`,
+        out: `${a.name}${a.count > 1 ? ` ×${a.count}` : ''} will be put back inside, as if they were never checked out.`,
+        add: `${a.name} will be taken off the list again, as if they were never added.`,
+        remove: `${a.name} will go back on the list exactly as they were.`,
+      }[a.direction]),
       field('Type YES to confirm', input)
     );
     f.addEventListener('submit', (e) => {
       e.preventDefault();
       if (!go.disabled) finish(true);
     });
-    const m = modal(a.direction === 'in' ? 'Undo this check-in?' : 'Undo this check-out?', f, {
+    const m = modal({ in: 'Undo this check-in?', out: 'Undo this check-out?', add: 'Undo this walk-up?', remove: 'Bring this guest back?' }[a.direction], f, {
       actions: [h('button', { class: 'btn', onclick: () => finish(false) }, 'Cancel'), go],
       onClose: () => finish(false),
     });

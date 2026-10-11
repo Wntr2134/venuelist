@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -12,6 +13,18 @@ function backupNow(db, dir, keepDays = 30, date = new Date()) {
   if (fs.existsSync(file)) fs.unlinkSync(file); // VACUUM INTO refuses to overwrite
   db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
   fs.chmodSync(file, 0o600);
+  // Door photos still waiting for approval never go into a backup: empty that table in the copy
+  // and rebuild the file so no trace of them is left in free pages.
+  const copy = new DatabaseSync(file);
+  try {
+    const has = copy.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'banned_pending'").get();
+    if (has) {
+      copy.exec('DELETE FROM banned_pending');
+      copy.exec('VACUUM');
+    }
+  } finally {
+    copy.close();
+  }
 
   const cutoff = date.getTime() - keepDays * DAY;
   for (const name of fs.readdirSync(dir)) {

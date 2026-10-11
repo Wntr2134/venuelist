@@ -2091,7 +2091,14 @@ function createApp(db, options = {}) {
       ruled(venue, req, body, ctx, () => checkCapacity(db, e, 1 + data.plusOnes, 0));
       if (contributor) ruled(venue, req, body, ctx, () => checkAllocation(db, contributor, 1 + data.plusOnes, 0));
       const g = insertGuest(e, contributor, data, actor, via);
-      log(db, { eventId: e.id, guest: g, action: 'guest.add', detail: data.plusOnes ? `+${data.plusOnes}` : null, actor, via });
+      const activityId = log(db, { eventId: e.id, guest: g, action: 'guest.add', detail: data.plusOnes ? `+${data.plusOnes}` : null, actor, via });
+      // A walk-up added at the door can be undone from Oops / Undo (feature: door-undo).
+      if (via === 'door') {
+        db.prepare(
+          `INSERT INTO door_actions (event_id, guest_id, direction, count, prev_admitted, activity_id, actor, at)
+           VALUES (?, ?, 'add', ?, 0, ?, ?, ?)`
+        ).run(e.id, g.id, 1 + data.plusOnes, Number(activityId), actor, now());
+      }
       return g;
     });
     publish(e.id, 'guests', { actor, guestId: g.id });
@@ -2165,15 +2172,10 @@ function createApp(db, options = {}) {
     const actor = actorFrom(req);
     const g = gst(venue, params[0]);
     if (g.admitted > 0) {
-      override(venue, req, body, `${g.name} has already checked in — removing them needs a manager.`, { eventId: g.event_id, actor });
+      override(venue, req, body, 'This guest has already checked in — removing them needs a manager.', { eventId: g.event_id, actor });
     }
-    tx(db, () => {
-      db.prepare('DELETE FROM guests WHERE id = ?').run(g.id);
-      // Deleting a guest is the venue's erase button, so wipe the name from the log too — the
-      // action and who did it stay, the person's name doesn't.
-      db.prepare('UPDATE activity SET guest_name = NULL WHERE guest_id = ?').run(g.id);
-      log(db, { eventId: g.event_id, guest: { id: g.id, name: null }, action: 'guest.remove', actor, via: 'venue' });
-    });
+    tx(db, () => eraseGuest(g, 'guest.remove', null, actor));
+    if (feature(venue, 'door-undo')) keepRemoved(venue, g, actor);
     publish(g.event_id, 'guests', { actor, guestId: g.id });
     return { ok: true };
   });
@@ -2246,21 +2248,79 @@ function createApp(db, options = {}) {
     if (!feature(venue, 'door-undo')) throw new HttpError(404, 'Not found');
   }
 
-  // Recent check-ins and check-outs at this show, from every door device, newest first.
+  // Deleting a guest is the venue's erase button: wipe the name from the log too. The action and
+  // who did it stay; the person's name doesn't.
+  function eraseGuest(g, action, detail, actor) {
+    db.prepare('DELETE FROM guests WHERE id = ?').run(g.id);
+    db.prepare('UPDATE activity SET guest_name = NULL WHERE guest_id = ?').run(g.id);
+    log(db, { eventId: g.event_id, guest: { id: g.id, name: null }, action, detail, actor, via: 'venue' });
+  }
+
+  // Removed guests, so a removal can be undone for 12 hours. Held only in this server's memory
+  // (never the database or a backup), so the name really is gone once the window passes or
+  // the server restarts.
+  const removedGuests = new Map(); // key -> { venueId, eventId, row, actor, at, undoneAt, undoneBy }
+  function sweepRemoved(at = Date.now()) {
+    for (const [k, r] of removedGuests) if (at - r.at > UNDO_HOURS * 3600 * 1000) removedGuests.delete(k);
+  }
+  function keepRemoved(venue, row, actor) {
+    sweepRemoved();
+    const mine = [...removedGuests.entries()].filter(([, r]) => r.venueId === venue.id);
+    if (mine.length >= 200) removedGuests.delete(mine[0][0]); // oldest first
+    removedGuests.set(crypto.randomBytes(9).toString('base64url'), { venueId: venue.id, eventId: row.event_id, row: { ...row }, actor, at: Date.now() });
+  }
+
+  // Recent check-ins, check-outs, walk-ups and removals at this show, from every device, newest first.
   route('GET', /^\/api\/events\/(\d+)\/door-actions$/, ({ venue, params }) => {
     undoOn(venue);
     const e = evt(venue, params[0]);
     const since = new Date(Date.now() - UNDO_HOURS * 3600 * 1000).toISOString();
-    return db
+    const taps = db
       .prepare(
         `SELECT d.*, g.name, g.plus_ones FROM door_actions d JOIN guests g ON g.id = d.guest_id
           WHERE d.event_id = ? AND d.at >= ? ORDER BY d.id DESC LIMIT 50`
       )
       .all(e.id, since)
       .map((d) => ({
-        id: d.id, guestId: d.guest_id, name: d.name, party: 1 + d.plus_ones, direction: d.direction, count: d.count,
-        actor: d.actor, at: d.at, undoneAt: d.undone_at, undoneBy: d.undone_by,
+        id: d.id, kind: d.direction === 'add' ? 'add' : 'move', guestId: d.guest_id, name: d.name, party: 1 + d.plus_ones,
+        direction: d.direction, count: d.count, actor: d.actor, at: d.at, undoneAt: d.undone_at, undoneBy: d.undone_by,
       }));
+    sweepRemoved();
+    const removed = [...removedGuests.entries()]
+      .filter(([, r]) => r.venueId === venue.id && r.eventId === e.id)
+      .map(([k, r]) => ({
+        id: k, kind: 'remove', guestId: r.row.id, name: r.row.name, party: 1 + r.row.plus_ones, direction: 'remove', count: 1 + r.row.plus_ones,
+        actor: r.actor, at: new Date(r.at).toISOString(), undoneAt: r.undoneAt || null, undoneBy: r.undoneBy || null,
+      }));
+    return [...taps, ...removed].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50);
+  });
+
+  // Undo a removal: the guest goes back on the list exactly as they were.
+  route('POST', /^\/api\/door-actions\/removed\/([^/]+)\/undo$/, ({ venue, req, params, body }) => {
+    undoOn(venue);
+    const actor = actorFrom(req);
+    if (String(body.confirm || '').trim().toUpperCase() !== 'YES') throw new HttpError(400, 'Type YES to confirm the undo.');
+    sweepRemoved();
+    const r = removedGuests.get(params[0]);
+    if (!r || r.venueId !== venue.id) throw new HttpError(404, 'That removal can’t be undone any more.');
+    if (r.undoneAt) throw new HttpError(409, `Already undone by ${r.undoneBy}.`);
+    const e = evt(venue, r.eventId);
+    const row = { ...r.row };
+    if (row.contributor_id && !db.prepare('SELECT 1 FROM contributors WHERE id = ? AND event_id = ?').get(row.contributor_id, e.id)) {
+      row.contributor_id = null; // their contributor has gone since
+    }
+    tx(db, () => {
+      if (db.prepare('SELECT 1 FROM guests WHERE id = ?').get(row.id)) throw new HttpError(409, 'They’re already back on the list.');
+      const cols = Object.keys(row);
+      db.prepare(`INSERT INTO guests (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((c) => row[c]));
+      db.prepare('UPDATE activity SET guest_name = ? WHERE guest_id = ?').run(row.name, row.id);
+      const removedAt = new Date(r.at).toLocaleTimeString('en-AU', { timeZone: VENUE_TZ, hour: 'numeric', minute: '2-digit' });
+      log(db, { eventId: e.id, guest: row, action: 'guest.undo', detail: `removal by ${r.actor} at ${removedAt} (back on the list)`, actor, via: 'door' });
+    });
+    r.undoneAt = new Date().toISOString();
+    r.undoneBy = actor;
+    publish(e.id, 'guests', { actor, guestId: row.id });
+    return guestOut(getGuest(db, row.id));
   });
 
   // Puts the guest, the door count and the night report back as if the tap never happened.
@@ -2277,6 +2337,13 @@ function createApp(db, options = {}) {
         throw new HttpError(409, `Only taps from the last ${UNDO_HOURS} hours can be undone.`);
       }
       const g = getGuest(db, d.guest_id);
+      if (d.direction === 'add') {
+        // Undo a walk-up: take them off the list again (and erase their name, like any removal).
+        if (g.admitted > 0) throw new HttpError(409, `${g.name} has been checked in since. Undo that check-in first, then the walk-up.`);
+        const added = new Date(d.at).toLocaleTimeString('en-AU', { timeZone: VENUE_TZ, hour: 'numeric', minute: '2-digit' });
+        eraseGuest(g, 'guest.undo', `walk-up added by ${d.actor} at ${added} (taken off the list)`, actor);
+        return { removed: true, eventId: e.id, guestId: g.id };
+      }
       const party = 1 + g.plus_ones;
       let inside;
       if (d.direction === 'in') {
@@ -2316,6 +2383,10 @@ function createApp(db, options = {}) {
       });
       return { g: getGuest(db, g.id), eventId: e.id };
     });
+    if (result.removed) {
+      publish(result.eventId, 'guests', { actor, guestId: result.guestId });
+      return { ok: true, removed: true };
+    }
     const out = guestOut(result.g);
     publish(result.eventId, 'guests', { actor, guestId: out.id });
     publish(result.eventId, 'count', { headcount: headcountOut(getEvent(db, result.eventId)), actor });
@@ -2677,20 +2748,32 @@ function createApp(db, options = {}) {
   }, { auth: 'vadmin' });
 
   // ----- banned list photos (feature: banned-photos) -----
-  // Door staff take a photo; it waits in this server's memory (never the database, never a backup)
-  // for 24 hours. The venue admin approves it onto the banned list, or it's gone. A server restart
-  // (every deploy) also clears it. Staff compare faces by eye: nothing here does automatic face matching.
+  // Door staff take a photo; it waits up to 24 hours (in banned_pending, so a deploy doesn't lose
+  // it, but never in a backup: backup.js empties that table in every copy). The venue admin
+  // approves it onto the banned list, or it's deleted. Staff compare faces by eye: nothing here
+  // does automatic face matching.
 
   const PENDING_MS = 24 * 3600 * 1000;
   const PENDING_PER_VENUE = 20;
-  const PENDING_TOTAL = 100; // photos are ≤ 700 KB each, so at most ~70 MB of memory
-  const pendingPhotos = new Map(); // id -> { venueId, name, reason, mime, data, by, at }
+  const PENDING_TOTAL = 100; // photos are ≤ 700 KB each, so at most ~70 MB
+  const pendingRow = (r) => r && ({
+    id: r.id, venueId: r.venue_id, name: r.name, reason: r.reason, mime: r.mime, data: r.data, by: r.taken_by, at: r.taken_at,
+  });
+  const pendingPhotos = {
+    get: (id) => pendingRow(db.prepare('SELECT * FROM banned_pending WHERE id = ?').get(id)),
+    set: (id, p) => db.prepare('INSERT INTO banned_pending (id, venue_id, name, reason, mime, data, taken_by, taken_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, p.venueId, p.name || '', p.reason, p.mime, p.data, p.by, p.at),
+    delete: (id) => db.prepare('DELETE FROM banned_pending WHERE id = ?').run(id),
+    get size() {
+      return db.prepare('SELECT COUNT(*) AS n FROM banned_pending').get().n;
+    },
+  };
   const sweepPending = (at = Date.now()) => {
-    for (const [id, p] of pendingPhotos) if (at - p.at > PENDING_MS) pendingPhotos.delete(id);
+    db.prepare('DELETE FROM banned_pending WHERE taken_at < ?').run(at - PENDING_MS);
   };
   const pendingFor = (venue) => {
     sweepPending();
-    return [...pendingPhotos.entries()].filter(([, p]) => p.venueId === venue.id).map(([id, p]) => ({ id, ...p }));
+    return db.prepare('SELECT * FROM banned_pending WHERE venue_id = ? ORDER BY taken_at').all(venue.id).map(pendingRow);
   };
   const pendingOut = (p) => ({
     id: p.id, name: p.name, reason: p.reason, takenBy: p.by, takenAt: new Date(p.at).toISOString(),
