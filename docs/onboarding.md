@@ -33,6 +33,20 @@ What it does today:
 - **Retention.** Guest names are purged a set number of days after each show. Counts stay.
 - **Backups.** A nightly local snapshot, plus an encrypted copy off the server.
 
+Behind feature flags (see `src/features.js`; the Toff has Early access, so it has all of these):
+- **`banned-photos`.** Door staff take a photo for the banned list; it waits up to 24 hours in
+  `banned_pending` for the venue admin to approve (the table is emptied in every backup copy,
+  `src/backup.js`). Name-match photo, a logged gallery, upload buttons, "no name" entries.
+- **`door-undo`.** "Oops / Undo" for check-ins and check-outs (`door_actions`), door walk-ups, and
+  removed guests (a snapshot held only in RAM for 12 hours, never on disk). Undo needs YES typed.
+- **`regular-nights`.** A weekly night (`events.repeat_weekly`) rolls on 24 hours after it ends
+  (`rollEvent`): next week's copy is made and contributors ticked permanent
+  (`contributors.permanent`) keep the same link token; one-off links are retired. The VMT `PUT`
+  links to a same-named, same-date show instead of duplicating it.
+- **`double-ups`.** The same name twice on one night's list is flagged for staff (`flagDoubles`).
+- **`week-on-week`.** A regular night's report compares it with up to 4 weeks before it.
+- **`red-theme`.** Red colours for a venue.
+
 ## How work gets in
 
 GitHub enforces this, not just convention.
@@ -93,7 +107,11 @@ Never use a real venue's guests, the Toff's included, to test or demo changes.
 - **Every new route must declare the right `auth`.** A test enumerates every route and fails if a
   non-public one answers an anonymous caller.
 - **Retention covers every name.** If you add a new place that stores guest names, include it in
-  the purge (`purgeExpired` in `src/app.js`) and in guest deletion.
+  the purge (`purgeExpired` in `src/app.js`) and in guest deletion. Deleting a guest also erases
+  their name from the activity log (`eraseGuest`), so don't quote guest names in free-text log
+  details (e.g. override reasons): they'd survive the deletion.
+- **Tests use future dates.** Write test show dates with `soon('2026-11-20')`, never a bare date,
+  or the test breaks once that date passes.
 - **Revocation covers every session.** Logging out, a password change or a disabled venue cuts
   live streams and cached data. If you add a new kind of session or stream, make sure revoking
   access ends it too.

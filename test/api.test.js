@@ -2057,8 +2057,11 @@ test('regular nights: same links every week; the night rolls over 24 hours after
   const off = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Old Crew', permanent: true })).data;
   await c.call('PUT', `/api/contributors/${off.id}`, { active: false });
   const guestDj = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Guest DJ (one-off)' })).data;
+  // (Checked while the night is still on: opening a link on an overdue night rolls it on.)
+  appDb.prepare('UPDATE events SET date = ? WHERE id = ?').run(day(0), ev.id);
   assert.equal((await client().call('GET', `/api/c/${guestDj.token}`)).data.link, 'tonight');
   assert.equal((await client().call('GET', `/api/c/${dj.token}`)).data.link, 'weekly');
+  appDb.prepare('UPDATE events SET date = ? WHERE id = ?').run(lastTue, ev.id);
   await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Last Week Guest', contributorId: dj.id });
 
   // Opening a link rolls the night over on the spot: same link, next week's show, empty list.
@@ -2254,4 +2257,88 @@ test('week on week: a regular night’s report lines up the last 5 weeks and eac
   const off = await onboard('Weekly Report Off');
   const oev = (await off.c.call('POST', '/api/events', { name: 'X', date: soon('2026-11-21'), overridePin: '2468' })).data;
   assert.equal((await off.c.call('GET', `/api/events/${oev.id}/weekly`)).status, 404, 'off until switched on');
+});
+
+test('Riderly API: pushing a show that Guest List already made (same name and date) links to it, no duplicate', async () => {
+  const { c, admin, venue } = await onboard('Linked Hall');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const call = (method, p, body) => client().call(method, p, body, { actor: null, headers: { Authorization: `Bearer ${key}` } });
+  const date = soon('2026-11-24');
+  const mine = (await c.call('POST', '/api/events', { name: 'Toff Tuesday', date, repeatWeekly: true, overridePin: '2468' })).data;
+  const dj = (await c.call('POST', `/api/events/${mine.id}/contributors`, { name: 'DJ Jess', permanent: true })).data;
+
+  const r = await call('PUT', '/api/v1/events/ext:toff-24', { name: 'toff tuesday', date, venueCapacity: 400 });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.created, false, 'linked, not created');
+  assert.equal(r.data.event.id, mine.id);
+  const all = (await c.call('GET', '/api/events?view=all')).data.filter((e) => e.date === date);
+  assert.equal(all.length, 1, 'no duplicate show');
+  assert.equal(all[0].venueCapacity, 400, 'Riderly’s fields applied');
+  assert.equal((await client().call('GET', `/api/c/${dj.token}`)).status, 200, 'contributor links untouched');
+  // A different name on the same date is still a new show.
+  assert.equal((await call('PUT', '/api/v1/events/ext:other', { name: 'Late Show', date })).data.created, true);
+  // Riderly cancelling it archives (it has contributor links) and never deletes it.
+  const del = await call('DELETE', '/api/v1/events/ext:toff-24');
+  assert.deepEqual(del.data, { deleted: false, archived: true });
+  // A cancelled week of a regular night still moves its permanent links on to the next week.
+  appDb.prepare('UPDATE events SET date = ? WHERE id = ?').run('2026-01-06', mine.id);
+  assert.ok(server.rollRegularNights() >= 1);
+  const v = (await client().call('GET', `/api/c/${dj.token}`)).data;
+  assert.ok(v.event.date > '2026-01-06' && v.locked === null, 'the link works on a later week');
+});
+
+test('regular nights: rolling on never kills a link (same-name contributors, or a link already sent for next week)', async () => {
+  const { c, venue } = await onboard('Same Name Hall');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+  const melb = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = melb.format(new Date(Date.now() - 6 * 3600e3));
+  const day = (n) => new Date(Date.parse(`${today}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
+  const ev = (await c.call('POST', '/api/events', { name: 'Toff Tuesday', date: day(-3), repeatWeekly: true, overridePin: '2468' })).data;
+  const s1 = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Sam', permanent: true })).data;
+  const s2 = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'sam', permanent: true })).data;
+  const band1 = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Band', permanent: true })).data;
+  // The venue already made next week's show and sent "Band" a link for it, which has been used.
+  const next = (await c.call('POST', '/api/events', { name: 'Toff Tuesday', date: day(4), overridePin: '2468' })).data;
+  assert.ok(next.id);
+  const band2 = (await c.call('POST', `/api/events/${next.id}/contributors`, { name: 'Band' })).data;
+  assert.equal((await client().call('POST', `/api/c/${band2.token}/guests`, { name: 'Early Guest' })).status, 200);
+
+  assert.equal(server.rollRegularNights(), 1);
+  for (const x of [s1, s2, band1, band2]) {
+    const v = await client().call('GET', `/api/c/${x.token}`);
+    assert.equal(v.status, 200, `${x.name}'s link still works`);
+    assert.equal(v.data.event.date, day(4), 'and points at next week');
+  }
+  assert.equal((await client().call('GET', `/api/c/${band2.token}`)).data.guests.length, 1, 'the early guest is still there');
+});
+
+test('oops / undo: an undone tap stays out of the report for good, only the latest tap undoes, and the peak goes back', async () => {
+  const { c, venue } = await onboard('Undo Report Hall');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+  const ev = (await c.call('POST', '/api/events', { name: 'Report night', date: soon('2026-11-26'), countGuestlist: true, overridePin: '2468' })).data;
+  const big = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Big Party', plusOnes: 9 })).data;
+  await c.call('POST', `/api/guests/${big.id}/checkin`, { count: 10 });
+  let tap = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data[0];
+  assert.equal((await c.call('POST', `/api/door-actions/${tap.id}/undo`, { confirm: 'YES' })).status, 200);
+  let rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;
+  assert.deepEqual([rep.door.count, rep.door.totalIn, rep.door.peak], [0, 0, 0], 'peak goes back too');
+  // Two days later door_actions is cleared, and the guest is removed: still not in the report.
+  server.purgeExpired(new Date(Date.now() + 3 * 86400e3));
+  await c.call('DELETE', `/api/guests/${big.id}`);
+  rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;
+  assert.deepEqual([rep.arrivals.checkins.length, rep.arrivals.doorIn.length, rep.firstIn], [0, 0, null]);
+
+  // In, out for a smoke, back in: the first check-in can't be undone on its own.
+  const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Smoker', plusOnes: 1 })).data;
+  await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 2 });
+  await c.call('POST', `/api/guests/${g.id}/checkout`, { count: 2 });
+  await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 2 });
+  const taps = (await c.call('GET', `/api/events/${ev.id}/door-actions`)).data.filter((a) => a.guestId === g.id);
+  const first = taps[taps.length - 1];
+  assert.equal((await c.call('POST', `/api/door-actions/${first.id}/undo`, { confirm: 'YES' })).status, 409);
+  assert.equal((await c.call('POST', `/api/door-actions/${taps[0].id}/undo`, { confirm: 'YES' })).status, 200, 'the latest one can');
+  // Peak set by an earlier, real crowd isn't lowered by undoing a smaller tap.
+  rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;
+  assert.equal(rep.door.peak, 2);
 });

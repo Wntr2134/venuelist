@@ -24,7 +24,7 @@
     <article class="guide-body">
       <h1>Privacy policy</h1>
       <p class="lede">What Riderly Guest List stores, why, where it lives and how long it’s kept. Written in plain English.</p>
-      <p class="draft-note small">Draft, last updated 29 September 2026. This policy is being reviewed and may change. We’ll tell venues about any changes that matter.</p>
+      <p class="draft-note small">Draft, last updated 11 October 2026. This policy is being reviewed and may change. We’ll tell venues about any changes that matter.</p>
 
       <section>
         <h2>Who we are</h2>
@@ -40,7 +40,8 @@
             <tr><td>Guests</td><td>Name, number of +1s, list type (e.g. Guest, Artist, Media), VIP flag, any note the venue or contributor adds, who added them, and door check-in and check-out times.</td></tr>
             <tr><td>Contributors</td><td>The name the venue gives them (e.g. an artist or promoter), their allocation and any note.</td></tr>
             <tr><td>Venue staff</td><td>The name typed on each phone or laptop, and a log of what was done under that name (added a guest, checked someone in, used a manager code).</td></tr>
-            <tr><td>Refused entry</td><td>Only if a venue uses its banned list: the person’s name and the venue’s short reason. Only the venue admin can see the list, and every look and change is logged. Door staff see a warning on a matching guest, never the list. Each name is reviewed every 12 months and removed a month later unless the venue renews it.</td></tr>
+            <tr><td>Refused entry</td><td>Only if a venue uses its banned list: the person’s name (or “name unknown”) and the venue’s short reason. Only the venue admin can see the list, and every look and change is logged. Door staff see a warning on a matching guest, never the list. Each entry is reviewed every 12 months and removed a month later unless the venue renews it.</td></tr>
+            <tr><td>Refused entry: photos</td><td>Only if a venue turns on banned-list photos. A photo of the person, taken at the door (staff should tell the person they’re taking it) or added by the venue admin. A door photo isn’t added until the venue admin approves it; if they don’t within 24 hours, it’s deleted, and photos waiting for approval are never copied into backups. Door staff can see a photo when a guest’s name matches, and can open a gallery of the venue’s banned-list photos; every look is logged with the staff member’s name. Staff compare faces by eye: Riderly does no automatic face matching or face recognition. A photo is deleted with its entry, or earlier by the venue admin or with a manager’s code.</td></tr>
             <tr><td>Venues</td><td>Venue name, username, contact name, email, phone (optional) and the message sent with the sign-up. Passwords and manager codes are stored only as one-way hashes. We can’t read them.</td></tr>
           </tbody>
         </table>
@@ -83,6 +84,8 @@
         <h2>How long we keep it</h2>
         <ul>
           <li><b>Guest details</b> stay until the venue deletes them, deletes the show, or its automatic clean-up runs. A venue can set “keep guest details for X days” in its venue admin page. After that, names and notes are removed and only totals remain (how many were on the list, how many came).</li>
+          <li><b>Removed guests:</b> when a venue removes a guest, their name is also removed from the show’s activity log. If the venue uses “Oops / Undo”, a copy is held in the server’s memory only (never saved to disk or backups) for up to 12 hours so a mistake can be undone, then it’s gone.</li>
+          <li><b>Banned-list photos:</b> see “Refused entry: photos” above. Photos waiting for approval are deleted after 24 hours.</li>
           <li><b>Backups</b> roll over automatically, and every copy is deleted within 12 months.</li>
           <li><b>Venue accounts</b> are kept while the venue uses the service. When a venue is deleted, its shows, guests and activity are deleted with it, apart from the rolling backups above.</li>
         </ul>

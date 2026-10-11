@@ -22,9 +22,12 @@ function backupNow(db, dir, keepDays = 30, date = new Date()) {
       copy.exec('DELETE FROM banned_pending');
       copy.exec('VACUUM');
     }
-  } finally {
+  } catch (err) {
     copy.close();
+    fs.rmSync(file, { force: true }); // never leave a copy that still has waiting photos in it
+    throw err;
   }
+  copy.close();
 
   const cutoff = date.getTime() - keepDays * DAY;
   for (const name of fs.readdirSync(dir)) {
