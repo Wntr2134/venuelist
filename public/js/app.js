@@ -206,6 +206,11 @@ async function renderEvents(view) {
           h('a', { class: 'btn', href: '#/comps' }, 'Comps report'),
           view === 'upcoming' ? h('button', { class: 'btn btn-primary', onclick: () => eventForm() }, '+ New event') : null)
       ),
+      // The same banned-list buttons as door mode, so staff don't have to open a show first.
+      hasFeature('banned-photos') ? h('div', { class: 'row wrap door-ban-tools' },
+        h('button', { class: 'btn btn-small', onclick: () => bannedGallery() }, '🚫 Banned faces'),
+        h('button', { class: 'btn btn-small', onclick: () => bannedPhotoForm('') }, '📷 Photo for banned list')
+      ) : null,
       h('nav', { class: 'tabs' }, tab('upcoming', 'Upcoming', '#/'), tab('past', 'Past', '#/past'), tab('archived', 'Archived', '#/archive')),
       events.length ? h('div', { class: 'event-grid' }, events.map((e) => eventCard(e, today))) : h('div', { class: 'empty' }, empty)
     )
