@@ -203,7 +203,7 @@ function listGuests(db, eventId, contributorId) {
     SELECT g.*, c.name AS contributor_name, li.actor AS last_in_by, li.at AS last_in_at
     FROM guests g LEFT JOIN contributors c ON c.id = g.contributor_id
     LEFT JOIN activity li ON li.id = (
-      SELECT a.id FROM activity a WHERE a.guest_id = g.id AND a.action = 'guest.checkin' ORDER BY a.id DESC LIMIT 1
+      SELECT a.id FROM activity a WHERE a.guest_id = g.id AND a.action = 'guest.checkin' AND a.undone = 0 ORDER BY a.id DESC LIMIT 1
     )
     WHERE g.event_id = ? ${contributorId ? 'AND g.contributor_id = ?' : ''}
     ORDER BY g.name COLLATE NOCASE`;
@@ -1721,10 +1721,10 @@ function createApp(db, options = {}) {
     const act = (sql) => db.prepare(sql).all(e.id);
     // Taps that were undone (feature: door-undo) never happened, as far as the report is concerned.
     const checkins = act(`SELECT at, detail FROM activity WHERE event_id = ? AND action = 'guest.checkin'
-      AND id NOT IN (SELECT activity_id FROM door_actions WHERE undone_at IS NOT NULL AND activity_id IS NOT NULL) ORDER BY id`)
+      AND undone = 0 ORDER BY id`)
       .map((a) => ({ at: a.at, count: Number((a.detail || '').match(/^(\d+)/)?.[1] || 1) }));
     const doorIn = act(`SELECT at, delta FROM headcount_log WHERE event_id = ? AND source IN ('clicker', 'guestlist') AND delta > 0
-      AND id NOT IN (SELECT headcount_id FROM door_actions WHERE undone_at IS NOT NULL AND headcount_id IS NOT NULL) ORDER BY id`)
+      AND undone = 0 ORDER BY id`)
       .map((r) => ({ at: r.at, count: r.delta }));
     const overrides = act("SELECT at, actor, detail FROM activity WHERE event_id = ? AND action = 'override' ORDER BY id")
       .map((a) => ({ at: a.at, actor: a.actor, detail: a.detail }));
@@ -1977,7 +1977,8 @@ function createApp(db, options = {}) {
   // contributors and report; its contributors just get retired links.
 
   function rollDue(e, at = Date.now()) {
-    if (!e.repeat_weekly || e.rolled_to || e.archived) return false;
+    // A week Riderly took out of its schedule still moves its links on; one the venue archived doesn't.
+    if (!e.repeat_weekly || e.rolled_to || (e.archived && !e.removed_by_riderly)) return false;
     if (venueDay(at) < addDays(e.date, 2)) return false;
     const v = db.prepare('SELECT * FROM venues WHERE id = ?').get(e.venue_id);
     return !!v && !!v.active && feature(v, 'regular-nights');
@@ -2009,15 +2010,12 @@ function createApp(db, options = {}) {
         const token = c.token;
         db.prepare('UPDATE contributors SET token = ? WHERE id = ?').run(newToken(), c.id); // retire it here
         if (!c.permanent) continue; // a one-off link ends with its night
-        const same = db.prepare('SELECT id FROM contributors WHERE event_id = ? AND name = ? COLLATE NOCASE').get(target.id, c.name);
-        if (same) {
-          db.prepare('UPDATE contributors SET token = ?, permanent = 1 WHERE id = ?').run(token, same.id);
-        } else {
-          db.prepare(
-            `INSERT INTO contributors (event_id, name, list_type, allocation, token, active, notes, permanent, created_at, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 'Regular night')`
-          ).run(target.id, c.name, c.list_type, c.allocation, token, c.active, c.notes, new Date(at).toISOString());
-        }
+        // Always its own new row: never take over a contributor (or a link already sent out) that
+        // next week's show has already, even one with the same name.
+        db.prepare(
+          `INSERT INTO contributors (event_id, name, list_type, allocation, token, active, notes, permanent, created_at, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 'Regular night')`
+        ).run(target.id, c.name, c.list_type, c.allocation, token, c.active, c.notes, new Date(at).toISOString());
         moved += 1;
       }
       db.prepare('UPDATE events SET rolled_to = ? WHERE id = ?').run(target.id, e.id);
@@ -2029,7 +2027,7 @@ function createApp(db, options = {}) {
 
   function rollRegularNights(at = Date.now()) {
     let n = 0;
-    const due = db.prepare('SELECT * FROM events WHERE repeat_weekly = 1 AND rolled_to IS NULL AND archived = 0 AND date <= ?')
+    const due = db.prepare('SELECT * FROM events WHERE repeat_weekly = 1 AND rolled_to IS NULL AND (archived = 0 OR removed_by_riderly = 1) AND date <= ?')
       .all(addDays(venueDay(at), -2));
     for (const e of due) {
       try {
@@ -2239,6 +2237,7 @@ function createApp(db, options = {}) {
       const ev = getEvent(db, g.event_id);
       let headcountId = null;
       let headcountDelta = 0;
+      const prevPeak = ev.head_peak || 0;
       if (ev.count_guestlist) {
         if (direction === 'in') ruled(venue, req, body, { eventId: ev.id, actor }, () => checkVenueCapacity(ev, count));
         headcountDelta = bumpHeadcount(db, g.event_id, direction === 'in' ? count : -count, 'guestlist', actor);
@@ -2255,8 +2254,8 @@ function createApp(db, options = {}) {
       // Kept so a mis-tap can be undone (feature: door-undo).
       db.prepare(
         `INSERT INTO door_actions (event_id, guest_id, direction, count, prev_admitted, prev_first_in_at, activity_id,
-           headcount_id, headcount_delta, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(g.event_id, g.id, direction, count, g.admitted, g.first_in_at, Number(activityId), headcountId, headcountDelta, actor, t);
+           headcount_id, headcount_delta, prev_peak, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(g.event_id, g.id, direction, count, g.admitted, g.first_in_at, Number(activityId), headcountId, headcountDelta, prevPeak, actor, t);
       return { g: getGuest(db, g.id), count };
     });
     const out = guestOut(result.g);
@@ -2380,6 +2379,12 @@ function createApp(db, options = {}) {
         return { removed: true, eventId: e.id, guestId: g.id };
       }
       const party = 1 + g.plus_ones;
+      // Only the guest's latest tap can be undone; undoing an older one would wipe out a later,
+      // real check-in or check-out.
+      const later = db.prepare(
+        "SELECT 1 FROM door_actions WHERE guest_id = ? AND id > ? AND undone_at IS NULL AND direction IN ('in', 'out')"
+      ).get(g.id, d.id);
+      if (later) throw new HttpError(409, `${g.name} has been tapped in or out again since. Undo their latest tap first.`);
       let inside;
       if (d.direction === 'in') {
         if (g.inside < d.count) throw new HttpError(409, `${g.name} has been checked out since, so there’s nothing to undo. Check the log.`);
@@ -2405,7 +2410,17 @@ function createApp(db, options = {}) {
           db.prepare("INSERT INTO headcount_log (event_id, delta, count_after, source, actor, at) VALUES (?, ?, ?, 'undo', ?, ?)")
             .run(e.id, back, after, actor, t);
         }
+        // The peak goes back too, if this tap set it and nothing has gone higher since.
+        const tap = d.headcount_id ? db.prepare('SELECT count_after FROM headcount_log WHERE id = ?').get(d.headcount_id) : null;
+        if (tap && d.prev_peak !== null && d.headcount_delta > 0) {
+          const peakAfterTap = Math.max(d.prev_peak, tap.count_after);
+          if (peakAfterTap > d.prev_peak && cur.head_peak === peakAfterTap) {
+            db.prepare('UPDATE events SET head_peak = ? WHERE id = ?').run(Math.max(d.prev_peak, after), e.id);
+          }
+        }
+        if (d.headcount_id) db.prepare('UPDATE headcount_log SET undone = 1 WHERE id = ?').run(d.headcount_id);
       }
+      if (d.activity_id) db.prepare('UPDATE activity SET undone = 1 WHERE id = ?').run(d.activity_id);
       db.prepare('UPDATE door_actions SET undone_at = ?, undone_by = ? WHERE id = ?').run(t, actor, d.id);
       const tapped = new Date(d.at).toLocaleTimeString('en-AU', { timeZone: VENUE_TZ, hour: 'numeric', minute: '2-digit' });
       log(db, {
@@ -2442,7 +2457,8 @@ function createApp(db, options = {}) {
     const e = getEvent(db, c.event_id);
     if (rollDue(e)) {
       rollEvent(e);
-      c = db.prepare('SELECT * FROM contributors WHERE token = ?').get(token) || c;
+      c = db.prepare('SELECT * FROM contributors WHERE token = ?').get(token);
+      if (!c) throw new HttpError(404, 'This link is not valid. Ask the venue for a new one.'); // a one-off link that just ended
     }
     return c;
   }
@@ -2688,7 +2704,7 @@ function createApp(db, options = {}) {
   // Double-ups (feature: double-ups): the same name on one night's list more than once. Names
   // are compared ignoring case, accents, punctuation and extra spaces.
   const nameKey = (n) => String(n || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+    .replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim();
   function flagDoubles(venue, guests) {
     if (!feature(venue, 'double-ups')) return guests;
     const groups = new Map();
@@ -3274,7 +3290,6 @@ function createApp(db, options = {}) {
   // Creates the show the first time, then keeps it in step. Only the fields sent are changed.
   route('PUT', /^\/api\/v1\/events\/ext:([^/]+)$/, ({ venue, params, body }) => {
     const ext = externalId(decodeExt(params[0]));
-    const e = db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(ext, venue.id);
     const has = (k) => body[k] !== undefined;
     const fields = {
       name: has('name') ? str(body.name, 'Event name', { required: true, max: 120 }) : undefined,
@@ -3288,6 +3303,20 @@ function createApp(db, options = {}) {
       archived: has('archived') ? (body.archived ? 1 : 0) : undefined,
     };
     const set = Object.entries(fields).filter(([, v]) => v !== undefined);
+    let e = db.prepare('SELECT * FROM events WHERE external_id = ? AND venue_id = ?').get(ext, venue.id);
+    if (!e && fields.name && fields.date) {
+      // The venue already made this show in Guest List (often next week's copy of a regular
+      // night): link it to Riderly instead of making a second one with the same name and date.
+      const mine = db.prepare(
+        `SELECT * FROM events WHERE venue_id = ? AND date = ? AND name = ? COLLATE NOCASE AND external_id IS NULL AND archived = 0
+          ORDER BY id LIMIT 1`
+      ).get(venue.id, fields.date, fields.name);
+      if (mine) {
+        db.prepare('UPDATE events SET external_id = ? WHERE id = ?').run(ext, mine.id);
+        log(db, { eventId: mine.id, action: 'event.update', detail: 'linked to the same show in Riderly', actor: 'Riderly', via: 'venue' });
+        e = getEvent(db, mine.id);
+      }
+    }
     if (!e) {
       if (!fields.name || !fields.date) throw new HttpError(400, 'A new show needs a name and a date');
       const info = db

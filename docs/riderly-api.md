@@ -37,6 +37,8 @@ Tests a key. Returns `{ name, username, links: { staffLogin, venueAdmin, app, gu
 
 Returns `{ created: true|false, event }`.
 
+If the venue already made a show in Guest List with the **same name and date** (and no Riderly ID yet, not archived), the first `PUT` links to that show instead of making a second one, and returns `created: false`. This is common with weekly "regular nights", where Guest List makes next week's copy itself.
+
 ### `GET /events?from=YYYY-MM-DD&to=YYYY-MM-DD[&archived=1]`
 Returns `{ events: [event…] }`, at most 500, sorted by date.
 

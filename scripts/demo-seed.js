@@ -7,7 +7,11 @@
 const { openDb } = require('../src/db');
 const { createApp } = require('../src/app');
 
-const today = new Date();
+// The venue's day (Melbourne, rolling over at 6am), the same as the app, so "tonight" is never
+// already over in the early-morning hours.
+const melbourneDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' })
+  .format(new Date(Date.now() - 6 * 3600 * 1000));
+const today = new Date(`${melbourneDay}T00:00:00Z`);
 const iso = (d) => new Date(today.getTime() + d * 86400000).toISOString().slice(0, 10);
 
 async function startDemo() {
