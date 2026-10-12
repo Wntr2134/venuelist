@@ -1,7 +1,7 @@
 'use strict';
 
 // Checks every page at phone, iPad and desktop sizes, and saves screenshots to look at.
-//   node --disable-warning=ExperimentalWarning scripts/check-layout.js [outDir] [--theme=red]
+//   node --disable-warning=ExperimentalWarning scripts/check-layout.js [outDir] [--theme=red] [--features=key,key]
 // Needs Playwright (npm i -g playwright): a dev tool, not an app dependency.
 //
 // Flags, per page and screen:
@@ -18,6 +18,8 @@ const { startDemo } = require('./demo-seed');
 const { chromium } = require(path.join(execSync('npm root -g').toString().trim(), 'playwright'));
 const args = process.argv.slice(2);
 const THEME = (args.find((a) => a.startsWith('--theme=')) || '').slice('--theme='.length);
+// New features (src/features.js) to switch on for the demo venue, to check their screens too.
+const FEATURES_ON = (args.find((a) => a.startsWith('--features=')) || '').slice('--features='.length).split(',').filter(Boolean);
 const OUT = args.find((a) => !a.startsWith('--')) || path.join(require('node:os').tmpdir(), 'vl-layout');
 
 const DEVICES = [
@@ -121,13 +123,15 @@ async function main() {
     method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: demo.ownerCookie }, body: JSON.stringify({ name: 'The Corner Hotel' }),
   })).json();
   demo.setupPath = added.setupPath;
-  if (THEME) {
-    // Check a venue colour theme (a feature in src/features.js): switch it on for the demo venue.
+  const switchOn = [...FEATURES_ON, ...(THEME ? [`${THEME}-theme`] : [])];
+  if (switchOn.length) {
+    // Switch features (and a colour theme, which is a feature too) on for the demo venue.
     const owner = { 'Content-Type': 'application/json', Cookie: demo.ownerCookie };
     const { venues } = await (await fetch(`${demo.base}/api/owner/venues`, { headers: owner })).json();
     const v = venues.find((x) => x.slug === 'velvet-room');
-    const r = await fetch(`${demo.base}/api/owner/venues/${v.id}/features`, { method: 'PUT', headers: owner, body: JSON.stringify({ set: { [`${THEME}-theme`]: true } }) });
-    if (!r.ok) throw new Error(`Theme "${THEME}": ${(await r.json()).error}`);
+    const set = Object.fromEntries(switchOn.map((k) => [k, true]));
+    const r = await fetch(`${demo.base}/api/owner/venues/${v.id}/features`, { method: 'PUT', headers: owner, body: JSON.stringify({ set }) });
+    if (!r.ok) throw new Error(`Features ${switchOn.join(', ')}: ${(await r.json()).error}`);
   }
   const browser = await chromium.launch();
   const cookies = {
