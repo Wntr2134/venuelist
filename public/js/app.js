@@ -141,7 +141,7 @@ function topbar(opts = {}) {
 function topbarOnly({ back, title, sub, right } = {}) {
   return h('header', { class: 'topbar' },
     h('div', { class: 'topbar-left' },
-      back ? h('a', { class: 'icon-btn', href: back, 'aria-label': 'Back' }, '←') : h('span', { class: 'logo' }, '★'),
+      back ? h('a', { class: 'icon-btn', href: back, 'aria-label': 'Back' }, '←') : h('span', { class: 'logo logo-mark' }, '★'),
       h('div', { class: 'topbar-title' },
         h('strong', null, title || state.venueName),
         sub ? h('small', null, sub) : null

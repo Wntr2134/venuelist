@@ -1,0 +1,154 @@
+/* riderly-shell: 1 — bump this and site_shell (templates/_site-products.html) together.
+
+   THE ONE LOOK. Tokens, faces and the shared classes for every marketing page
+   and door page Riderly has (docs/site-look.md says which is which). A linked
+   file, not an inline block, because app.riderly.com.au's content policy bans
+   inline style. Guest List lives in another repo and keeps a copy of this
+   file: tools/check_look.py compares the version above with what it serves.
+
+   Colours follow the logo package: Riderly amber, VMT sky, Advance coral,
+   Guest List teal. A colour a page needs is a token here, never a hex there. */
+
+@font-face{font-family:"Prata";font-style:normal;font-weight:400;font-display:swap;
+  src:url("/static/riderly/fonts/prata-400-latin.woff2") format("woff2")}
+@font-face{font-family:"Libre Franklin";font-style:normal;font-weight:400 600;font-display:swap;
+  src:url("/static/riderly/fonts/librefranklin-var-latin.woff2") format("woff2")}
+
+:root{
+  /* ground */
+  --bg:#0b1220; --surface:#121b2e; --surface-2:#18233a; --surface-3:#1a2540; --surface-hi:#16203a;
+  --line:#24304a; --line-2:#33446a; --line-soft:#1c2740;
+  /* text */
+  --ink:#ffffff; --lede:#dbe5f1; --muted:#a9bdd6; --faint:#7f93b0; --on-colour:#0b1220;
+  /* the family */
+  --amber:#f2b447; --amber-hot:#f6c56c; --amber-deep:#c98a1f; --amber-edge:#a8730f;
+  --sky:#5fa8d3; --coral:#e8735a; --coral-soft:#f09a85; --teal:#3fb8a6; --teal-deep:#1f7d70;
+  /* paper: light panels and made-up app cards */
+  --paper:#f6f3ec; --paper-line:#e2dccf; --paper-muted:#55607a; --paper-rule:#b9b1a0;
+  /* type */
+  --head:"Prata",Georgia,serif; --body:"Libre Franklin",Arial,sans-serif; --bw:600;
+  --system:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --t-brand:clamp(80px,3rem + 8vw,190px); --t-title:clamp(38px,1.6rem + 3vw,64px);
+  --t-section:clamp(30px,1.4rem + 2.2vw,56px); --t-lead:clamp(19px,1.1rem + .5vw,24px);
+  --t-text:18px; --t-small:15px; --t-label:13px;
+  /* shape */
+  --wrap:1240px; --gutter:clamp(16px,3vw,40px); --read:36em; --door:400px;
+  --r-btn:6px; --r-card:12px; --r-file:18px;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;color-scheme:dark}
+html{scroll-padding-top:80px}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:var(--t-text);line-height:1.55;
+  -webkit-font-smoothing:antialiased;overflow-x:clip}
+:focus-visible{outline:3px solid var(--amber);outline-offset:3px}
+
+/* a colour for anything that takes one: tabs, nav marks, file edges */
+.rs-c-amber{--c:var(--amber)} .rs-c-sky{--c:var(--sky)} .rs-c-coral{--c:var(--coral)}
+.rs-c-teal{--c:var(--teal)} .rs-c-paper{--c:var(--paper)}
+.rs-amber{color:var(--amber)}
+
+/* buttons: the one sales button, 52 tall, 40 in the bar */
+.rs-btn{display:inline-flex;align-items:center;justify-content:center;gap:.35em;min-height:52px;padding:0 26px;
+  border:1px solid transparent;border-radius:var(--r-btn);background:var(--amber);color:var(--on-colour);
+  font:var(--bw) 17px/1 var(--body);text-decoration:none;white-space:nowrap;cursor:pointer}
+.rs-btn:hover{background:var(--amber-hot)}
+.rs-btn--bar{min-height:40px;padding:0 16px;font-size:var(--t-small)}
+.rs-btn--ghost{background:transparent;color:var(--ink);border-color:var(--line-2)}
+.rs-btn--ghost:hover{background:transparent;border-color:var(--amber)}
+
+/* ---- the top bar: every marketing page, from site_top ---- */
+.rs-top{position:sticky;top:0;z-index:40;background:rgba(11,18,32,.78);
+  -webkit-backdrop-filter:saturate(1.2) blur(12px);backdrop-filter:saturate(1.2) blur(12px);
+  border-bottom:1px solid var(--line)}
+.rs-top-in{display:flex;align-items:center;gap:24px;max-width:var(--wrap);height:64px;margin:0 auto;padding:0 var(--gutter)}
+.rs-logo{display:block;flex:none;line-height:0}
+.rs-logo img{display:block;width:auto;height:44px}
+.rs-nav{display:flex;align-items:center;gap:22px;margin:0 auto}
+.rs-nav a,.rs-signin{color:var(--muted);font-size:var(--t-small);text-decoration:none;white-space:nowrap}
+.rs-nav a:hover,.rs-signin:hover{color:var(--ink)}
+.rs-nav a[aria-current=page]{color:var(--c);font-weight:var(--bw)}
+@media (max-width:900px){
+  .rs-nav,.rs-signin{display:none}
+  .rs-top .rs-btn{margin-left:auto}
+}
+
+/* ---- the folder tabs: along the top on a product page, down the left on the
+   home (.rs-tabs--rail), a sideways row on a phone ---- */
+.rs-tabs{display:flex;align-items:flex-end;gap:6px;max-width:var(--wrap);margin:18px auto 0;padding:0 var(--gutter);
+  overflow-x:auto;scrollbar-width:none}
+.rs-tabs::-webkit-scrollbar{display:none}
+.rs-tab{flex:0 0 auto;display:block;margin-top:10px;padding:11px 18px;border:0;border-radius:10px 10px 0 0;
+  background:var(--c);color:var(--on-colour);font:var(--bw) var(--t-small)/1.2 var(--body);text-align:left;text-decoration:none;cursor:pointer}
+.rs-tab b{display:block;font-weight:var(--bw)}
+.rs-tab small{display:block;margin-top:2px;font-size:var(--t-label);font-weight:400;opacity:.8}
+.rs-tab .no{display:none}
+a.rs-tab:hover{margin-top:6px;padding-bottom:15px}
+.rs-tab[aria-current=page]{margin-top:0;padding-bottom:21px}
+.rs-edge{border-top:10px solid var(--c)}
+.rs-tabs--rail{flex-direction:column;align-items:stretch;gap:8px;margin:0;padding:56px 0 0;overflow:visible}
+.rs-tabs--rail .rs-tab{position:relative;width:calc(100% - 22px);margin:0 0 0 22px;padding:16px 20px 16px 22px;
+  border-radius:12px 0 0 12px;transition:margin .18s ease,width .18s ease}
+.rs-tabs--rail .rs-tab b{font-size:19px;line-height:1.2}
+.rs-tabs--rail .rs-tab .no{display:block;position:absolute;right:14px;top:16px;font-size:var(--t-label);font-weight:400;opacity:.65}
+.rs-tabs--rail .rs-tab[aria-selected=true]{width:100%;margin-left:0}
+@media (max-width:760px){
+  .rs-tabs{padding:0 16px}
+  .rs-tab{padding:10px 14px}
+  .rs-tab small{display:none}
+  .rs-tabs--rail{flex-direction:row;align-items:flex-end;gap:6px;padding:0 16px;overflow-x:auto}
+  .rs-tabs--rail .rs-tab{flex:0 0 auto;width:auto;margin:10px 0 0;padding:11px 14px;border-radius:10px 10px 0 0}
+  .rs-tabs--rail .rs-tab b{font-size:16px}
+  .rs-tabs--rail .rs-tab .no{display:none}
+  .rs-tabs--rail .rs-tab[aria-selected=true]{width:auto;margin:0;padding-bottom:21px}
+}
+
+/* ---- "On this page": the links to parts of a page, under the hero ---- */
+.rs-onpage{display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px;max-width:var(--wrap);margin:0 auto;
+  padding:16px var(--gutter);border-top:1px solid var(--line);color:var(--faint);font-size:var(--t-small)}
+.rs-onpage-label{font-size:var(--t-label);font-weight:var(--bw);letter-spacing:.08em;text-transform:uppercase}
+.rs-onpage a{color:var(--muted);text-decoration:none}
+.rs-onpage a:hover{color:var(--ink);text-decoration:underline;text-underline-offset:4px}
+
+/* ---- the footer: every marketing page, from site_foot ---- */
+.rs-foot{max-width:var(--wrap);margin:56px auto 0;padding:24px var(--gutter) 40px;border-top:1px solid var(--line);
+  color:var(--faint);font-size:var(--t-label);line-height:1.6}
+.rs-foot p{margin:0}
+.rs-foot p + p{margin-top:8px}
+.rs-foot a{color:var(--muted)}
+
+/* ---- door pages: sign-in, public links, errors (_door.html). Navy, one card,
+   the product's logo above it, one quiet line under it, no nav ---- */
+.rs-door{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;
+  padding:32px 16px}
+.rs-door-logo{display:block;width:auto;height:64px;margin:0 0 24px}
+.rs-door-card{width:100%;max-width:var(--door);padding:32px;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-card);font-size:var(--t-small)}
+.rs-door-card h1{margin:0 0 4px;color:var(--ink);font:400 34px/1.15 var(--head)}
+.rs-door-card p{margin:8px 0}
+.rs-door-sub,.rs-door-card .note,.rs-door-card .fine{color:var(--muted);font-size:var(--t-small)}
+.rs-door-sub{margin:0 0 20px}
+.rs-door-card .kicker{margin:0 0 8px;color:var(--amber);font-size:var(--t-label);font-weight:var(--bw);letter-spacing:.08em;text-transform:uppercase}
+.rs-door-venue{display:block;width:auto;max-width:min(240px,70%);max-height:88px;margin:0 auto 16px;border-radius:12px}
+.rs-door-card label{display:block;margin:14px 0 5px;color:var(--muted);font-size:var(--t-label);font-weight:var(--bw);
+  letter-spacing:.08em;text-transform:uppercase}
+.rs-door-card input:not([type=checkbox]):not([type=radio]):not([type=hidden]),.rs-door-card textarea{display:block;width:100%;
+  margin-top:5px;padding:11px 13px;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--r-btn);
+  color:var(--ink);font:400 16px/1.4 var(--body);text-transform:none;letter-spacing:0}
+.rs-door-card input:focus,.rs-door-card textarea:focus{border-color:var(--amber);outline:none}
+.rs-door-card button,.rs-door-card .go{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:52px;
+  margin-top:22px;padding:0 20px;border:1px solid transparent;border-radius:var(--r-btn);background:var(--amber);
+  color:var(--on-colour);font:var(--bw) 17px/1 var(--body);text-decoration:none;cursor:pointer}
+.rs-door-card button:hover,.rs-door-card .go:hover{background:var(--amber-hot)}
+.rs-door-card button.quiet,.rs-door-card .go.quiet{background:transparent;border-color:var(--line-2);color:var(--ink);font-size:var(--t-small)}
+.rs-door-card details{margin-top:24px;padding-top:14px;border-top:1px solid var(--line)}
+.rs-door-card summary{color:var(--muted);font-size:var(--t-small);text-align:center;cursor:pointer}
+.rs-door-card .rs-door-err,.rs-door-card .error{margin-top:12px;color:var(--coral-soft);font-size:var(--t-small)}
+.rs-door-hint{margin:12px 0 0;color:var(--muted);font-size:var(--t-small);text-align:center}
+.rs-door-line{margin:24px 0 0;color:var(--faint);font-size:var(--t-label);text-align:center}
+.rs-door-line a{color:var(--muted);text-decoration:none}
+.rs-door-line a:hover{color:var(--ink);text-decoration:underline;text-underline-offset:4px}
+
+@media print{.rs-top,.rs-tabs,.rs-onpage{display:none}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}

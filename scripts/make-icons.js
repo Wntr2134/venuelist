@@ -1,6 +1,6 @@
 'use strict';
 
-// Renders the PNG app icons (iPhone home screen, Android) from the star logo.
+// Renders the PNG app icons (iPhone home screen, Android) from the Guest List mark.
 //   node scripts/make-icons.js   (needs Playwright — a dev tool, not an app dependency)
 
 const path = require('node:path');
@@ -8,11 +8,13 @@ const { execSync } = require('node:child_process');
 const { chromium } = require(path.join(execSync('npm root -g').toString().trim(), 'playwright'));
 
 const OUT = path.join(__dirname, '..', 'public');
-// Full-bleed square (iOS rounds the corners itself); star kept inside the safe zone for Android masks.
-const svg = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 64 64">
-  <defs><radialGradient id="g" cx="0.75" cy="0.15" r="0.9"><stop offset="0" stop-color="#3a2a12"/><stop offset="1" stop-color="#0d0b09"/></radialGradient></defs>
-  <rect width="64" height="64" fill="url(#g)"/>
-  <path d="M32 14l5.3 11.4 12.4 1.5-9.1 8.5 2.3 12.3L32 41.6l-10.9 6.1 2.3-12.3-9.1-8.5 12.4-1.5z" fill="#f2b95c"/>
+// Full-bleed square (iOS rounds the corners itself). The mark's furthest corner sits 39.6% of the
+// width from the centre, just inside the 40% circle Android masks keep. The committed PNGs come
+// straight from the Riderly logo package; this draws the same shapes.
+const svg = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 100 100">
+  <rect width="100" height="100" fill="#0b1220"/>
+  <circle cx="50" cy="40" r="22" fill="#3fb8a6"/>
+  <rect x="22" y="70" width="56" height="8" fill="#3fb8a6"/>
 </svg>`;
 
 (async () => {

@@ -3,23 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0d0b09">
+  <meta name="theme-color" content="#0b1220">
   <meta name="description" content="The terms for venues using Riderly Guest List.">
   <link rel="canonical" href="https://guestlist.riderly.com.au/terms">
-  <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/svg+xml" href="/static/riderly/logos/guest-list-icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/riderly/logos/guest-list-icon-32.png">
+  <link rel="apple-touch-icon" href="/static/riderly/logos/guest-list-icon-180.png">
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/static/riderly/site.css">
+  <link rel="stylesheet" href="/css/riderly-pages.css">
   <title>Terms · Riderly Guest List</title>
 </head>
-<body class="landing guide-page">
-  <header class="landing-nav">
-    <a class="brand" href="/"><span class="logo">★</span><strong>Riderly Guest List</strong></a>
-    <nav class="nav-links">
-      <a href="/" class="hide-sm">Home</a>
-      <a class="btn btn-small" href="/login">Log in</a>
+<body class="rs-page guide-page">
+  <header class="rs-top" data-riderly-shell="1"><div class="rs-top-in">
+    <a class="rs-logo" href="https://riderly.com.au/" aria-label="Riderly home"><img src="/static/riderly/logos/guest-list-logo-on-dark.svg" alt="Guest List" width="163" height="44"></a>
+    <nav class="rs-nav" aria-label="Riderly's products">
+      <a class="rs-c-sky" href="https://riderly.com.au/vmt/">Venue Management Tool</a>
+      <a class="rs-c-teal" href="/" aria-current="page">Guest List</a>
+      <a class="rs-c-coral" href="https://riderly.com.au/#advance">Advance</a>
     </nav>
-  </header>
+    <a class="rs-signin" href="/login">Sign in</a>
+    <a class="rs-btn rs-btn--bar" href="/#apply">Book a look</a>
+  </div></header>
+  <nav class="rs-tabs" id="rs-tabs" aria-label="Riderly, by folder">
+    <a class="rs-tab rs-c-amber" href="https://riderly.com.au/#life">A show's life<small>Booking to bar report</small></a>
+    <a class="rs-tab rs-c-paper" href="https://riderly.com.au/#tonight">Tonight<small>Run sheet &amp; door</small></a>
+    <a class="rs-tab rs-c-teal" href="/" aria-current="page">Guest List<small>The door app</small></a>
+    <a class="rs-tab rs-c-coral" href="https://riderly.com.au/#advance">Advance<small>Coming next</small></a>
+    <a class="rs-tab rs-c-sky" href="https://riderly.com.au/#vmt">VMT<small>Venue Management Tool</small></a>
+  </nav>
 
+  <div class="rs-edge rs-c-teal">
   <main class="legal">
     <article class="guide-body">
       <h1>Terms of use</h1>
@@ -84,6 +98,12 @@
       <p class="muted small guide-foot"><a href="/privacy">Privacy policy</a> · <a href="/guide">Guide</a> · <a href="/">Home</a></p>
     </article>
   </main>
+  </div>
+  <footer class="rs-foot">
+    <p><a href="https://riderly.com.au/">Riderly</a> · <a href="https://riderly.com.au/vmt/">Venue Management Tool</a> · <a href="/">Guest List</a> · <a href="https://riderly.com.au/#advance">Advance</a> · <a href="/#apply">Book a look</a></p>
+    <p><a href="/guide">Guide</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:wpmixing@gmail.com">wpmixing@gmail.com</a> · <a href="/login">Sign in</a> · © Riderly, Melbourne</p>
+  </footer>
+  <script src="/js/site-tabs.js"></script>
   <script src="/js/legal.js"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 'use strict';
 
-/* global h, put, api, toast, field, formData, setDeviceName, currentName */
+/* global h, put, api, toast, field, formData, setDeviceName, currentName, doorPage */
 
 // The link Riderly sends: a new venue picks its username and passwords here; an existing
 // venue uses the same kind of link to reset its staff password.
@@ -9,7 +9,7 @@ const root = document.getElementById('app');
 const token = location.pathname.split('/').filter(Boolean)[1];
 
 function card(...children) {
-  put(root, h('main', { class: 'center' }, h('div', { class: 'card narrow stack setup' }, children)));
+  put(root, doorPage(children));
 }
 
 async function copy(text) {
@@ -47,7 +47,7 @@ async function start() {
 
   let n = 0;
   const form = h('form', { class: 'stack' },
-    canChooseUsername ? step(++n, 'Your venue’s username', 'Staff type this to log in. Letters, numbers and dashes.',
+    canChooseUsername ? step(++n, 'Your venue’s username', 'Staff type this to sign in. Letters, numbers and dashes.',
       field('Username', username)) : null,
     step(++n, reset ? 'New staff password' : 'Staff password', 'One password your whole team shares. At least 8 characters.',
       field('Staff password', h('input', { name: 'password', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' })),
@@ -57,7 +57,7 @@ async function start() {
       field('Type it again', h('input', { name: 'adminConfirm', type: 'password', required: true, minlength: '8', autocomplete: 'new-password' }))) : null,
     step(++n, 'Your name', 'Shown next to everything you do on this phone or computer.',
       field('Your name', h('input', { name: 'name', required: true, maxlength: '60', value: currentName(), placeholder: 'e.g. Sam', autocomplete: 'name' }))),
-    h('button', { class: 'btn btn-primary btn-block btn-lg', type: 'submit' }, reset ? 'Set new password' : 'Finish setup')
+    h('button', { type: 'submit' }, reset ? 'Set new password' : 'Finish setup')
   );
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -89,9 +89,9 @@ async function start() {
   });
 
   card(
-    h('div', { class: 'brand' }, h('span', { class: 'logo big' }, '★'), h('h1', null, venue.name)),
-    h('p', { class: 'muted' }, reset
-      ? 'Choose a new staff password. Phones using the old one will be asked to log in again.'
+    h('h1', null, venue.name),
+    h('p', { class: 'rs-door-sub' }, reset
+      ? 'Choose a new staff password. Phones using the old one will be asked to sign in again.'
       : 'Welcome to Riderly Guest List. Set up your logins and you’re ready for your next show.'),
     form
   );
@@ -99,21 +99,21 @@ async function start() {
 
 function done(venue, reset) {
   const link = `${location.origin}/v/${venue.slug}`;
-  const shareText = `Log in to ${venue.name}’s guest list here. Ask your manager for the staff password.`;
+  const shareText = `Sign in to ${venue.name}’s guest list here. Ask your manager for the staff password.`;
   const canShare = typeof navigator.share === 'function';
   const share = () => navigator.share({ title: `${venue.name} guest list`, text: shareText, url: link }).catch(() => {});
 
   if (reset) {
     return card(
       h('h1', null, 'Password updated ✓'),
-      h('p', { class: 'muted' }, 'Staff log in with the new password. Everyone else has been logged out.'),
-      h('a', { class: 'btn btn-primary btn-block btn-lg', href: '/app' }, 'Go to my guest list')
+      h('p', { class: 'muted' }, 'Staff sign in with the new password. Everyone else has been signed out.'),
+      h('a', { class: 'go', href: '/app' }, 'Go to my guest list')
     );
   }
   card(
     h('div', { class: 'setup-done-mark' }, '✓'),
     h('h1', { class: 'center-text' }, 'You’re live'),
-    h('p', { class: 'muted center-text' }, `${venue.name} is set up and you’re logged in on this device.`),
+    h('p', { class: 'muted center-text' }, `${venue.name} is set up and you’re signed in on this device.`),
     h('div', { class: 'staff-login' },
       h('p', { class: 'eyebrow' }, 'Staff login'),
       h('div', { class: 'staff-login-row' },
@@ -121,17 +121,17 @@ function done(venue, reset) {
         h('div', null, h('span', { class: 'small muted' }, 'Password'), h('strong', null, 'the one you just set'))
       ),
       h('div', { class: 'row' },
-        canShare ? h('button', { class: 'btn btn-primary', onclick: share }, 'Share staff link') : null,
-        h('button', { class: canShare ? 'btn' : 'btn btn-primary', onclick: () => copy(link) }, 'Copy staff link')
+        canShare ? h('button', { onclick: share }, 'Share staff link') : null,
+        h('button', { class: canShare ? 'quiet' : null, onclick: () => copy(link) }, 'Copy staff link')
       ),
-      h('p', { class: 'small muted' }, 'The link opens your login with the username filled in. It’s also in ⚙ Settings.')
+      h('p', { class: 'small muted' }, 'The link opens your sign-in page with the username filled in. It’s also in ⚙ Settings.')
     ),
     h('ol', { class: 'apply-steps next-steps' },
       h('li', null, h('b', null, 'Add your manager codes'), h('span', null, 'One for each duty manager, so staff can’t break the rules on their own. ', h('a', { href: `/v/${venue.slug}/admin` }, 'Open venue admin'))),
       h('li', null, h('b', null, 'Create your first show'), h('span', null, 'Then add guests, or send contributor links to the artists.')),
       h('li', null, h('b', null, 'Send your team the staff link'), h('span', null, 'Door staff just need a phone.'))
     ),
-    h('a', { class: 'btn btn-primary btn-block btn-lg', href: '/app' }, 'Go to my guest list')
+    h('a', { class: 'go', href: '/app' }, 'Go to my guest list')
   );
 }
 

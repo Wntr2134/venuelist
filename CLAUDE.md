@@ -21,6 +21,12 @@ New to this repo, or asked to get caught up? Read `docs/onboarding.md` first.
 - Front end: plain JS in `public/js` using the `h()` / `put()` helpers in `common.js`. The CSP
   forbids inline `<script>` and `style="..."` attributes in HTML (use classes; `el.style` is fine).
 - Styles: `public/css/styles.css`, Riderly palette (`--accent` amber, `--in` green, `--gold` VIP).
+- The marketing and sign-in pages (home, guide, privacy, terms, login, setup, venue admin reset) wear
+  the shared Riderly look: `public/static/riderly/site.css` is an exact copy from the Riderly repo
+  (never edit it; its `riderly-shell` line must match `data-riderly-shell` on the home page, which
+  Riderly's drift check reads), and `public/css/riderly-pages.css` maps this app's classes onto it.
+  The door app (`app`, `contributor`, `admin`, `venue-admin`) keeps `styles.css` alone: never link
+  either file from it. `test/site-look.test.js` holds this.
 - `public/vendor/` holds unmodified third-party browser files (libheif, for HEIC photos on browsers
   that can't open them). See its README before touching it; don't add more without asking Will.
 

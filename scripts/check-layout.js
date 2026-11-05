@@ -40,6 +40,7 @@ function pages(demo) {
     { id: 'home', url: '/' },
     { id: 'guide', url: '/guide' },
     { id: 'privacy', url: '/privacy' },
+    { id: 'terms', url: '/terms' },
     { id: 'login', url: '/login' },
     { id: 'setup', url: demo.setupPath },
     { id: 'contributor', url: `/c/${demo.tm.token}` },

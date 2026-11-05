@@ -5,7 +5,10 @@
 
 const CACHE = 'vl-door-v5';
 const SHELL = ['/app', '/guide', '/js/guide.js', '/css/styles.css', '/js/common.js', '/js/app.js', '/icon.svg', '/apple-touch-icon.png', '/manifest.webmanifest',
-  '/fonts/bigshoulders-var.woff2', '/fonts/instrumentsans-var.woff2', '/fonts/jetbrainsmono-500.woff2'];
+  '/fonts/bigshoulders-var.woff2', '/fonts/instrumentsans-var.woff2', '/fonts/jetbrainsmono-500.woff2',
+  // The guide's look, so it still reads right offline.
+  '/css/riderly-pages.css', '/static/riderly/site.css', '/js/site-tabs.js', '/static/riderly/logos/guest-list-logo-on-dark.svg',
+  '/static/riderly/fonts/prata-400-latin.woff2', '/static/riderly/fonts/librefranklin-var-latin.woff2'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -16,7 +19,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== 'vl-push').map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -26,7 +29,7 @@ function cacheable(url) {
   if (url.origin !== self.location.origin) return false;
   const p = url.pathname;
   if (p === '/app' || p === '/app/' || p === '/guide') return true; // the guide works offline too
-  if (/^\/(css|js|fonts)\//.test(p) || /\.(svg|png|webmanifest|woff2)$/.test(p)) return true;
+  if (/^\/(css|js|fonts|static)\//.test(p) || /\.(svg|png|webmanifest|woff2)$/.test(p)) return true;
   if (p === '/api/session' || p === '/api/events' || /^\/api\/events\/\d+$/.test(p)) return true;
   return false;
 }

@@ -69,7 +69,7 @@ function draw() {
   put(root, 
     h('header', { class: 'topbar' },
       h('div', { class: 'topbar-left' },
-        h('span', { class: 'logo' }, '★'),
+        h('span', { class: 'logo logo-mark' }, '★'),
         h('div', { class: 'topbar-title' }, h('strong', null, v.venueName), h('small', null, 'Guest list'))
       ),
       h('div', { class: 'topbar-right' },

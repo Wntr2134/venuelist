@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0d0b09">
+  <meta name="theme-color" content="#0b1220">
   <meta name="description" content="Riderly Guest List — guest lists and door check-in for live music venues. Artists and promoters add their own guests with a link; door staff check people in and out on any phone, live.">
   <meta property="og:title" content="Riderly Guest List — the guest list, sorted before doors">
   <meta property="og:description" content="Contributor links, live door check-in and VIP alerts for live music venues. No app, no staff accounts.">
@@ -15,38 +15,46 @@
   <meta property="og:image:height" content="1600">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://guestlist.riderly.com.au/">
-  <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/svg+xml" href="/static/riderly/logos/guest-list-icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/riderly/logos/guest-list-icon-32.png">
+  <link rel="apple-touch-icon" href="/static/riderly/logos/guest-list-icon-180.png">
   <link rel="preload" as="image" href="/img/app-guestlist.jpg">
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/static/riderly/site.css">
+  <link rel="stylesheet" href="/css/riderly-pages.css">
+  <noscript><link rel="stylesheet" href="/css/riderly-noscript.css"></noscript>
   <title>Riderly Guest List — guest lists &amp; door check-in for live music venues</title>
 </head>
-<body class="landing lp">
-  <div class="glows" aria-hidden="true"><div class="glow glow-a"></div><div class="glow glow-b"></div></div>
+<body class="rs-page rs-land">
+  <header class="rs-top" data-riderly-shell="1"><div class="rs-top-in">
+    <a class="rs-logo" href="https://riderly.com.au/" aria-label="Riderly home"><img src="/static/riderly/logos/guest-list-logo-on-dark.svg" alt="Guest List" width="163" height="44"></a>
+    <nav class="rs-nav" aria-label="Riderly's products">
+      <a class="rs-c-sky" href="https://riderly.com.au/vmt/">Venue Management Tool</a>
+      <a class="rs-c-teal" href="/" aria-current="page">Guest List</a>
+      <a class="rs-c-coral" href="https://riderly.com.au/#advance">Advance</a>
+    </nav>
+    <a class="rs-signin" href="/login" id="nav-login">Sign in</a>
+    <a class="rs-btn rs-btn--bar" href="#apply">Book a look</a>
+  </div></header>
+  <nav class="rs-tabs" id="rs-tabs" aria-label="Riderly, by folder">
+    <a class="rs-tab rs-c-amber" href="https://riderly.com.au/#life">A show's life<small>Booking to bar report</small></a>
+    <a class="rs-tab rs-c-paper" href="https://riderly.com.au/#tonight">Tonight<small>Run sheet &amp; door</small></a>
+    <a class="rs-tab rs-c-teal" href="#top" aria-current="page">Guest List<small>The door app</small></a>
+    <a class="rs-tab rs-c-coral" href="https://riderly.com.au/#advance">Advance<small>Coming next</small></a>
+    <a class="rs-tab rs-c-sky" href="https://riderly.com.au/#vmt">VMT<small>Venue Management Tool</small></a>
+  </nav>
 
-  <header class="lp-nav">
-    <div class="lp-nav-inner">
-      <a class="brand" href="/"><span class="logo">★</span><strong>Riderly <span class="muted-strong">Guest List</span></strong></a>
-      <nav class="nav-links">
-        <a href="#features" class="hide-sm">Features</a>
-        <a href="#how" class="hide-sm">How it works</a>
-        <a href="/guide" class="hide-sm">Guide</a>
-        <a class="btn btn-small" href="/login" id="nav-login">Log in</a>
-        <a class="btn btn-small btn-primary" href="#apply">Apply</a>
-      </nav>
-    </div>
-  </header>
-
+  <div class="rs-edge rs-c-teal" id="top">
   <main>
     <!-- ================= HERO ================= -->
     <section class="lp-hero">
       <div class="lp-hero-copy reveal">
-        <a class="pill" href="#how"><span class="pill-dot"></span> Built in Melbourne for live music venues</a>
+        <p class="eyebrow">Built in Melbourne for live music venues</p>
         <h1>The guest list, sorted <span class="grad">before doors.</span></h1>
         <p class="lede">Artists, tour managers and promoters add their own guests with a link. Your door checks people in and out on any phone. Everyone works off one live list — with a name on every change.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary btn-lg" href="#apply">Apply for access</a>
-          <button class="btn btn-lg btn-ghost" type="button" data-demo>Try the demo</button>
+          <a class="rs-btn" href="#apply">Book a look</a>
+          <button class="rs-btn rs-btn--ghost" type="button" data-demo>Try the demo</button>
         </div>
         <ul class="ticks small">
           <li>No app to install</li>
@@ -75,6 +83,15 @@
         </div>
       </div>
     </section>
+
+    <nav class="rs-onpage" aria-label="On this page">
+      <span class="rs-onpage-label">On this page</span>
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#apply">Apply</a>
+      <a href="#questions">Questions</a>
+      <a href="/guide">Guide</a>
+    </nav>
 
     <!-- ================= MARQUEE ================= -->
     <div class="marquee" aria-hidden="true">
@@ -249,11 +266,11 @@
           <li><b>We talk it through</b><span>Pricing, how your door runs, anything you need.</span></li>
           <li><b>You’re live</b><span>Set your logins and run your next show on it.</span></li>
         </ol>
-        <p class="muted small">Already a venue? <a href="/login">Log in</a> · Want the details first? <a href="/guide">Read the guide</a></p>
+        <p class="muted small">Already a venue? <a href="/login">Sign in</a> · Want the details first? <a href="/guide">Read the guide</a></p>
       </div>
       <form class="card stack request-form reveal" data-delay="100" id="signup-form" novalidate>
         <div class="grid-2">
-          <label class="field"><span>Venue name</span><input name="venueName" required maxlength="120" autocomplete="organization" placeholder="e.g. The Corner Hotel"></label>
+          <label class="field"><span>Venue name</span><input name="venueName" required maxlength="120" autocomplete="organization" placeholder="e.g. The Example Room"></label>
           <label class="field"><span>Suburb <small class="muted">(optional)</small></span><input name="suburb" maxlength="80" autocomplete="address-level2" placeholder="e.g. Richmond"></label>
         </div>
         <div class="grid-2">
@@ -270,14 +287,14 @@
           <select name="ticketing"><option value="">Choose…</option><option>Moshtix</option><option>Oztix</option><option>Humanitix</option><option>Eventbrite</option><option>Ticketek</option><option>Other</option><option>Door sales only</option></select></label>
         <label class="field"><span>Anything else? <small class="muted">(optional)</small></span><textarea name="message" rows="2" maxlength="1000" placeholder="How you run the list now, when you’d like to start…"></textarea></label>
         <label class="hp" aria-hidden="true">Website <input name="website" tabindex="-1" autocomplete="off"></label>
-        <button class="btn btn-primary btn-block btn-lg" type="submit">Apply</button>
+        <button class="rs-btn btn-block" type="submit">Apply</button>
         <p class="small muted">We’ll only use these details to get in touch about your venue. See our <a href="/privacy">privacy policy</a>.</p>
         <p class="small muted form-status" id="signup-status" role="status"></p>
       </form>
     </section>
 
     <!-- ================= FAQ ================= -->
-    <section class="faq">
+    <section class="faq" id="questions">
       <h2 class="section-title reveal">Questions</h2>
       <details><summary>How much does it cost?</summary><p>Pricing depends on your venue. Apply and we’ll send you pricing within one business day. No card needed to apply.</p></details>
       <details><summary>Do our staff need accounts?</summary><p>No. Your venue has one username and password. Staff open your venue’s link, type the password, and put their name on the phone once.</p></details>
@@ -290,21 +307,24 @@
     </section>
 
     <!-- ================= FINAL CTA ================= -->
-    <section class="cta-band reveal">
+    <div class="rs-wrap"><section class="cta-band reveal">
       <h2>Your next show’s guest list, sorted.</h2>
       <p class="muted">Apply in two minutes. We’ll be in touch within one business day.</p>
       <div class="hero-actions center">
-        <a class="btn btn-primary btn-lg" href="#apply">Apply for access</a>
-        <button class="btn btn-lg btn-ghost" type="button" data-demo>Try the demo</button>
+        <a class="rs-btn" href="#apply">Book a look</a>
+        <button class="rs-btn rs-btn--ghost" type="button" data-demo>Try the demo</button>
       </div>
-    </section>
+    </section></div>
   </main>
+  </div>
 
-  <footer class="landing-foot small muted">
-    <span>© Riderly · Melbourne</span>
-    <span class="foot-links"><a href="/guide">Guide</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/login">Log in</a><a href="#apply">Sign up</a></span>
+  <footer class="rs-foot">
+    <p><a href="https://riderly.com.au/">Riderly</a> · <a href="https://riderly.com.au/vmt/">Venue Management Tool</a> · <a href="/">Guest List</a> · <a href="https://riderly.com.au/#advance">Advance</a> · <a href="#apply">Book a look</a></p>
+    <p><a href="/guide">Guide</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:wpmixing@gmail.com">wpmixing@gmail.com</a> · <a href="/login">Sign in</a> · © Riderly, Melbourne</p>
+    <p class="rs-foot-note">Every venue, show and person on this page is made up.</p>
   </footer>
 
+  <script src="/js/site-tabs.js"></script>
   <script src="/js/landing.js"></script>
 </body>
 </html>
