@@ -95,7 +95,7 @@ async function renderDashboard() {
     return toast(err.message, 'error');
   }
 
-  const nameInput = h('input', { name: 'name', required: true, maxlength: '80', placeholder: 'e.g. The Corner Hotel', autocomplete: 'off' });
+  const nameInput = h('input', { name: 'name', required: true, maxlength: '80', placeholder: 'e.g. The Example Room', autocomplete: 'off' });
   const userInput = h('input', { name: 'username', maxlength: '40', placeholder: 'auto from name', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
   const emailInput = h('input', { name: 'email', type: 'email', maxlength: '120', placeholder: 'gm@venue.com', autocomplete: 'off' });
   let userTouched = false;

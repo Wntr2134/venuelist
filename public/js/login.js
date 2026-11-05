@@ -40,7 +40,7 @@ function draw() {
     autocomplete: 'username',
     autocapitalize: 'none',
     spellcheck: 'false',
-    placeholder: 'e.g. corner-hotel',
+    placeholder: 'e.g. example-venue',
   });
   const pw = h('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' });
   const form = h('form', { class: 'stack' },
@@ -77,7 +77,7 @@ function draw() {
 }
 
 function forgot(prefill) {
-  const input = h('input', { value: prefill || '', required: true, autocapitalize: 'none', spellcheck: 'false', placeholder: 'e.g. corner-hotel' });
+  const input = h('input', { value: prefill || '', required: true, autocapitalize: 'none', spellcheck: 'false', placeholder: 'e.g. example-venue' });
   const submit = async (e) => {
     if (e) e.preventDefault();
     if (!input.value.trim()) return input.focus();
