@@ -20,7 +20,7 @@ function shell(...children) {
   put(root,
     h('header', { class: 'topbar' },
       h('div', { class: 'topbar-left' },
-        h('span', { class: 'logo' }, '★'),
+        h('span', { class: 'logo logo-mark' }, '★'),
         h('div', { class: 'topbar-title' }, h('strong', null, 'Riderly Guest List'), h('small', null, 'Owner admin'))
       ),
       h('div', { class: 'topbar-right' },
@@ -41,7 +41,7 @@ function shell(...children) {
 
 function renderSetup(needsCode) {
   const form = h('form', { class: 'card narrow stack' },
-    h('div', { class: 'brand' }, h('span', { class: 'logo big' }, '★'), h('h1', null, 'Owner setup')),
+    h('div', { class: 'brand' }, h('span', { class: 'logo logo-mark big' }, '★'), h('h1', null, 'Owner setup')),
     h('p', { class: 'muted' }, 'Create the owner password. This account adds venues — it never sees their guest lists.'),
     needsCode ? field('Setup code', h('input', { name: 'setupCode', required: true, maxlength: '20', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false' }),
       'On the droplet: sudo journalctl -u guestlist | grep "Owner setup code" | tail -1') : null,
@@ -65,7 +65,7 @@ function renderSetup(needsCode) {
 
 function renderLogin() {
   const form = h('form', { class: 'card narrow stack' },
-    h('div', { class: 'brand' }, h('span', { class: 'logo big' }, '★'), h('h1', null, 'Owner admin')),
+    h('div', { class: 'brand' }, h('span', { class: 'logo logo-mark big' }, '★'), h('h1', null, 'Owner admin')),
     field('Owner password', h('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' })),
     h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Log in'),
     h('a', { class: 'small center-text', href: '/login' }, 'Looking for your venue login?')

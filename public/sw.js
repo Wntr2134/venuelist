@@ -3,7 +3,7 @@
 // Service worker: keeps the door app usable when the venue Wi-Fi drops.
 // Network first (so updates always win), falling back to the last copy saved on this phone.
 
-const CACHE = 'vl-door-v6';
+const CACHE = 'vl-door-v5';
 const SHELL = ['/app', '/guide', '/js/guide.js', '/css/styles.css', '/js/common.js', '/js/app.js', '/icon.svg', '/apple-touch-icon.png', '/manifest.webmanifest',
   '/fonts/bigshoulders-var.woff2', '/fonts/instrumentsans-var.woff2', '/fonts/jetbrainsmono-500.woff2',
   // The guide's look, so it still reads right offline.
@@ -19,7 +19,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== 'vl-push').map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });

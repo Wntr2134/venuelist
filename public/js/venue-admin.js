@@ -21,7 +21,7 @@ function shell(...children) {
   put(root,
     h('header', { class: 'topbar' },
       h('div', { class: 'topbar-left' },
-        h('span', { class: 'logo' }, '★'),
+        h('span', { class: 'logo logo-mark' }, '★'),
         h('div', { class: 'topbar-title' }, h('strong', null, venueName), h('small', null, 'Venue admin'))
       ),
       h('div', { class: 'topbar-right' },
@@ -68,7 +68,7 @@ function login(venue, needsSetup) {
     },
   }, needsSetup ? 'Email me a setup link' : 'Email me a reset link');
   const form = h('form', { class: 'card narrow stack' },
-    h('div', { class: 'brand' }, h('span', { class: 'logo big' }, '★'), h('h1', null, venue.name)),
+    h('div', { class: 'brand' }, h('span', { class: 'logo logo-mark big' }, '★'), h('h1', null, venue.name)),
     h('p', { class: 'muted' }, needsSetup
       ? 'Venue admin isn’t set up yet. Open the setup link Riderly emailed you, or get a fresh one below. Staff use the normal guest list login.'
       : 'Venue admin — for the GM or owner. Staff use the normal guest list login.'),

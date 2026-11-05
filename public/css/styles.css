@@ -114,6 +114,9 @@ p { margin: 0; }
 .brand { display: flex; align-items: center; gap: 10px; }
 .logo { color: var(--accent); font-size: 1.4rem; }
 .logo.big { font-size: 2rem; }
+/* The teal Guest List mark. The star stays in the box, unseen, so nothing beside it moves on any
+   device (its width depends on the phone's fallback font). Inline so it can't go missing offline. */
+.logo-mark { color: transparent; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 560 600'%3E%3Ccircle cx='280' cy='220' r='220' fill='%233fb8a6'/%3E%3Crect y='520' width='560' height='80' fill='%233fb8a6'/%3E%3C/svg%3E") center / contain no-repeat; }
 
 /* ---------- top bar ---------- */
 

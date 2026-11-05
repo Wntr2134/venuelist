@@ -71,6 +71,24 @@ test('the door app never loads the marketing look', () => {
   assert.doesNotMatch(read('css/styles.css'), /\.rs-|Prata|Libre Franklin/);
 });
 
+test('the app icons are the Guest List mark, and every page offers the same touch icon', () => {
+  const same = (a, b) => assert.ok(fs.readFileSync(path.join(PUBLIC, a)).equals(fs.readFileSync(path.join(PUBLIC, 'static/riderly/logos', b))), a);
+  same('icon.svg', 'guest-list-icon.svg');
+  same('icon-192.png', 'guest-list-icon-192.png');
+  same('icon-512.png', 'guest-list-icon-512.png');
+  same('apple-touch-icon.png', 'guest-list-icon-180.png');
+  assert.ok(read('login.html').includes('href="/static/riderly/logos/guest-list-icon-180.png"'));
+  // Only the brand star goes. ★ still means VIP at the door.
+  assert.match(read('js/app.js'), /class: 'logo logo-mark' \}, '★'/);
+  assert.match(read('js/app.js'), /'★ VIP'/);
+});
+
+test('the service worker update keeps the offline list and the VIP alert cursor', () => {
+  const sw = read('sw.js');
+  assert.match(sw, /const CACHE = 'vl-door-v5';/);
+  assert.ok(sw.includes("k !== CACHE && k !== 'vl-push'"));
+});
+
 test('landing.js still finds everything it hooks into', () => {
   const home = read('index.html');
   const js = read('js/landing.js');
