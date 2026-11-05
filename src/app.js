@@ -414,6 +414,7 @@ function serveStatic(req, res, pathname) {
       'Allow: /terms',
       'Allow: /img/',
       'Allow: /css/',
+      'Allow: /static/',
       'Disallow: /',
       `Sitemap: ${PUBLIC_URL}/sitemap.xml`,
       '',

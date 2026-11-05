@@ -1,0 +1,196 @@
+/* The shared Riderly look on Guest List's marketing and sign-in pages.
+
+   Those pages load three files, in this order:
+     /css/styles.css            this app's classes (.btn, .card, .field, the landing's sections)
+     /static/riderly/site.css   an exact copy of Riderly's shared file; never edit the copy
+     this file                  turns the first into the second
+
+   The door app (app, contributor, admin, venue-admin) loads styles.css alone, so nothing here can
+   reach it. Keep it that way: never link this file or site.css from a door-app page.
+
+   Colours here are site.css's tokens. rgba() tints are those same colours with some see-through. */
+
+:root, :root[data-theme] {
+  /* styles.css's names, on the shared values. site.css already takes --bg, --line, --muted,
+     --faint and --body. The second selector is so a venue's colour theme stops at the door app. */
+  --bg-2: var(--surface);
+  --card: var(--surface);
+  --card-2: var(--surface-2);
+  --text: var(--ink);
+  --accent: var(--amber);
+  --accent-2: var(--amber-hot);
+  --on-accent: var(--on-colour);
+  --accent-rgb: 242, 180, 71;
+  --accent-ink: var(--lede);
+  --in: var(--teal);
+  --out: var(--coral);
+  --on-out: var(--on-colour);
+  --out-rgb: 232, 115, 90;
+  --out-ink: var(--coral-soft);
+  --danger: var(--coral);
+  --on-danger: var(--on-colour);
+  --danger-rgb: 232, 115, 90;
+  --danger-ink: var(--coral-soft);
+  --display: var(--head);
+  --mono: var(--body);
+  --radius: var(--r-card);
+}
+
+/* styles.css sets 15px and wide word spacing for the door's small type. Not here. */
+html, body { word-spacing: normal; }
+html { font-size: 100%; }
+img, svg { max-width: 100%; }
+:focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
+
+/* ---------- type ---------- */
+
+.rs-page h1, .rs-page h2, .rs-page h3 {
+  font-family: var(--head); font-weight: 400; text-transform: none; letter-spacing: 0; line-height: 1.1; text-wrap: balance;
+}
+.rs-page h1 { font-size: var(--t-title); }
+.rs-page h2 { font-size: var(--t-section); }
+.rs-page h3 { font-size: clamp(23px, 2.3vw, 28px); line-height: 1.15; }
+.rs-page .eyebrow { margin: 0 0 16px; color: var(--amber); font: var(--bw) var(--t-label)/1.3 var(--body); letter-spacing: .08em; text-transform: uppercase; }
+.rs-page .small { font-size: var(--t-small); }
+.rs-page .lede, .rs-page .lede-sm { max-width: var(--read); color: var(--lede); font-size: var(--t-lead); line-height: 1.5; }
+.rs-page .lede-sm { font-size: var(--t-text); line-height: 1.55; }
+
+/* ---------- controls ---------- */
+
+.rs-page .btn { border-radius: var(--r-btn); }
+.rs-page .btn:not(.btn-primary):hover { background: var(--line); }
+.rs-page input, .rs-page select, .rs-page textarea { border-color: var(--line-2); border-radius: var(--r-btn); background: var(--bg); }
+.rs-page input:focus, .rs-page select:focus, .rs-page textarea:focus { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber); }
+.rs-page .rs-btn:disabled { opacity: .5; cursor: default; }
+.rs-page .card { border-radius: var(--r-card); }
+
+/* ---------- the bar on a phone ----------
+   site.css hides Sign in under 900px, because the other sites' phone readers are buyers. Here
+   they are door staff coming to sign in, so it stays. */
+@media (max-width: 900px) {
+  .rs-signin { display: inline-flex; align-items: center; min-height: 44px; margin-left: auto; color: var(--ink); }
+  .rs-top .rs-signin + .rs-btn { margin-left: 0; }
+}
+@media (max-width: 480px) {
+  .rs-top-in { gap: 12px; }
+  .rs-logo img { height: 36px; }
+  .rs-btn--bar { padding: 0 12px; }
+  /* "← Back to guest list" (signed-in staff on the guide, public/js/guide.js) needs the room. */
+  .rs-signin.rs-back + .rs-btn { display: none; }
+}
+@media (max-width: 350px) { .rs-logo img { height: 30px; } }
+@media (pointer: coarse) { .rs-btn--bar { min-height: 44px; } }
+
+/* ---------- the landing ---------- */
+
+.rs-land main { position: relative; }
+.rs-wrap,
+.rs-land .lp-hero, .rs-land .stats-row, .rs-land .showcase, .rs-land .how-steps,
+.rs-land .feature-grid, .rs-land .request-band {
+  max-width: var(--wrap); margin-left: auto; margin-right: auto; padding-left: var(--gutter); padding-right: var(--gutter);
+}
+.rs-land section[id] { scroll-margin-top: 16px; }
+
+.rs-land .lp-hero { grid-template-columns: 1fr 1.1fr; gap: 48px; padding-top: 72px; padding-bottom: 72px; }
+.rs-land .lp-hero h1 { margin: 0 0 24px; font-size: var(--t-title); line-height: 1.1; }
+.rs-land .grad { display: block; color: var(--teal); }
+.rs-land .hero-actions { gap: 12px; margin: 32px 0 16px; }
+.rs-land .hero-actions.center { display: flex; min-height: 0; padding: 0; } /* .center is also the door app's full-height centring */
+.rs-land .ticks { color: var(--muted); }
+.rs-land .ticks li::before, .rs-land .check-list li::before { color: var(--teal); }
+@media (max-width: 1100px) { .rs-land .lp-hero { grid-template-columns: 1fr; padding-top: 48px; } }
+@media (max-width: 480px) { .rs-land .hero-actions .rs-btn { width: 100%; } }
+
+/* the made-up screens: flat, in the family's greys */
+.rs-land .lp-stage .browser, .rs-land .tilt-l, .rs-land .tilt-r { transform: none; }
+.rs-land .browser { background: var(--surface); border-color: var(--line-2); border-radius: var(--r-card); box-shadow: 0 40px 90px -30px rgba(0, 0, 0, .8); }
+.rs-land .browser-bar { background: var(--surface-hi); border-bottom-color: var(--line); }
+.rs-land .browser-bar i:nth-child(n) { background: var(--line-2); }
+.rs-land .browser-bar span { background: var(--bg); }
+.rs-land .phone { border-color: var(--surface-2); }
+.rs-land .device { background: var(--surface-2); }
+.rs-land .demo-phone { transform: none; }
+@media (max-width: 560px) { .rs-land .demo-phone { transform: translateX(50%); } }
+.rs-land .showcase-media.duo { align-items: flex-start; }
+.rs-land .t-artist { color: var(--coral-soft); border-color: var(--line-2); }
+
+.rs-land .marquee { margin: 0 0 8px; border-block-color: var(--line); }
+.rs-land .marquee-track span { font-size: var(--t-small); font-weight: 400; }
+.rs-land .marquee-track span:nth-child(3n) { color: var(--lede); }
+
+.rs-land .stats-row { padding-top: 48px; padding-bottom: 72px; }
+.rs-land .stat-big { background: var(--surface); border-color: var(--line); border-radius: var(--r-card); }
+.rs-land .stat-big b { background: none; color: var(--ink); font: 400 44px/1.1 var(--head); -webkit-text-fill-color: currentColor; }
+.rs-land .stat-big > span { color: var(--muted); font-size: var(--t-small); font-weight: 400; }
+
+.rs-land .showcase { gap: 56px; padding-top: 48px; padding-bottom: 72px; }
+.rs-land .showcase h2 { margin-bottom: 16px; font-size: var(--t-section); line-height: 1.1; }
+.rs-land .check-list li { color: var(--lede); }
+.rs-land .check-list li::before { background: var(--teal); color: var(--on-colour); }
+
+.rs-land .how-steps { padding-top: 48px; padding-bottom: 72px; }
+.rs-land .section-title { margin: 0 0 32px; font-size: var(--t-section); line-height: 1.1; }
+.rs-land .section-title.left { margin-bottom: 16px; }
+.rs-land .step, .rs-land .feature { border-radius: var(--r-card); }
+.rs-land .step-num { background: var(--teal); color: var(--on-colour); font-size: var(--t-small); }
+.rs-land .mini { border-radius: var(--r-btn); font-size: var(--t-small); }
+.rs-land .mini-picks .pick-all { color: var(--on-colour); }
+.rs-land .feature p, .rs-land .step p { font-size: var(--t-small); line-height: 1.55; }
+.rs-land .feature svg { stroke: var(--teal); }
+
+.rs-land .feature-grid { padding-bottom: 72px; }
+.rs-land .request-band { padding-top: 48px; padding-bottom: 72px; }
+.rs-land .apply-steps li::before { background: var(--teal); color: var(--on-colour); font: var(--bw) var(--t-small)/1 var(--body); }
+.rs-land .request-form .field > span { font-size: var(--t-small); }
+
+.rs-land .faq { max-width: calc(46em + 2 * var(--gutter)); margin: 0 auto; padding: 0 var(--gutter) 72px; }
+.rs-land .faq summary { font-weight: var(--bw); }
+.rs-land .cta-band { margin: 0 0 16px; padding: 48px 24px; border-color: var(--line); border-radius: var(--r-file); background: var(--surface); }
+.rs-land .cta-band h2 { font-size: var(--t-section); line-height: 1.1; }
+
+/* ---------- guide, privacy, terms ---------- */
+
+.guide-page .guide { max-width: var(--wrap); margin: 0 auto; padding: 48px var(--gutter) 0; }
+.guide-page .legal { max-width: calc(40em + 2 * var(--gutter)); padding: 48px var(--gutter) 0; }
+.guide-page .toc { top: 80px; border-radius: var(--r-card); }
+.guide-page .toc a { font-size: var(--t-small); }
+.guide-page .guide-body { max-width: 40em; }
+.guide-page .guide-body h1 { margin-bottom: 16px; font-size: var(--t-title); }
+.guide-page .guide-body h2 { font-size: clamp(23px, 2.3vw, 28px); line-height: 1.15; }
+.guide-page .guide-body h3 { font-family: var(--body); font-size: var(--t-text); font-weight: var(--bw); }
+.guide-page .guide-body p, .guide-page .guide-body li { color: var(--lede); }
+.guide-page .guide-body summary { font-weight: var(--bw); }
+.guide-page .guide-table { font-size: var(--t-small); }
+.guide-page .guide-table th { font-size: var(--t-label); }
+.guide-page .guide-roles > div, .guide-page .callout, .guide-page .cheat { border-radius: var(--r-card); }
+.guide-page .callout { background: var(--surface); border-color: var(--line-2); }
+.guide-page .cheat { background: var(--surface); }
+.guide-page .draft-note { border-radius: var(--r-btn); }
+
+/* ---------- door pages (sign-in, setup, venue admin reset) ---------- */
+
+.rs-page .rs-door-card h1 { margin: 0; font-size: 34px; }
+.rs-page .modal h2 { font-size: clamp(23px, 2.3vw, 28px); line-height: 1.15; }
+.rs-door-card .stack { gap: 14px; }
+.rs-door-card .field { display: block; margin: 0; }
+.rs-door-card .field > span { color: inherit; font-size: inherit; font-weight: inherit; }
+.rs-door-card .field small { display: block; margin-top: 6px; font-size: var(--t-label); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.rs-door-card h3 { font-size: 20px; }
+.rs-door-card .rs-door-sub { margin: 0; }
+.rs-door-card .setup-step { gap: 12px; }
+.rs-door-card .setup-num { background: var(--teal); color: var(--on-colour); font: var(--bw) var(--t-small)/1 var(--body); }
+.rs-door-card .setup-done-mark { background: var(--teal); color: var(--on-colour); }
+.rs-door-card .apply-steps li::before { background: var(--teal); color: var(--on-colour); font: var(--bw) var(--t-small)/1 var(--body); }
+.rs-door-card .staff-login-row strong { font-size: var(--t-small); }
+.rs-door-card .row button { flex: 1 1 0; margin-top: 0; }
+.rs-door-card .notice { border-radius: var(--r-btn); }
+.rs-door-card button:disabled { opacity: .5; cursor: default; }
+/* site.css draws every button in the card as the main one. This one is a link. */
+.rs-door-card button.linklike {
+  display: inline; width: auto; min-height: 0; margin: 0; padding: 4px 6px; border: 0; background: none; color: var(--amber);
+  font: inherit; font-weight: var(--bw);
+}
+.rs-door-card button.linklike:hover { background: none; color: var(--amber-hot); }
+@media (pointer: coarse) { .rs-door-card button.linklike { display: inline-flex; min-height: 44px; } }
+
+@media print { .rs-foot { display: none; } }

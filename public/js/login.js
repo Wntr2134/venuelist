@@ -1,6 +1,6 @@
 'use strict';
 
-/* global h, put, api, toast, modal, field, formData */
+/* global h, put, api, toast, modal, field, formData, doorPage */
 
 const root = document.getElementById('app');
 const fromLink = (location.pathname.match(/^\/v\/([A-Za-z0-9_-]+)/) || [])[1] || '';
@@ -43,18 +43,18 @@ function draw() {
     placeholder: 'e.g. corner-hotel',
   });
   const pw = h('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' });
-  const form = h('form', { class: 'card narrow stack' },
-    h('a', { class: 'brand', href: '/' }, h('span', { class: 'logo big' }, '★'), h('h1', null, 'Guest List')),
+  const form = h('form', { class: 'stack' },
+    h('h1', null, 'Sign in'),
     new URLSearchParams(location.search).get('expired')
-      ? h('p', { class: 'notice' }, 'That link from Riderly has expired or was already used. Open it again from Riderly, or log in here.')
+      ? h('p', { class: 'notice' }, 'That link from Riderly has expired or was already used. Open it again from Riderly, or sign in here.')
       : null,
-    h('p', { class: 'muted' }, 'Log in with your venue’s username and password.'),
+    h('p', { class: 'rs-door-sub' }, 'Use your venue’s username and password.'),
     fromLink
       ? h('div', { class: 'venue-pill' }, h('span', { class: 'muted small' }, 'Username'), h('strong', null, fromLink),
         h('input', { type: 'hidden', name: 'venue', value: fromLink }))
       : field('Username', venueInput),
     field('Password', pw),
-    h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Log in'),
+    h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'Sign in'),
     fromLink ? h('a', { class: 'small center-text', href: '/login' }, 'Not your venue?') : null,
     h('p', { class: 'small muted center-text' },
       h('button', { type: 'button', class: 'linklike', onclick: () => forgot(fromLink || venueInput.value) }, 'Forgot password?'),
@@ -72,7 +72,7 @@ function draw() {
       pw.select();
     }
   });
-  put(root, h('main', { class: 'center' }, form));
+  put(root, doorPage(form));
   (fromLink || venue ? pw : venueInput).focus();
 }
 

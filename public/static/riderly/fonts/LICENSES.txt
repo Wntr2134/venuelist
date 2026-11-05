@@ -1,0 +1,8 @@
+The two faces of the shared Riderly look, self-hosted so a visitor is never reported to a third
+party. Both are under the SIL Open Font License 1.1 (https://openfontlicense.org); the copyright
+notice and full licence travel with each: OFL-Prata.txt, OFL-LibreFranklin.txt.
+
+  prata-400-latin.woff2           Prata
+  librefranklin-var-latin.woff2   Libre Franklin
+
+The door app's own faces are in public/fonts and are not these.

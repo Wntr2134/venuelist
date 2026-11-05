@@ -3,17 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0d0b09">
+  <meta name="theme-color" content="#0b1220">
   <meta name="robots" content="noindex, nofollow">
-  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="icon" type="image/svg+xml" href="/static/riderly/logos/guest-list-icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/riderly/logos/guest-list-icon-32.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/static/riderly/site.css">
+  <link rel="stylesheet" href="/css/riderly-pages.css">
   <title>Riderly Guest List</title>
 </head>
-<body>
-  <div id="app"><main class="center"><div class="muted">Loading…</div></main></div>
+<body class="rs-page">
+  <div id="app"><main class="rs-door">
+    <img class="rs-door-logo" src="/static/riderly/logos/guest-list-logo-on-dark.svg" alt="Guest List by Riderly" height="64">
+    <div class="rs-door-card"><p class="rs-door-sub">Loading…</p><noscript><p>This page needs JavaScript switched on.</p></noscript></div>
+  </main></div>
   <script src="/js/common.js"></script>
+  <script src="/js/door-shell.js"></script>
   <script src="/js/login.js"></script>
 </body>
 </html>

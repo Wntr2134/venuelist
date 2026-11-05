@@ -3,32 +3,46 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0d0b09">
+  <meta name="theme-color" content="#0b1220">
   <meta name="description" content="How to use Riderly Guest List: setting up your venue, contributor links, the guest list and door mode.">
   <meta property="og:title" content="How to use Riderly Guest List">
   <meta property="og:description" content="Setting up your venue, contributor links, the guest list, door mode and the capacity counter.">
   <meta property="og:url" content="https://guestlist.riderly.com.au/guide">
   <meta property="og:image" content="https://guestlist.riderly.com.au/img/phone-door.jpg">
   <link rel="canonical" href="https://guestlist.riderly.com.au/guide">
-  <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/svg+xml" href="/static/riderly/logos/guest-list-icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/riderly/logos/guest-list-icon-32.png">
+  <link rel="apple-touch-icon" href="/static/riderly/logos/guest-list-icon-180.png">
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/static/riderly/site.css">
+  <link rel="stylesheet" href="/css/riderly-pages.css">
   <title>Guide · Riderly Guest List</title>
 </head>
-<body class="landing guide-page">
-  <header class="landing-nav">
-    <a class="brand" href="/"><span class="logo">★</span><strong>Riderly Guest List</strong></a>
-    <nav class="nav-links">
-      <a href="/" class="hide-sm">Home</a>
-      <a class="btn btn-small" href="/login" id="nav-app">Log in</a>
+<body class="rs-page guide-page">
+  <header class="rs-top" data-riderly-shell="1"><div class="rs-top-in">
+    <a class="rs-logo" href="https://riderly.com.au/" aria-label="Riderly home"><img src="/static/riderly/logos/guest-list-logo-on-dark.svg" alt="Guest List" width="163" height="44"></a>
+    <nav class="rs-nav" aria-label="Riderly's products">
+      <a class="rs-c-sky" href="https://riderly.com.au/vmt/">Venue Management Tool</a>
+      <a class="rs-c-teal" href="/" aria-current="page">Guest List</a>
+      <a class="rs-c-coral" href="https://riderly.com.au/#advance">Advance</a>
     </nav>
-  </header>
+    <a class="rs-signin" href="/login" id="nav-app">Sign in</a>
+    <a class="rs-btn rs-btn--bar" href="/#apply">Book a look</a>
+  </div></header>
+  <nav class="rs-tabs" id="rs-tabs" aria-label="Riderly, by folder">
+    <a class="rs-tab rs-c-amber" href="https://riderly.com.au/#life">A show's life<small>Booking to bar report</small></a>
+    <a class="rs-tab rs-c-paper" href="https://riderly.com.au/#tonight">Tonight<small>Run sheet &amp; door</small></a>
+    <a class="rs-tab rs-c-teal" href="/" aria-current="page">Guest List<small>The door app</small></a>
+    <a class="rs-tab rs-c-coral" href="https://riderly.com.au/#advance">Advance<small>Coming next</small></a>
+    <a class="rs-tab rs-c-sky" href="https://riderly.com.au/#vmt">VMT<small>Venue Management Tool</small></a>
+  </nav>
 
+  <div class="rs-edge rs-c-teal">
   <main class="guide">
     <aside class="toc">
       <p class="eyebrow">Guide</p>
       <a href="#start">1. Getting started</a>
-      <a href="#staff">2. Getting staff logged in</a>
+      <a href="#staff">2. Getting staff signed in</a>
       <a href="#events">3. Creating a show</a>
       <a href="#contributors">4. Contributor links</a>
       <a href="#list">5. Managing the guest list</a>
@@ -68,11 +82,11 @@
       </section>
 
       <section id="staff">
-        <h2>2. Getting staff logged in</h2>
+        <h2>2. Getting staff signed in</h2>
         <ol class="steps-list">
-          <li>Send staff your <b>staff login link</b> and the <b>password</b>. You can find the link any time in <b>⚙ Settings → Staff login</b>. (Or they can log in at <a href="/login">/login</a> with the username and password.)</li>
+          <li>Send staff your <b>staff login link</b> and the <b>password</b>. You can find the link any time in <b>⚙ Settings → Staff login</b>. (Or they can sign in at <a href="/login">/login</a> with the username and password.)</li>
           <li>They open the link, type the password, and enter their name, e.g. <i>“Sam (Door 1)”</i>.</li>
-          <li>They stay logged in on that device for 30 days.</li>
+          <li>They stay signed in on that device for 30 days.</li>
         </ol>
         <p class="tip">Tip: on iPhone, tap <b>Share → Add to Home Screen</b> so the guest list opens like an app.</p>
         <p class="tip">Forgot the username? It’s the last part of the staff link (e.g. <code>corner-hotel</code>), and it’s shown in ⚙ Settings.</p>
@@ -189,7 +203,7 @@ Sam Lee, bring ID</pre>
         </ul>
         <p>Every override is saved in the <b>Activity</b> log with the name on the phone <i>and</i> whose code approved it (e.g. “approved by JT”).</p>
         <h3>The venue admin page</h3>
-        <p>Open <b>⚙ Settings → Venue admin</b> and log in with the <b>venue admin password</b> — set when the venue was created, and different from the staff password. There you can:</p>
+        <p>Open <b>⚙ Settings → Venue admin</b> and sign in with the <b>venue admin password</b> — set when the venue was created, and different from the staff password. There you can:</p>
         <ul>
           <li><b>Add, reset, revoke or delete manager codes</b> — one per duty manager. Someone leaves? Revoke only theirs.</li>
           <li><b>Change the staff password</b>, or <b>log out every staff phone</b> without changing it (lost phone).</li>
@@ -285,7 +299,7 @@ Sam Lee, bring ID</pre>
         <details><summary>The door phone went offline mid-show</summary><p>Keep going — taps are saved on the phone and sync when it reconnects (see <a href="#door">6. Door mode</a>). Switching to mobile data gets overrides working again.</p></details>
         <details><summary>A promoter’s weekly link stopped working</summary><p>Check it was ticked <b>📌 Permanent</b>: one-off links end when the night refreshes. If someone tapped <b>New links for everyone</b>, send them their new link from the Contributors tab.</p></details>
         <details><summary>I tapped IN (or OUT) on the wrong person</summary><p>Tap <b>↩️ Oops / Undo</b>, find it, tap <b>Undo</b> and type YES. If you don’t have that button, tap OUT on them; the manager can sort the report later.</p></details>
-        <details><summary>I got logged out</summary><p>Someone changed the venue password, or it’s been 30 days. Log in again with the current password.</p></details>
+        <details><summary>I got signed out</summary><p>Someone changed the venue password, or it’s been 30 days. Sign in again with the current password.</p></details>
       </section>
 
       <section id="cheat" class="cheat">
@@ -308,6 +322,13 @@ Sam Lee, bring ID</pre>
       <p class="muted small guide-foot">Stuck? Contact Riderly. <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/">Back to home</a></p>
     </article>
   </main>
+  </div>
+  <footer class="rs-foot">
+    <p><a href="https://riderly.com.au/">Riderly</a> · <a href="https://riderly.com.au/vmt/">Venue Management Tool</a> · <a href="/">Guest List</a> · <a href="https://riderly.com.au/#advance">Advance</a> · <a href="/#apply">Book a look</a></p>
+    <p><a href="/guide">Guide</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:wpmixing@gmail.com">wpmixing@gmail.com</a> · <a href="/login">Sign in</a> · © Riderly, Melbourne</p>
+    <p class="rs-foot-note">Every venue, show and person in this guide is made up.</p>
+  </footer>
+  <script src="/js/site-tabs.js"></script>
   <script src="/js/guide.js"></script>
 </body>
 </html>
