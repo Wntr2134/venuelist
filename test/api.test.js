@@ -2342,3 +2342,35 @@ test('oops / undo: an undone tap stays out of the report for good, only the late
   rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;
   assert.equal(rep.door.peak, 2);
 });
+
+test('regular nights: a permanent link shows tonight’s total across every list (count only), from 0 each week', async () => {
+  const { c, venue } = await onboard('Tally Hall');
+  await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { earlyAccess: true });
+  const melb = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = melb.format(new Date(Date.now() - 6 * 3600e3));
+  const day = (n) => new Date(Date.parse(`${today}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
+  const ev = (await c.call('POST', '/api/events', { name: 'Toff Tuesday', date: day(0), repeatWeekly: true, overridePin: '2468' })).data;
+  const perm = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'DJ Jess', permanent: true })).data;
+  const oneOff = (await c.call('POST', `/api/events/${ev.id}/contributors`, { name: 'Guest DJ' })).data;
+  await client().call('POST', `/api/c/${perm.token}/guests`, { name: 'Amy Lee', plusOnes: 1 });
+  await client().call('POST', `/api/c/${oneOff.token}/guests`, { name: 'Ben Ho' });
+  await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Venue Guest', plusOnes: 2 });
+
+  const v = (await client().call('GET', `/api/c/${perm.token}`)).data;
+  assert.deepEqual(v.tonightTotal, { entries: 3, heads: 6 }, 'every list, +1s included');
+  assert.equal(v.used, 2, 'their own count is unchanged');
+  assert.ok(!JSON.stringify(v).includes('Ben Ho') && !JSON.stringify(v).includes('Venue Guest'), 'no other names');
+  assert.equal((await client().call('GET', `/api/c/${oneOff.token}`)).data.tonightTotal, null, 'one-off links don’t get it');
+
+  // Next week starts from 0.
+  appDb.prepare('UPDATE events SET date = ? WHERE id = ?').run(day(-3), ev.id);
+  const next = (await client().call('GET', `/api/c/${perm.token}`)).data;
+  assert.equal(next.event.date, day(4));
+  assert.deepEqual(next.tonightTotal, { entries: 0, heads: 0 });
+
+  // Not a regular night, or feature off: nothing.
+  const plain = await onboard('Tally Off');
+  const pev = (await plain.c.call('POST', '/api/events', { name: 'X', date: soon('2026-12-01'), repeatWeekly: true, overridePin: '2468' })).data;
+  const pc = (await plain.c.call('POST', `/api/events/${pev.id}/contributors`, { name: 'P', permanent: true })).data;
+  assert.equal((await client().call('GET', `/api/c/${pc.token}`)).data.tonightTotal, null);
+});

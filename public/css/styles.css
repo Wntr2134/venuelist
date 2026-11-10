@@ -1015,3 +1015,7 @@ small { font-size: max(0.8em, 12px); }
 .weekly-table th:first-child, .weekly-table td:first-child { padding-left: 12px; }
 .report-table.weekly-table { min-width: 0; }
 .weekly-table th { letter-spacing: 0; font-size: 0.72rem; }
+
+/* Regular nights: tonight's total on a permanent contributor link */
+.tonight-total { display: flex; align-items: center; gap: 14px; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-2); }
+.tonight-total-value { font-size: 2rem; font-weight: 700; line-height: 1; min-width: 2ch; text-align: center; }
