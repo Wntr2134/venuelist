@@ -41,7 +41,7 @@ const FEATURES = [
   {
     key: 'regular-nights',
     name: 'Regular nights (same links every week)',
-    what: 'An event can be set to “Repeat every week” (e.g. Toff Tuesday). 24 hours after the night ends, next week’s copy is made automatically and each contributor link ticked “Permanent” moves to it: same link, fresh empty list. Unticked links are one-offs, erased when the night refreshes. Last week’s guests and report stay on last week’s event. The Contributors tab gets “New links for everyone” and “Clear out links”.',
+    what: 'An event can be set to “Repeat every week” (e.g. Toff Tuesday). 24 hours after the night ends, next week’s copy is made automatically and each contributor link ticked “Permanent” moves to it: same link, fresh empty list. Unticked links are one-offs, erased when the night refreshes. Last week’s guests and report stay on last week’s event. The Contributors tab gets “New links for everyone” and “Clear out links”. Permanent links also show “Tonight’s total guests”: how many people are on that night’s list across every link (a count, no names), starting from 0 each week.',
     added: '2026-10-09',
   },
   {

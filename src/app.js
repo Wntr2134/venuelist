@@ -2482,13 +2482,19 @@ function createApp(db, options = {}) {
       createdAt: g.createdAt,
     }));
     const venue = venueOfEvent(e.id);
+    const linkKind = e.repeat_weekly && venue && feature(venue, 'regular-nights') ? (c.permanent ? 'weekly' : 'tonight') : null;
     return {
       venueName: venue?.name || 'Venue',
       theme: venueTheme(venue),
       event: { name: e.name, date: e.date, doorsTime: e.doors_time, cutoffAt: e.cutoff_at },
       contributor: { name: c.name, listType: c.list_type, allocation: c.allocation },
       // Regular nights: 'weekly' = this link stays the same every week; 'tonight' = this night only.
-      link: e.repeat_weekly && venue && feature(venue, 'regular-nights') ? (c.permanent ? 'weekly' : 'tonight') : null,
+      link: linkKind,
+      // Permanent links also see tonight's total across every list: a count only, never names.
+      // It's per night, so it starts again from 0 when the night rolls on.
+      tonightTotal: linkKind === 'weekly'
+        ? db.prepare('SELECT COUNT(*) AS entries, COALESCE(SUM(1 + plus_ones), 0) AS heads FROM guests WHERE event_id = ?').get(e.id)
+        : null,
       used,
       remaining: c.allocation === null ? null : Math.max(0, c.allocation - used),
       locked,
