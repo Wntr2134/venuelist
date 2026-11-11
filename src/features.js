@@ -56,6 +56,12 @@ const FEATURES = [
     what: 'The Report tab of a weekly night shows the last 5 weeks side by side: guests listed, arrived and no-shows, door count, and each contributor’s listed vs arrived per week.',
     added: '2026-10-11',
   },
+  {
+    key: 'multi-point',
+    name: 'Multi-point check-in',
+    what: 'A show can be set to need two check-in points: guest list express entry (e.g. skipping the line downstairs) and the entry check upstairs. In door mode each phone picks its point. Downstairs taps EXPRESS to mark guests through; upstairs checks guests IN as usual and sees who came through express. Attendance and the door count still come from upstairs.',
+    added: '2026-11-11',
+  },
 ];
 
 // Problems with a feature list, as readable strings (empty = fine). Used by the tests.

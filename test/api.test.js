@@ -2342,3 +2342,56 @@ test('oops / undo: an undone tap stays out of the report for good, only the late
   rep = (await c.call('GET', `/api/events/${ev.id}/report`)).data;
   assert.equal(rep.door.peak, 2);
 });
+
+test('multi-point check-in: off by default; express marks are separate from entry check-ins and the door count', async () => {
+  const { c, venue, admin } = await onboard('Two Floors');
+  const date = '2026-12-05';
+  // Feature off: the option is ignored and the express point doesn't exist.
+  let ev = (await c.call('POST', '/api/events', { name: 'Off Night', date, multiPoint: true, overridePin: '2468' })).data;
+  assert.equal(ev.multiPoint, false);
+  const g0 = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Pat Off' })).data;
+  assert.equal((await c.call('POST', `/api/guests/${g0.id}/express`, {})).status, 404);
+
+  assert.equal((await owner.call('PUT', `/api/owner/venues/${venue.id}/features`, { set: { 'multi-point': true } })).status, 200);
+  // A show that doesn't need it refuses express taps.
+  assert.equal((await c.call('POST', `/api/guests/${g0.id}/express`, {})).status, 409);
+
+  ev = (await c.call('POST', '/api/events', { name: 'Two Floors Night', date, multiPoint: true, countGuestlist: true, overridePin: '2468' })).data;
+  assert.equal(ev.multiPoint, true);
+  const g = (await c.call('POST', `/api/events/${ev.id}/guests`, { name: 'Jess Express', plusOnes: 2 })).data;
+
+  // Downstairs: two of the party go through express. Attendance and the door count don't move.
+  let r = await c.call('POST', `/api/guests/${g.id}/express`, { count: 2 }, { actor: 'Downstairs' });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.express, 2);
+  assert.equal(r.data.expressBy, 'Downstairs');
+  assert.equal(r.data.inside, 0);
+  assert.equal(r.data.admitted, 0);
+  assert.equal((await c.call('POST', `/api/guests/${g.id}/express`, { count: 2 })).status, 409, 'only 1 left to mark');
+  assert.equal((await c.call('POST', `/api/guests/${g.id}/express`, {})).data.express, 3, 'the rest of the party');
+  assert.equal((await c.call('POST', `/api/guests/${g.id}/express`, {})).status, 409, 'whole party already through');
+  assert.equal((await c.call('POST', `/api/guests/${g.id}/unexpress`, { count: 1 })).data.express, 2, 'a mis-tap can be undone');
+
+  let full = (await c.call('GET', `/api/events/${ev.id}`)).data;
+  assert.equal(full.event.headcount.count, 0, 'express never touches the door count');
+  assert.equal(full.stats.express, 2);
+  assert.equal(full.stats.admitted, 0);
+
+  // Upstairs: the normal check-in is still what counts as attendance (and the door count here).
+  r = await c.call('POST', `/api/guests/${g.id}/checkin`, { count: 3 }, { actor: 'Upstairs' });
+  assert.equal(r.data.admitted, 3);
+  assert.equal(r.data.express, 2, 'express mark kept');
+  full = (await c.call('GET', `/api/events/${ev.id}`)).data;
+  assert.equal(full.event.headcount.count, 3);
+
+  const acts = (await c.call('GET', `/api/events/${ev.id}/activity`)).data;
+  const actions = (acts.activity || acts).map((a) => a.action);
+  assert.ok(actions.includes('guest.express') && actions.includes('guest.unexpress'), 'logged');
+
+  // Editing the show can switch it off; the Riderly API never sees the setting or the marks.
+  assert.equal((await c.call('PUT', `/api/events/${ev.id}`, { multiPoint: false })).data.multiPoint, false);
+  const key = (await admin.call('POST', '/api/vadmin/api-key')).data.key;
+  const viaApi = (await client().call('GET', `/api/v1/events/${ev.id}`, null, { actor: null, headers: { Authorization: `Bearer ${key}` } })).data;
+  assert.equal(viaApi.multiPoint, undefined);
+  assert.equal(viaApi.guestlist.express, undefined);
+});

@@ -102,6 +102,7 @@ function eventOut(e) {
     repeatWeekly: !!e.repeat_weekly,
     rollsOn: e.repeat_weekly && !e.rolled_to ? addDays(e.date, 2) : null,
     rolledTo: e.rolled_to ?? null,
+    multiPoint: !!e.multi_point,
   };
 }
 
@@ -172,6 +173,9 @@ function guestOut(g) {
     addedVia: g.added_via,
     lastInBy: g.last_in_by || null, // who last checked them in at the door, and when
     lastInAt: g.last_in_at || null,
+    express: g.express || 0, // multi-point check-in: heads marked through the express point
+    expressAt: g.express_at || null,
+    expressBy: g.express_by || null,
     createdAt: g.created_at,
     updatedAt: g.updated_at,
     updatedBy: g.updated_by,
@@ -226,9 +230,10 @@ function eventHeads(db, eventId, excludeGuestId = 0) {
 }
 
 function stats(guests) {
-  const s = { guests: guests.length, expected: 0, admitted: 0, inside: 0, vip: 0, vipInside: 0 };
+  const s = { guests: guests.length, expected: 0, admitted: 0, inside: 0, vip: 0, vipInside: 0, express: 0 };
   for (const g of guests) {
     s.expected += g.party;
+    s.express += g.express || 0;
     s.admitted += g.admitted;
     s.inside += g.inside;
     if (g.vip) {
@@ -1504,6 +1509,7 @@ function createApp(db, options = {}) {
       .run(...values);
     const id = Number(info.lastInsertRowid);
     if (body.repeatWeekly && feature(venue, 'regular-nights')) db.prepare('UPDATE events SET repeat_weekly = 1 WHERE id = ?').run(id);
+    if (body.multiPoint && feature(venue, 'multi-point')) db.prepare('UPDATE events SET multi_point = 1 WHERE id = ?').run(id);
     log(db, { eventId: id, action: 'event.create', detail: approver ? `approved by ${approver}` : null, actor, via: 'venue' });
     return eventOut(getEvent(db, id));
   });
@@ -1553,6 +1559,11 @@ function createApp(db, options = {}) {
       next.venue_capacity, next.count_guestlist, next.tickets_sold, next.tickets_scanned, next.archived, e.id);
     const repeatChanged = body.repeatWeekly !== undefined && feature(venue, 'regular-nights') && !!body.repeatWeekly !== !!e.repeat_weekly;
     if (repeatChanged) db.prepare('UPDATE events SET repeat_weekly = ? WHERE id = ?').run(body.repeatWeekly ? 1 : 0, e.id);
+    const multiChanged = body.multiPoint !== undefined && feature(venue, 'multi-point') && !!body.multiPoint !== !!e.multi_point;
+    if (multiChanged) {
+      db.prepare('UPDATE events SET multi_point = ? WHERE id = ?').run(body.multiPoint ? 1 : 0, e.id);
+      log(db, { eventId: e.id, action: 'event.multipoint', detail: body.multiPoint ? 'multi-point check-in on' : 'multi-point check-in off', actor, via: 'venue' });
+    }
     if (next.venue_capacity !== e.venue_capacity) {
       publish(e.id, 'count', { headcount: headcountOut(getEvent(db, e.id)), actor });
     }
@@ -2000,10 +2011,10 @@ function createApp(db, options = {}) {
       } else {
         const info = db.prepare(
           `INSERT INTO events (venue_id, name, date, doors_time, capacity, cutoff_at, notes, created_at, created_by,
-             venue_capacity, count_guestlist, repeat_weekly) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Regular night', ?, ?, 1)`
+             venue_capacity, count_guestlist, repeat_weekly, multi_point) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Regular night', ?, ?, 1, ?)`
         ).run(e.venue_id, e.name, date, e.doors_time, e.capacity,
           e.cutoff_at ? new Date(Date.parse(e.cutoff_at) + shift).toISOString() : null,
-          e.notes, new Date(at).toISOString(), e.venue_capacity, e.count_guestlist);
+          e.notes, new Date(at).toISOString(), e.venue_capacity, e.count_guestlist, e.multi_point || 0);
         target = getEvent(db, Number(info.lastInsertRowid));
       }
       let moved = 0;
@@ -2274,6 +2285,41 @@ function createApp(db, options = {}) {
 
   route('POST', /^\/api\/guests\/(\d+)\/checkin$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'in'), { idempotent: true });
   route('POST', /^\/api\/guests\/(\d+)\/checkout$/, ({ venue, req, params, body }) => move(venue, req, params, body, 'out'), { idempotent: true });
+
+  // ----- door: multi-point check-in (feature: multi-point) -----
+  // The express point (e.g. downstairs) marks heads through; it doesn't touch inside/admitted or
+  // the door count, which stay with the entry point upstairs.
+  function expressMark(venue, req, params, body, undo) {
+    if (!feature(venue, 'multi-point')) throw new HttpError(404, 'Not found');
+    const actor = actorFrom(req);
+    const out = tx(db, () => {
+      const g = gst(venue, params[0]);
+      if (!getEvent(db, g.event_id).multi_point) throw new HttpError(409, 'This show doesn’t use multi-point check-in.');
+      const party = 1 + g.plus_ones;
+      const room = undo ? g.express : party - g.express;
+      if (room <= 0) throw new HttpError(409, undo ? `${g.name} isn’t marked through express.` : `${g.name}'s whole party is already through express.`);
+      const count = body.count === undefined || body.count === 'all' ? room : int(body.count, 'Count', { min: 1, max: 51 });
+      if (count > room) throw new HttpError(409, `Only ${room} of the party can be ${undo ? 'unmarked' : 'marked'}.`);
+      const express = undo ? g.express - count : g.express + count;
+      const t = now();
+      db.prepare('UPDATE guests SET express = ?, express_at = ?, express_by = ?, updated_at = ?, updated_by = ? WHERE id = ?')
+        .run(express, express ? (undo ? g.express_at : t) : null, express ? (undo ? g.express_by : actor) : null, t, actor, g.id);
+      log(db, {
+        eventId: g.event_id,
+        guest: g,
+        action: undo ? 'guest.unexpress' : 'guest.express',
+        detail: `${count} (${express}/${party} through express)${req.headers['x-op-at'] ? ' — tapped while offline' : ''}`,
+        actor,
+        via: 'door',
+      });
+      return guestOut(getGuest(db, g.id));
+    });
+    publish(out.eventId, 'guests', { actor, guestId: out.id });
+    return out;
+  }
+
+  route('POST', /^\/api\/guests\/(\d+)\/express$/, ({ venue, req, params, body }) => expressMark(venue, req, params, body, false), { idempotent: true });
+  route('POST', /^\/api\/guests\/(\d+)\/unexpress$/, ({ venue, req, params, body }) => expressMark(venue, req, params, body, true), { idempotent: true });
 
   // ----- door: undo a mis-tapped check-in or check-out (feature: door-undo) -----
 
@@ -3256,7 +3302,7 @@ function createApp(db, options = {}) {
   function apiEventOut(e) {
     const st = stats(listGuests(db, e.id));
     // Staff-entered notes and the staff member's name stay inside the venue — never sent to Riderly.
-    const { headcount, notes, createdBy, ...rest } = eventOut(e);
+    const { headcount, notes, createdBy, multiPoint, ...rest } = eventOut(e);
     return {
       ...rest,
       door: headcount,
