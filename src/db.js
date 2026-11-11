@@ -302,8 +302,17 @@ function migrate(db) {
     // next week's copy is made and the contributor links move to it; rolled_to is that copy.
     ['repeat_weekly', 'INTEGER NOT NULL DEFAULT 0'],
     ['rolled_to', 'INTEGER'],
+    // Multi-point check-in (feature: multi-point): 1 = guests pass an express point (e.g. downstairs)
+    // before the entry point upstairs, and each point is marked off separately.
+    ['multi_point', 'INTEGER NOT NULL DEFAULT 0'],
   ]) {
     if (!evCols.includes(col)) db.exec(`ALTER TABLE events ADD COLUMN ${col} ${def}`);
+  }
+  // Multi-point check-in: heads marked through the express point, when, and by which staff device.
+  // Separate from inside/admitted, so attendance and the door count still come from the entry point.
+  const gCols = db.prepare('PRAGMA table_info(guests)').all().map((c) => c.name);
+  for (const [col, def] of [['express', 'INTEGER NOT NULL DEFAULT 0'], ['express_at', 'TEXT'], ['express_by', 'TEXT']]) {
+    if (!gCols.includes(col)) db.exec(`ALTER TABLE guests ADD COLUMN ${col} ${def}`);
   }
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external ON events(venue_id, external_id) WHERE external_id IS NOT NULL');
 

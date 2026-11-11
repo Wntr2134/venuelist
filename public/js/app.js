@@ -260,7 +260,10 @@ function eventForm(existing) {
     field('Notes for door staff', h('textarea', { name: 'notes', rows: '3', maxlength: '2000' }, e.notes || '')),
     hasFeature('regular-nights') ? h('label', { class: 'check check-top' }, h('input', { type: 'checkbox', name: 'repeatWeekly', checked: !!e.repeatWeekly }),
       h('span', null, '🔁 Repeat every week (e.g. Toff Tuesday)',
-        h('small', { class: 'muted block' }, '24 hours after the night ends, next week’s copy is made. Contributor links ticked 📌 Permanent move to it with a fresh, empty list; one-off links are erased. This week’s guests and report stay here.'))) : null
+        h('small', { class: 'muted block' }, '24 hours after the night ends, next week’s copy is made. Contributor links ticked 📌 Permanent move to it with a fresh, empty list; one-off links are erased. This week’s guests and report stay here.'))) : null,
+    hasFeature('multi-point') ? h('label', { class: 'check check-top' }, h('input', { type: 'checkbox', name: 'multiPoint', checked: !!e.multiPoint }),
+      h('span', null, '⬇⬆ Multi-point check-in required',
+        h('small', { class: 'muted block' }, 'For guest list express entry: staff downstairs mark guests through the express lane, then guests and tickets are checked in upstairs as usual. In door mode, each phone picks which point it’s at.'))) : null
   );
   const submit = async (ev) => {
     if (ev) ev.preventDefault();
@@ -517,6 +520,8 @@ async function renderEvent(id, tab) {
           h('dt', null, 'Door notes'), h('dd', null, e.notes || '—'),
           e.repeatWeekly || e.rolledTo ? h('dt', null, 'Repeats') : null,
           e.repeatWeekly || e.rolledTo ? h('dd', null, regularNote(e)) : null,
+          e.multiPoint ? h('dt', null, 'Check-in points') : null,
+          e.multiPoint ? h('dd', null, 'Two: ⬇ express downstairs, then ⬆ entry upstairs') : null,
           h('dt', null, 'Created'), h('dd', null, `${fmtDateTime(e.createdAt)} by ${e.createdBy}`)
         ),
         h('div', { class: 'row' }, h('button', { class: 'btn btn-primary', onclick: () => eventForm(e) }, 'Edit details'))
@@ -634,6 +639,8 @@ function describe(a) {
     case 'guest.remove': return `removed ${n}`;
     case 'guest.checkin': return `checked in ${n} — ${a.detail}`;
     case 'guest.checkout': return `checked out ${n} — ${a.detail}`;
+    case 'guest.express': return `marked ${n} through express — ${a.detail}`;
+    case 'guest.unexpress': return `took ${n} off express — ${a.detail}`;
     case 'guest.undo': return `undid a ${a.detail?.startsWith('check-out') ? 'check-out' : 'check-in'} for ${n} — ${a.detail}`;
     case 'contributor.create': return `added contributor ${a.detail}`;
     case 'contributor.update': return `updated contributor ${a.detail}`;
@@ -647,6 +654,7 @@ function describe(a) {
     case 'event.update': return 'updated event details';
     case 'event.archive': return 'archived the event';
     case 'event.unarchive': return 'restored the event';
+    case 'event.multipoint': return a.detail === 'multi-point check-in on' ? 'turned on multi-point check-in' : 'turned off multi-point check-in';
     case 'event.repeat': return a.detail === 'repeats every week' ? 'set it to repeat every week' : 'stopped it repeating every week';
     case 'event.rolled': return `regular night: ${a.detail}`;
     default: return a.action;
@@ -1153,6 +1161,13 @@ async function deleteContributor(c, onDone) {
 async function renderDoor(id) {
   let data;
   const ui = { search: '', filter: 'all' };
+  // Multi-point check-in (feature: multi-point): which point this phone is at, remembered per show.
+  // 'express' = the express lane (e.g. downstairs); 'entry' = the normal entry check (e.g. upstairs).
+  const pointKey = `vl.point.${id}`;
+  ui.point = (() => { try { return localStorage.getItem(pointKey) === 'express' ? 'express' : 'entry'; } catch { return 'entry'; } })();
+  const multi = () => !!(data && data.event.multiPoint && hasFeature('multi-point'));
+  const atExpress = () => multi() && ui.point === 'express';
+  const pointBar = h('div');
   const counters = h('div', { class: 'door-counters' });
   const capBar = h('div');
   const netBar = h('div');
@@ -1172,6 +1187,11 @@ async function renderDoor(id) {
   // Re-applies offline check-ins to freshly loaded data, so the list matches what the door did.
   function applyQueued(d) {
     for (const op of queued()) {
+      if (op.kind === 'express') {
+        const x = d.guests.find((y) => y.id === op.guestId);
+        if (x) x.express = Math.max(0, Math.min(x.party, x.express + (op.undo ? -op.body.count : op.body.count)));
+        continue;
+      }
       if (op.kind !== 'move') continue;
       const g = d.guests.find((x) => x.id === op.guestId);
       if (!g) continue;
@@ -1232,9 +1252,17 @@ async function renderDoor(id) {
     ['left', 'Left'],
     ['vip', '★ VIP'],
   ];
+  const expressFilters = [
+    ['all', 'All'],
+    ['notexpress', 'Not through'],
+    ['express', 'Through express'],
+    ['vip', '★ VIP'],
+  ];
   const filterBar = h('div', { class: 'chips' });
   function drawFilters() {
-    put(filterBar, filters.map(([k, label]) => h('button', {
+    const set = atExpress() ? expressFilters : filters;
+    if (!set.some(([k]) => k === ui.filter)) ui.filter = 'all';
+    put(filterBar, set.map(([k, label]) => h('button', {
       class: `chip${ui.filter === k ? ' active' : ''}`,
       onclick: () => {
         ui.filter = k;
@@ -1268,9 +1296,21 @@ async function renderDoor(id) {
       cap.server = e.headcount;
       cap.shown = settledCount();
     }
+    drawPoint();
     drawCap();
     drawNet();
+    drawFilters();
     const s = data.stats;
+    if (atExpress()) {
+      const through = data.guests.reduce((n, g) => n + g.express, 0);
+      put(counters,
+        h('div', { class: 'counter counter-main' }, h('b', null, `${through}/${s.expected}`), h('span', null, 'through express')),
+        h('div', { class: 'counter' }, h('b', null, s.admitted), h('span', null, 'in upstairs')),
+        h('div', { class: 'counter counter-vip' }, h('b', null, `${data.guests.filter((g) => g.vip && g.express).length}/${s.vip}`), h('span', null, '★ VIP through'))
+      );
+      drawList();
+      return;
+    }
     put(counters, 
       h('div', { class: 'counter counter-main' }, h('b', null, s.inside), h('span', null, 'inside')),
       h('div', { class: 'counter' }, h('b', null, `${s.admitted}/${s.expected}`), h('span', null, 'arrived')),
@@ -1304,6 +1344,8 @@ async function renderDoor(id) {
     const q = ui.search.trim();
     const score = new Map();
     let rows = data.guests.filter((g) => {
+      if (ui.filter === 'notexpress' && g.express >= g.party) return false;
+      if (ui.filter === 'express' && !g.express) return false;
       if (ui.filter === 'waiting' && g.admitted > 0) return false;
       if (ui.filter === 'inside' && g.inside === 0) return false;
       if (ui.filter === 'left' && !(g.admitted > 0 && g.inside === 0)) return false;
@@ -1336,17 +1378,72 @@ async function renderDoor(id) {
           h('span', { class: `badge badge-type t-${g.listType.toLowerCase()}` }, g.listType),
           h('span', null, g.contributorName || (g.addedVia === 'door' ? 'Door' : 'Venue')),
           g.inside ? h('span', { class: 'status status-in' }, `${g.inside}/${g.party} in`) : g.admitted ? h('span', { class: 'status status-out' }, `Left ${fmtTime(g.lastMoveAt)}`) : null,
-          g.admitted && g.lastInBy ? h('span', { class: 'small muted checked-by' }, ` · in by ${g.lastInBy}`) : null
+          g.admitted && g.lastInBy ? h('span', { class: 'small muted checked-by' }, ` · in by ${g.lastInBy}`) : null,
+          multi() ? expressStatus(g) : null
         ),
         g.notes ? h('div', { class: 'door-note' }, g.notes) : null,
         bannedFlag(g),
                 doubleFlag(g)
       ),
-      h('div', { class: 'door-actions' },
-        h('button', { class: 'btn btn-out', disabled: g.inside === 0, onclick: () => doMove(g, 'out') }, 'OUT'),
-        h('button', { class: 'btn btn-in', disabled: allIn, onclick: () => doMove(g, 'in') }, allIn ? '✓ IN' : 'IN')
-      )
+      atExpress()
+        ? h('div', { class: 'door-actions' },
+          g.express ? h('button', { class: 'btn btn-out', onclick: () => doExpress(g, true) }, 'UNDO') : null,
+          h('button', { class: 'btn btn-in btn-express', disabled: g.express >= g.party, onclick: () => doExpress(g, false) }, g.express >= g.party ? '✓ EXPRESS' : 'EXPRESS'))
+        : h('div', { class: 'door-actions' },
+          h('button', { class: 'btn btn-out', disabled: g.inside === 0, onclick: () => doMove(g, 'out') }, 'OUT'),
+          h('button', { class: 'btn btn-in', disabled: allIn, onclick: () => doMove(g, 'in') }, allIn ? '✓ IN' : 'IN')
+        )
     );
+  }
+
+  function expressStatus(g) {
+    if (!g.express) return h('span', { class: 'status status-noexpress' }, 'Not through express');
+    return h('span', { class: 'status status-express' },
+      `⬇ Express ${g.express < g.party ? `${g.express}/${g.party} ` : ''}${g.expressAt ? fmtTime(g.expressAt) : ''}`);
+  }
+
+  // The express lane: mark heads through (or undo a mis-tap). Doesn't touch the door count.
+  async function doExpress(g, undo) {
+    const room = undo ? g.express : g.party - g.express;
+    if (room <= 0) return;
+    if (!undo && g.banned && !g.express) {
+      const ok = await confirmDialog('⚠ Matches your banned list',
+        [g.banned.photo ? banPhoto(g.banned.photo, 'ban-photo-big') : null,
+          `${g.name} matches a name on your banned list${g.banned.reason ? ` (${g.banned.reason})` : ''}. Only send them through once a manager has checked.`],
+        { confirmText: 'Manager checked, send through', danger: true });
+      if (!ok) return;
+    }
+    let count = room;
+    if (room > 1) {
+      count = await pickCount(g, undo ? 'undo' : 'express', room);
+      if (!count) return;
+    }
+    const url = `/api/guests/${g.id}/${undo ? 'unexpress' : 'express'}`;
+    try {
+      let updated;
+      try {
+        updated = await api('POST', url, { count });
+      } catch (err) {
+        if (err.code !== 'offline') throw err;
+        queueAdd({ kind: 'express', url, body: { count }, undo, eventId: id, guestId: g.id, label: `${undo ? 'Undo express' : 'Express'}: ${g.name}${count > 1 ? ` ×${count}` : ''}` });
+        g.express = Math.max(0, Math.min(g.party, g.express + (undo ? -count : count)));
+        toast(`📴 Saved offline — ${undo ? 'Undo express' : 'Express'}: ${g.name}`, 'info', 2200);
+        drawList();
+        drawNet();
+        return;
+      }
+      Object.assign(g, updated);
+      toast(`${undo ? '↩ Off express' : '⬇ Express'}: ${g.name}${count > 1 ? ` ×${count}` : ''}`, undo ? 'info' : 'ok', 1800);
+      if (!undo && ui.search) {
+        ui.search = '';
+        search.value = '';
+      }
+      load();
+      search.focus();
+    } catch (err) {
+      handleError(err);
+      load();
+    }
   }
 
   async function doMove(g, dir) {
@@ -1412,10 +1509,14 @@ async function renderDoor(id) {
       };
       const buttons = [];
       for (let n = 1; n <= room; n++) {
-        buttons.push(h('button', { class: `btn btn-count ${n === room ? (dir === 'in' ? 'btn-in' : 'btn-out') : ''}`, onclick: () => pick(n) }, n === room ? `All ${n}` : String(n)));
+        buttons.push(h('button', { class: `btn btn-count ${n === room ? (dir === 'in' || dir === 'express' ? 'btn-in' : 'btn-out') : ''}`, onclick: () => pick(n) }, n === room ? `All ${n}` : String(n)));
       }
-      const m = modal(`${dir === 'in' ? 'Check in' : 'Check out'} — ${g.name}`, h('div', { class: 'stack' },
-        h('p', { class: 'muted' }, `Party of ${g.party} · ${g.inside} inside now. How many ${dir === 'in' ? 'are coming in' : 'are leaving'}?`),
+      const title = { in: 'Check in', out: 'Check out', express: 'Express', undo: 'Undo express' }[dir];
+      const ask = dir === 'express' ? `Party of ${g.party} · ${g.express} through express. How many are going through now?`
+        : dir === 'undo' ? `${g.express} of ${g.party} marked through express. How many to take off?`
+          : `Party of ${g.party} · ${g.inside} inside now. How many ${dir === 'in' ? 'are coming in' : 'are leaving'}?`;
+      const m = modal(`${title} — ${g.name}`, h('div', { class: 'stack' },
+        h('p', { class: 'muted' }, ask),
         h('div', { class: 'count-grid' }, buttons)
       ), { onClose: () => pick(0) });
     });
@@ -1453,7 +1554,30 @@ async function renderDoor(id) {
     );
   }
 
+  // Which check-in point this phone is (multi-point shows only).
+  function drawPoint() {
+    if (!multi()) return put(pointBar);
+    const pick = (p) => {
+      ui.point = p;
+      try { localStorage.setItem(pointKey, p); } catch { /* private mode: just for this visit */ }
+      ui.filter = 'all';
+      draw();
+    };
+    put(pointBar, h('div', { class: 'point-bar' },
+      h('span', { class: 'small muted' }, 'This phone is at:'),
+      h('div', { class: 'chips' },
+        h('button', { class: `chip${ui.point === 'express' ? ' active' : ''}`, onclick: () => pick('express') }, '⬇ Downstairs · Express'),
+        h('button', { class: `chip${ui.point === 'entry' ? ' active' : ''}`, onclick: () => pick('entry') }, '⬆ Upstairs · Entry')
+      )
+    ));
+  }
+
   function drawCap() {
+    // The door count belongs to the entry point; the express lane doesn't count heads.
+    if (atExpress()) {
+      put(capBar);
+      return;
+    }
     put(capBar,
       capView(false),
       h('div', { class: 'cap-tools small muted' },
@@ -1626,6 +1750,7 @@ async function renderDoor(id) {
     h('main', { class: 'door' },
       netBar,
       notesBar,
+      pointBar,
       capBar,
       h('div', { class: 'door-section-label small muted' }, 'Guest list'),
       counters,

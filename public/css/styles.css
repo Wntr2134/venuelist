@@ -211,6 +211,10 @@ input[type="checkbox"] { width: 20px; min-height: 20px; height: 20px; accent-col
 .status { font-size: 0.8rem; font-weight: 700; color: var(--muted); }
 .status-in { color: var(--in); }
 .status-out { color: var(--out); }
+/* Multi-point check-in (feature: multi-point) */
+.status-express { color: var(--info); }
+.status-noexpress { color: var(--faint); font-weight: 600; }
+.point-bar { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
 
 /* ---------- events ---------- */
 
